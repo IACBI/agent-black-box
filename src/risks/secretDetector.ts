@@ -91,6 +91,10 @@ export function detectSecretsInLine(relativePath: string, line: string, lineNumb
   if (SECRET_KEYWORD_PATTERN.test(line)) {
     const tokens = line.match(/[A-Za-z0-9_./+=:-]{32,}/g) ?? [];
     for (const token of tokens) {
+      if (looksLikeCodeIdentifierPath(token)) {
+        continue;
+      }
+
       if (shannonEntropy(token) >= 4.0) {
         findings.push({
           path: relativePath,
@@ -104,6 +108,13 @@ export function detectSecretsInLine(relativePath: string, line: string, lineNumb
   }
 
   return dedupeSecretFindings(findings);
+}
+
+function looksLikeCodeIdentifierPath(value: string): boolean {
+  const identifier = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+  const segments = value.split(".");
+
+  return segments.length > 1 && segments.every((segment) => identifier.test(segment));
 }
 
 export function shannonEntropy(value: string): number {

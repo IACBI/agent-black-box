@@ -19,6 +19,7 @@ describe("risk detector", () => {
 
     expect(findings.some((finding) => finding.category === "Package manager file")).toBe(true);
     expect(findings.some((finding) => finding.category === "CI/CD file")).toBe(true);
+    expect(findings.every((finding) => finding.score >= 60)).toBe(true);
   });
 
   it("detects auth and migration changes", () => {
@@ -32,5 +33,15 @@ describe("risk detector", () => {
 
     expect(findings.some((finding) => finding.category === "Auth/security-related file")).toBe(true);
     expect(findings.some((finding) => finding.category === "Migration file")).toBe(true);
+  });
+
+  it("adds a bounded score bonus for larger risky changes", () => {
+    const [finding] = detectRisks(
+      [{ path: ".env", status: "added", insertions: 600, deletions: 0 }],
+      DEFAULT_CONFIG
+    );
+
+    expect(finding?.severity).toBe("high");
+    expect(finding?.score).toBe(100);
   });
 });

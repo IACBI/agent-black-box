@@ -1,8 +1,13 @@
 import type { AgentBlackBoxConfig } from "../types.js";
 
 export const CONFIG_FILE_NAME = ".agentblackbox.json";
+export const CURRENT_CONFIG_VERSION = 1;
+export const CONFIG_SCHEMA_URL =
+  "https://raw.githubusercontent.com/IACBI/agent-black-box/main/schema/agentblackbox.schema.json";
 
 export const DEFAULT_CONFIG: AgentBlackBoxConfig = {
+  $schema: CONFIG_SCHEMA_URL,
+  configVersion: CURRENT_CONFIG_VERSION,
   sessionDir: ".agent-black-box/sessions",
   exclude: [
     "node_modules",

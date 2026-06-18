@@ -5,10 +5,21 @@ export type ChangeStatus = "added" | "modified" | "deleted" | "renamed" | "unkno
 export type RiskSeverity = "low" | "medium" | "high";
 
 export interface AgentBlackBoxConfig {
+  $schema?: string;
+  configVersion: 1;
   sessionDir: string;
   exclude: string[];
   riskPatterns: string[];
   maxFileSizeKb: number;
+}
+
+export interface ConfigLoadResult {
+  config: AgentBlackBoxConfig;
+  configPath: string;
+  exists: boolean;
+  migrated: boolean;
+  errors: string[];
+  warnings: string[];
 }
 
 export interface ActiveSession {
@@ -60,7 +71,15 @@ export interface RiskFinding {
   path: string;
   category: string;
   severity: RiskSeverity;
+  score: number;
   reason: string;
+}
+
+export interface RiskSummary {
+  score: number;
+  maxSeverity: RiskSeverity | "none";
+  possibleSecretCount: number;
+  severityCounts: Record<RiskSeverity, number>;
 }
 
 export interface SecretFinding {
@@ -86,5 +105,11 @@ export interface SessionReport {
   commands: CommandEvent[];
   git: GitSnapshot;
   risks: RiskFinding[];
+  riskSummary: RiskSummary;
   possibleSecrets: SecretFinding[];
+  integrity: {
+    warnings: string[];
+    discardedFileEventLines: number;
+    discardedCommandEventLines: number;
+  };
 }

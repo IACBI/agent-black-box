@@ -37,6 +37,17 @@ abb init
 
 This creates `.agentblackbox.json` with defaults for session output, ignored paths, risk patterns, and maximum file size for secret scanning.
 
+The generated file includes a `configVersion` and `$schema` reference for editor validation.
+
+Validate or migrate config:
+
+```sh
+abb config validate
+abb config migrate
+```
+
+Legacy config files without `configVersion` still load in memory. Use `abb config migrate` when you want the file rewritten with the current schema.
+
 ## Start A Session
 
 ```sh
@@ -96,7 +107,11 @@ abb summary
 abb commands
 abb timeline
 abb risks
+abb risks --min-severity high
+abb risks --category "CI/CD file" --json
 abb rollback
+abb export --output abb-session.md
+abb export --format json --output abb-session.json
 ```
 
 Reports are stored under:
@@ -123,7 +138,7 @@ Use `doctor` when setup or session state looks wrong:
 abb doctor
 ```
 
-It checks Node.js, Git repository detection, config, write access, session directory, and active/stale session state.
+It checks Node.js, Git repository detection, config, write access, session directory, active/stale session state, and session lock state.
 
 ## Safe Rollback Apply
 
@@ -134,6 +149,19 @@ abb rollback --apply --file src/example.ts
 ```
 
 Agent Black Box prints a plan and requires typed confirmation before running `git restore`. Added or untracked files are never removed automatically.
+
+## Export
+
+Use `export` when you want a single artifact for review, issue attachments, or archival:
+
+```sh
+abb export --output abb-session.md
+abb export --format json --output abb-session.json
+```
+
+Existing files are not overwritten unless `--force` is supplied.
+
+Markdown exports bundle the summary, commands, timeline, diff summary, risks, and rollback hints. JSON exports preserve the full `session.json` structure.
 
 ## Common Problems
 

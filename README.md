@@ -46,6 +46,7 @@ pnpm dev -- stop
 pnpm dev -- summary
 pnpm dev -- timeline
 pnpm dev -- risks
+pnpm dev -- export --output abb-session.md
 pnpm dev -- rollback
 ```
 
@@ -60,6 +61,8 @@ Reports are written to:
 | Command | Purpose |
 | --- | --- |
 | `abb init` | Create `.agentblackbox.json`. |
+| `abb config validate` | Validate config schema, version, and normalized values. |
+| `abb config migrate` | Rewrite config using the current schema version. |
 | `abb start` | Start a foreground recording session in the current Git repository. |
 | `abb doctor` | Check local prerequisites, repository state, config, and session health. |
 | `abb run -- <command>` | Run a command and record redacted command metadata for the active session. |
@@ -69,7 +72,8 @@ Reports are written to:
 | `abb summary` | Print the latest human-readable session summary. |
 | `abb commands` | Print commands recorded in the latest session. |
 | `abb timeline` | Print the latest chronological timeline. |
-| `abb risks` | Print risky changes and possible secret findings. |
+| `abb risks` | Print risky changes and possible secret findings, with optional filters. |
+| `abb export` | Export the latest session as bundled Markdown or structured JSON. |
 | `abb rollback` | Print safe manual rollback suggestions. |
 
 Detailed usage: [docs/USAGE.md](docs/USAGE.md)
@@ -85,6 +89,8 @@ Each session produces:
 - `diff-summary.md`: Git status, changed files, line counts where available, and notable categories.
 - `risks.md`: risky files, possible secrets, dependency/config changes, CI/CD changes, and review checklist.
 - `rollback.md`: manual review and rollback suggestions.
+
+`session.json` also includes a deterministic risk summary and integrity metadata for malformed session records skipped during recovery.
 
 Report details: [docs/REPORTS.md](docs/REPORTS.md)
 
@@ -123,6 +129,7 @@ Reports intentionally use cautious language such as "possible", "likely", and "d
 - CodeQL analysis.
 - Dependabot for patch/minor maintenance.
 - Tag-driven release workflow.
+- Versioned JSON Schema for `.agentblackbox.json`.
 - MIT license.
 - Security reporting guide.
 - Contribution guide.
@@ -153,10 +160,9 @@ node dist/cli.js --help
 Near-term improvements:
 
 - Better command grouping in reports.
-- Optional interactive report summary.
 - Stronger binary file detection.
 - More precise diff stats for untracked files.
-- Confirmed interactive rollback flow.
+- Optional TUI-style report browser.
 
 Out of scope for the MVP:
 

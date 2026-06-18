@@ -9,6 +9,7 @@ src/
   cli.ts
   commands/
   config/
+  export/
   git/
   reports/
   risks/
@@ -19,20 +20,23 @@ src/
 
 ## Data Flow
 
-1. `abb init` writes `.agentblackbox.json`.
-2. `abb start` creates a session directory and active session state.
-3. The watcher records file events to append-only NDJSON.
-4. `abb run -- <command>` records redacted command metadata to append-only NDJSON.
-5. `abb stop` finalizes the active session.
-6. Finalization collects Git status and diff data.
-7. Risk and possible-secret detectors analyze changed files.
-8. JSON and Markdown reports are written to the session directory.
+1. `abb init` writes a versioned `.agentblackbox.json`.
+2. `abb config validate/migrate` validates or rewrites config against the current schema.
+3. `abb start` creates a session directory, active session state, and a process lock.
+4. The watcher records file events to append-only NDJSON.
+5. `abb run -- <command>` records redacted command metadata to append-only NDJSON.
+6. `abb stop` finalizes the active session.
+7. Finalization collects Git status and diff data, filtered by configured excludes.
+8. Risk and possible-secret detectors analyze changed files.
+9. JSON and Markdown reports are written to the session directory.
+10. `abb export` can bundle the latest session into Markdown or JSON.
 
 ## Session Files
 
 During a session:
 
 - `.agent-black-box/active-session.json`
+- `.agent-black-box/session.lock`
 - `.agent-black-box/stop-request.json`
 - `.agent-black-box/sessions/<session-id>/events.ndjson`
 - `.agent-black-box/sessions/<session-id>/commands.ndjson`
@@ -47,6 +51,8 @@ Final reports:
 - `risks.md`
 - `rollback.md`
 
+Malformed NDJSON event or command lines are skipped during finalization. Discarded counts and warnings are recorded in `session.json` and `summary.md`.
+
 ## Safety Boundaries
 
 - No external API is required at runtime.
@@ -56,6 +62,8 @@ Final reports:
 - Rollback remains advisory.
 - Interactive rollback apply only restores eligible tracked files after typed confirmation.
 - Direct AI-agent private APIs are not used.
+- Config and session state are validated before use.
+- Existing export files are not overwritten unless requested.
 
 ## Performance Notes
 
@@ -63,3 +71,4 @@ Final reports:
 - Secret scanning skips deleted files, binary-like files, and files larger than the configured `maxFileSizeKb`.
 - Added-line estimation for untracked files only reads small text files.
 - File and command events are appended as NDJSON to avoid rewriting large session state while recording.
+- Session locking uses an atomic lock file and recovers stale locks left by crashed processes.

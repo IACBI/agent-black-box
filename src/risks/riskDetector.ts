@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { AgentBlackBoxConfig, ChangedFile, RiskFinding, RiskSeverity } from "../types.js";
+import type { AgentBlackBoxConfig, ChangedFile, RiskFinding, RiskSeverity, RiskSummary, SecretFinding } from "../types.js";
 import { pathMatchesPattern } from "../utils/paths.js";
 
 const LOCKFILES = new Set([
@@ -30,7 +30,7 @@ export function detectRisks(changedFiles: ChangedFile[], config: AgentBlackBoxCo
   const findings: RiskFinding[] = [];
 
   for (const file of changedFiles) {
-    findings.push(...detectRiskForPath(file.path, config.riskPatterns));
+    findings.push(...detectRiskForPath(file.path, config.riskPatterns).map((finding) => scoreFinding(finding, file)));
   }
 
   return dedupeFindings(findings);
@@ -107,8 +107,54 @@ function finding(pathName: string, category: string, severity: RiskSeverity, rea
     path: pathName,
     category,
     severity,
+    score: baseScoreForSeverity(severity),
     reason
   };
+}
+
+export function summarizeRisks(risks: RiskFinding[], possibleSecrets: SecretFinding[] = []): RiskSummary {
+  const severityCounts: Record<RiskSeverity, number> = {
+    low: 0,
+    medium: 0,
+    high: 0
+  };
+
+  for (const risk of risks) {
+    severityCounts[risk.severity] += 1;
+  }
+
+  const maxRiskScore = risks.reduce((max, risk) => Math.max(max, risk.score), 0);
+  const score = Math.max(maxRiskScore, possibleSecrets.length > 0 ? 95 : 0);
+
+  return {
+    score,
+    maxSeverity: score >= 80 ? "high" : score >= 50 ? "medium" : score > 0 ? "low" : "none",
+    possibleSecretCount: possibleSecrets.length,
+    severityCounts
+  };
+}
+
+function scoreFinding(finding: RiskFinding, file: ChangedFile): RiskFinding {
+  const changedLines = (file.insertions ?? 0) + (file.deletions ?? 0);
+  const churnBonus = Math.min(10, Math.floor(changedLines / 50));
+  const statusBonus = file.status === "deleted" ? 5 : file.status === "added" ? 3 : 0;
+
+  return {
+    ...finding,
+    score: Math.min(100, finding.score + churnBonus + statusBonus)
+  };
+}
+
+function baseScoreForSeverity(severity: RiskSeverity): number {
+  if (severity === "high") {
+    return 90;
+  }
+
+  if (severity === "medium") {
+    return 60;
+  }
+
+  return 30;
 }
 
 function dedupeFindings(findings: RiskFinding[]): RiskFinding[] {

@@ -27,7 +27,22 @@ const report = {
     ]
   },
   risks: [],
-  possibleSecrets: []
+  riskSummary: {
+    score: 0,
+    maxSeverity: "none",
+    possibleSecretCount: 0,
+    severityCounts: {
+      low: 0,
+      medium: 0,
+      high: 0
+    }
+  },
+  possibleSecrets: [],
+  integrity: {
+    warnings: [],
+    discardedFileEventLines: 0,
+    discardedCommandEventLines: 0
+  }
 } satisfies SessionReport;
 
 describe("rollback planner", () => {

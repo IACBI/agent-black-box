@@ -25,6 +25,10 @@ describe("CLI end-to-end", () => {
       const init = await runCli(repo, ["init"]);
       expect(init.stdout).toContain("Created .agentblackbox.json");
 
+      const configValidate = await runCli(repo, ["config", "validate"]);
+      expect(configValidate.exitCode).toBe(0);
+      expect(configValidate.stdout).toContain("Result: valid");
+
       const doctor = await runCli(repo, ["doctor"]);
       expect(doctor.exitCode).toBe(0);
       expect(doctor.stdout).toContain("Result: ready");
@@ -61,8 +65,16 @@ describe("CLI end-to-end", () => {
       const risks = await runCli(repo, ["risks"]);
       expect(risks.stdout).toContain("No possible secrets were detected");
 
+      const filteredRisks = await runCli(repo, ["risks", "--min-severity", "high", "--json"]);
+      expect(JSON.parse(filteredRisks.stdout)).toMatchObject({ risks: [] });
+
       const rollback = await runCli(repo, ["rollback"]);
       expect(rollback.stdout).toContain("does not automatically revert");
+
+      const exportPath = path.join(repo, "abb-export.md");
+      const exported = await runCli(repo, ["export", "--output", exportPath]);
+      expect(exported.stdout).toContain("Export written");
+      expect(await readFile(exportPath, "utf8")).toContain("Agent Black Box Summary");
 
       const report = await runCli(repo, ["report"]);
       const session = JSON.parse(report.stdout) as { commands: unknown[]; git: { changedFiles: Array<{ path: string }> } };

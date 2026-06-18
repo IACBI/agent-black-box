@@ -2,6 +2,7 @@ export * from "./config/config.js";
 export * from "./config/defaults.js";
 export * from "./commands/commandRecorder.js";
 export * from "./doctor/doctor.js";
+export * from "./export/exporter.js";
 export * from "./git/git.js";
 export * from "./reports/markdown.js";
 export * from "./reports/reportWriter.js";

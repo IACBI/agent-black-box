@@ -3,9 +3,17 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { Command } from "commander";
 import { recordAndRunCommand } from "./commands/commandRecorder.js";
-import { createDefaultConfig, loadConfig } from "./config/config.js";
+import {
+  createDefaultConfig,
+  formatConfigProblems,
+  loadConfig,
+  loadConfigWithMeta,
+  migrateConfigFile
+} from "./config/config.js";
 import { renderDoctorReport, runDoctor } from "./doctor/doctor.js";
+import { parseExportFormat, parseRiskSeverity, renderSessionExport, writeSessionExport } from "./export/exporter.js";
 import { requireRepositoryRoot, getRepositoryRoot } from "./git/git.js";
+import { filterRiskFindings, generateRisksMarkdown } from "./reports/markdown.js";
 import { applyRollbackPlan, confirmRollback, createRollbackPlan, renderRollbackPlan } from "./rollback/rollback.js";
 import {
   finalizeSession,
@@ -23,7 +31,7 @@ const program = new Command();
 program
   .name("abb")
   .description("Record and explain observable repository changes during AI coding sessions.")
-  .version("0.3.0");
+  .version("0.4.0");
 
 program
   .command("init")
@@ -32,6 +40,28 @@ program
     const root = (await getRepositoryRoot(process.cwd())) ?? process.cwd();
     const configPath = await createDefaultConfig(root);
     console.log(`Created ${path.relative(process.cwd(), configPath) || configPath}`);
+  });
+
+const configCommand = program.command("config").description("Validate or migrate Agent Black Box config.");
+
+configCommand
+  .command("validate")
+  .description("Validate .agentblackbox.json and report schema/version issues.")
+  .action(async () => {
+    const root = (await getRepositoryRoot(process.cwd())) ?? process.cwd();
+    const result = await loadConfigWithMeta(root);
+    console.log(renderConfigLoadResult(result));
+    process.exitCode = result.errors.length === 0 ? 0 : 1;
+  });
+
+configCommand
+  .command("migrate")
+  .description("Rewrite .agentblackbox.json using the current schema version.")
+  .action(async () => {
+    const root = (await getRepositoryRoot(process.cwd())) ?? process.cwd();
+    const result = await migrateConfigFile(root);
+    console.log(renderConfigLoadResult(result));
+    console.log(`Migrated ${path.relative(process.cwd(), result.configPath) || result.configPath}`);
   });
 
 program
@@ -147,8 +177,38 @@ program
 program
   .command("risks")
   .description("Show risky changes detected in the latest session.")
-  .action(async () => {
-    await printLatestReportFile("risks.md");
+  .option("--min-severity <severity>", "only include risks at or above low, medium, or high")
+  .option("--category <category>", "only include risks from a specific category")
+  .option("--json", "print filtered risk findings as JSON")
+  .action(async (options: { minSeverity?: string; category?: string; json?: boolean }) => {
+    if (!hasRiskOptions(options)) {
+      await printLatestReportFile("risks.md");
+      return;
+    }
+
+    const repoRoot = await requireRepositoryRoot(process.cwd());
+    const report = await readLatestSessionReport(repoRoot);
+    const riskFilter = {
+      minSeverity: parseRiskSeverity(options.minSeverity),
+      ...(options.category ? { category: options.category } : {})
+    };
+
+    if (options.json) {
+      console.log(
+        JSON.stringify(
+          {
+            riskSummary: report.riskSummary,
+            risks: filterRiskFindings(report.risks, riskFilter),
+            possibleSecrets: report.possibleSecrets
+          },
+          null,
+          2
+        )
+      );
+      return;
+    }
+
+    console.log(generateRisksMarkdown(report, riskFilter));
   });
 
 program
@@ -179,6 +239,42 @@ program
     await applyRollbackPlan(repoRoot, plan);
     console.log("Eligible files restored. Review `git status --short` before continuing.");
   });
+
+program
+  .command("export")
+  .description("Export the latest session as bundled Markdown or structured JSON.")
+  .option("--format <format>", "export format: markdown or json", "markdown")
+  .option("--output <path>", "write export to a file instead of stdout")
+  .option("--force", "overwrite an existing output file")
+  .option("--min-severity <severity>", "filter risks in Markdown exports by low, medium, or high")
+  .option("--category <category>", "filter risks in Markdown exports by category")
+  .action(
+    async (options: {
+      format: string;
+      output?: string;
+      force?: boolean;
+      minSeverity?: string;
+      category?: string;
+    }) => {
+      const repoRoot = await requireRepositoryRoot(process.cwd());
+      const report = await readLatestSessionReport(repoRoot);
+      const content = renderSessionExport(report, {
+        format: parseExportFormat(options.format),
+        riskFilter: {
+          minSeverity: parseRiskSeverity(options.minSeverity),
+          ...(options.category ? { category: options.category } : {})
+        }
+      });
+
+      if (!options.output) {
+        console.log(content);
+        return;
+      }
+
+      const exportPath = await writeSessionExport(options.output, content, { force: options.force });
+      console.log(`Export written to ${exportPath}`);
+    }
+  );
 
 async function printLatestReportFile(fileName: string): Promise<void> {
   const repoRoot = await requireRepositoryRoot(process.cwd());
@@ -224,6 +320,41 @@ async function waitForSessionToFinalize(repoRoot: string, config: Awaited<Return
   }
 
   return false;
+}
+
+function renderConfigLoadResult(result: Awaited<ReturnType<typeof loadConfigWithMeta>>): string {
+  const lines = ["Agent Black Box Config", ""];
+
+  lines.push(`Path: ${result.configPath}`);
+  lines.push(`Exists: ${result.exists ? "yes" : "no"}`);
+  lines.push(`Config version: ${result.config.configVersion}`);
+  lines.push(`Schema: ${result.config.$schema ?? "none"}`);
+  lines.push(`Session directory: ${result.config.sessionDir}`);
+
+  if (result.migrated) {
+    lines.push("Migration: legacy config can be migrated to the current schema.");
+  }
+
+  if (result.warnings.length > 0) {
+    lines.push("");
+    lines.push(formatConfigProblems("Warnings", result.warnings));
+  }
+
+  if (result.errors.length > 0) {
+    lines.push("");
+    lines.push(formatConfigProblems("Errors", result.errors));
+    lines.push("");
+    lines.push("Result: invalid");
+  } else {
+    lines.push("");
+    lines.push("Result: valid");
+  }
+
+  return `${lines.join("\n")}\n`;
+}
+
+function hasRiskOptions(options: { minSeverity?: string; category?: string; json?: boolean }): boolean {
+  return Boolean(options.minSeverity || options.category || options.json);
 }
 
 program.parseAsync(process.argv).catch((error: unknown) => {

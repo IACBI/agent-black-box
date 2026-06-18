@@ -1,6 +1,6 @@
 {
   "name": "agent-black-box",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Local-first CLI that records and explains observable repository changes during AI coding sessions.",
   "type": "module",
   "packageManager": "pnpm@10.30.3",
@@ -18,6 +18,7 @@
   "files": [
     "dist",
     "docs",
+    "schema",
     "CHANGELOG.md",
     "README.md",
     "LICENSE"

@@ -1,3 +1,5 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createDefaultConfig } from "../src/config/config.js";
 import { renderDoctorReport, runDoctor } from "../src/doctor/doctor.js";
@@ -29,6 +31,23 @@ describe("doctor", () => {
       expect(rendered).toContain("PASS Node.js");
       expect(rendered).toContain("PASS Config");
       expect(rendered).toContain("PASS Session state");
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
+  it("reports invalid config as a doctor failure", async () => {
+    const dir = await createTempDir();
+    try {
+      initGitRepo(dir);
+      await writeFile(path.join(dir, ".agentblackbox.json"), "{not-json}", "utf8");
+
+      const report = await runDoctor(dir);
+      const rendered = renderDoctorReport(report);
+
+      expect(report.ok).toBe(false);
+      expect(rendered).toContain("FAIL Config");
+      expect(rendered).toContain("Failed to parse");
     } finally {
       await removeTempDir(dir);
     }

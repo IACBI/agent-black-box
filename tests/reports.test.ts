@@ -3,6 +3,7 @@ import {
   buildSessionReport,
   generateCommandsMarkdown,
   generateDiffSummaryMarkdown,
+  filterRiskFindings,
   generateRisksMarkdown,
   generateRollbackMarkdown,
   generateSummaryMarkdown,
@@ -37,7 +38,7 @@ const baseReport = buildSessionReport(
     diffSummaryText: "src/index.ts | 2 +",
     changedFiles: [{ path: "src/index.ts", status: "modified", insertions: 2, deletions: 0 }]
   },
-  [{ path: "src/config.ts", category: "Config file", severity: "medium", reason: "Configuration changed." }],
+  [{ path: "src/config.ts", category: "Config file", severity: "medium", score: 60, reason: "Configuration changed." }],
   [{ path: "src/config.ts", line: 4, reason: "Possible token detected.", redacted: "<redacted>" }]
 );
 
@@ -72,14 +73,27 @@ describe("markdown reports", () => {
     expect(markdown).toContain("Agent Black Box Summary");
     expect(markdown).toContain("Changed files: 1");
     expect(markdown).toContain("Possible secrets: 1");
+    expect(markdown).toContain("Risk score:");
     expect(markdown).toContain("Review `risks.md` first");
+    expect(markdown).toContain("No malformed session event records");
   });
 
   it("generates risks without raw secret values", () => {
     const markdown = generateRisksMarkdown(baseReport);
 
     expect(markdown).toContain("<redacted>");
+    expect(markdown).toContain("(60/100)");
     expect(markdown).not.toContain("raw-secret");
+  });
+
+  it("filters risk findings by severity and category", () => {
+    const risks = [
+      ...baseReport.risks,
+      { path: ".env", category: "Environment file", severity: "high" as const, score: 90, reason: "Env changed." }
+    ];
+
+    expect(filterRiskFindings(risks, { minSeverity: "high" }).map((risk) => risk.path)).toEqual([".env"]);
+    expect(filterRiskFindings(risks, { category: "Config file" }).map((risk) => risk.path)).toEqual(["src/config.ts"]);
   });
 
   it("generates rollback suggestions without executing changes", () => {

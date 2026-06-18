@@ -11,7 +11,9 @@ Structured session output containing:
 - Commands explicitly run through `abb run`.
 - Git branch, status, diff summary, and changed files.
 - Risk findings.
+- Risk score, maximum severity, severity counts, and possible-secret count.
 - Possible secret findings with redacted values.
+- Integrity metadata for malformed event or command records skipped during recovery.
 
 ## `summary.md`
 
@@ -22,9 +24,11 @@ Short review-first summary:
 - Recorded command count.
 - Possible secret count.
 - Risk severity counts.
+- Risk score.
 - Review priority.
 - Notable changed files.
 - Top risk signals.
+- Report integrity status.
 
 Use this report when you need the fastest overview.
 
@@ -78,6 +82,25 @@ Review signals based on path patterns and changed files:
 - Possible secret-like values.
 
 Findings are not proof of a vulnerability. They are prompts for human review.
+
+Each risk includes a deterministic score from 0 to 100. Scores are derived from severity, change size, and file status. Possible secret findings raise the overall session risk score but still require human validation.
+
+Filter latest risk output:
+
+```sh
+abb risks --min-severity high
+abb risks --category "CI/CD file"
+abb risks --json --min-severity medium
+```
+
+## Exports
+
+`abb export` creates a single review artifact from the latest session:
+
+- Markdown export bundles `summary.md`, `commands.md`, `timeline.md`, `diff-summary.md`, `risks.md`, and `rollback.md`.
+- JSON export emits the structured `session.json`.
+- Risk filters can be applied to Markdown exports.
+- Existing output files are not overwritten unless `--force` is provided.
 
 ## `rollback.md`
 

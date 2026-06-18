@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/IACBI/agent-black-box/main/schema/agentblackbox.schema.json",
+  "title": "Agent Black Box Configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional JSON Schema reference for editor validation."
+    },
+    "configVersion": {
+      "type": "integer",
+      "const": 1,
+      "description": "Agent Black Box config format version."
+    },
+    "sessionDir": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Directory where session reports are written. Relative paths are resolved from the repository root."
+    },
+    "exclude": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true,
+      "description": "Repository-relative paths or path segments ignored by watching and reporting."
+    },
+    "riskPatterns": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true,
+      "description": "Repository-relative paths or path segments treated as review-sensitive."
+    },
+    "maxFileSizeKb": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 102400,
+      "description": "Maximum changed file size scanned for possible secret-like values."
+    }
+  },
+  "required": ["configVersion", "sessionDir", "exclude", "riskPatterns", "maxFileSizeKb"]
+}

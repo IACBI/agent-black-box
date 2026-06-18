@@ -1,4 +1,6 @@
 {
+  "$schema": "https://raw.githubusercontent.com/IACBI/agent-black-box/main/schema/agentblackbox.schema.json",
+  "configVersion": 1,
   "sessionDir": ".agent-black-box/sessions",
   "exclude": [
     "node_modules",

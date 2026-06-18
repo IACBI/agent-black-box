@@ -2,7 +2,7 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { simpleGit } from "simple-git";
 import type { ChangedFile, ChangeStatus, GitSnapshot } from "../types.js";
-import { normalizePath } from "../utils/paths.js";
+import { isPathExcluded, normalizePath } from "../utils/paths.js";
 
 const MAX_ESTIMATED_UNTRACKED_FILE_BYTES = 500 * 1024;
 
@@ -50,13 +50,14 @@ export async function isGitRepository(cwd: string): Promise<boolean> {
   return (await tryGetRepositoryRoot(cwd)) !== null;
 }
 
-export async function collectGitSnapshot(repoRoot: string): Promise<GitSnapshot> {
+export async function collectGitSnapshot(repoRoot: string, excludePatterns: string[] = []): Promise<GitSnapshot> {
   const git = simpleGit({ baseDir: repoRoot, binary: "git" });
+  const diffPathspecs = buildDiffPathspecs(excludePatterns);
   const [status, diffSummary, unstagedStat, stagedStat] = await Promise.all([
     git.status(),
     git.diffSummary(),
-    git.raw(["diff", "--stat"]),
-    git.raw(["diff", "--cached", "--stat"])
+    git.raw(diffPathspecs.length > 0 ? ["diff", "--stat", "--", ...diffPathspecs] : ["diff", "--stat"]),
+    git.raw(diffPathspecs.length > 0 ? ["diff", "--cached", "--stat", "--", ...diffPathspecs] : ["diff", "--cached", "--stat"])
   ]);
 
   const summaryByPath = new Map(
@@ -69,7 +70,8 @@ export async function collectGitSnapshot(repoRoot: string): Promise<GitSnapshot>
     ])
   );
 
-  const changedFiles = await Promise.all(status.files.map(async (file) => {
+  const visibleStatusFiles = status.files.filter((file) => !isPathExcluded(file.path, excludePatterns));
+  const changedFiles = await Promise.all(visibleStatusFiles.map(async (file) => {
     const normalizedPath = normalizePath(file.path);
     const summary = summaryByPath.get(normalizedPath);
     const status = mapStatus(file.index, file.working_dir);
@@ -93,6 +95,15 @@ export async function collectGitSnapshot(repoRoot: string): Promise<GitSnapshot>
     diffSummaryText: formatDiffSummary(unstagedStat, stagedStat, changedFiles),
     changedFiles
   };
+}
+
+function buildDiffPathspecs(excludePatterns: string[]): string[] {
+  const normalized = [...new Set(excludePatterns.map((pattern) => normalizePath(pattern)).filter(Boolean))];
+  if (normalized.length === 0) {
+    return [];
+  }
+
+  return [":(top).", ...normalized.map((pattern) => `:(top,exclude)${pattern}`)];
 }
 
 function mapStatus(indexStatus: string, workingTreeStatus: string): ChangeStatus {

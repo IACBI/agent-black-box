@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0
+
+- Added versioned config support with JSON Schema, validation, and migration commands.
+- Added atomic session locks, stale lock recovery, and corrupted event record recovery.
+- Added deterministic risk scores and risk summary metadata to session reports.
+- Added filtered `abb risks` output with severity, category, and JSON modes.
+- Added `abb export` for bundled Markdown or structured JSON session exports.
+- Updated tests and documentation for config migration, session recovery, risk filtering, and exports.
+
 ## 0.3.0
 
 - Added CLI end-to-end coverage for real `init/start/run/stop/report` workflows.

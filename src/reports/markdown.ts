@@ -7,6 +7,7 @@ import type {
   SecretFinding,
   SessionReport
 } from "../types.js";
+import { summarizeRisks } from "../risks/riskDetector.js";
 import { shellQuotePath } from "../utils/paths.js";
 
 const COMMAND_CAPTURE_NOTE =
@@ -25,7 +26,12 @@ export function buildSessionReport(
   commands: CommandEvent[],
   git: GitSnapshot,
   risks: RiskFinding[],
-  possibleSecrets: SecretFinding[]
+  possibleSecrets: SecretFinding[],
+  integrity: SessionReport["integrity"] = {
+    warnings: [],
+    discardedFileEventLines: 0,
+    discardedCommandEventLines: 0
+  }
 ): SessionReport {
   return {
     id: active.id,
@@ -43,8 +49,15 @@ export function buildSessionReport(
     commands,
     git,
     risks,
-    possibleSecrets
+    riskSummary: summarizeRisks(risks, possibleSecrets),
+    possibleSecrets,
+    integrity
   };
+}
+
+export interface RiskReportFilter {
+  minSeverity?: RiskFinding["severity"];
+  category?: string;
 }
 
 export function generateTimelineMarkdown(report: SessionReport): string {
@@ -142,6 +155,7 @@ export function generateSummaryMarkdown(report: SessionReport): string {
 - File watcher events: ${report.events.length}
 - Possible secrets: ${report.possibleSecrets.length}
 - Risks: ${highRisks} high, ${mediumRisks} medium, ${lowRisks} low
+- Risk score: ${report.riskSummary.score}/100 (${report.riskSummary.maxSeverity})
 
 ## Review priority
 
@@ -162,6 +176,10 @@ ${topRisks || "No risky file changes were detected."}
 - Confirm possible secrets are false positives or rotate exposed values.
 - Run the repository's relevant test suite.
 - Use \`rollback.md\` for manual rollback hints if needed.
+
+## Report integrity
+
+${formatIntegrity(report)}
 `;
 }
 
@@ -208,21 +226,23 @@ ${categories || "No notable risky file categories were detected from repository 
 `;
 }
 
-export function generateRisksMarkdown(report: SessionReport): string {
-  const riskyFiles = report.risks
-    .map((risk) => `- ${risk.severity.toUpperCase()} - \`${risk.path}\` - ${risk.category}: ${risk.reason}`)
+export function generateRisksMarkdown(report: SessionReport, filter: RiskReportFilter = {}): string {
+  const risks = filterRiskFindings(report.risks, filter);
+  const filterText = describeRiskFilter(filter);
+  const riskyFiles = risks
+    .map((risk) => `- ${risk.severity.toUpperCase()} (${risk.score}/100) - \`${risk.path}\` - ${risk.category}: ${risk.reason}`)
     .join("\n");
 
   const secrets = report.possibleSecrets
     .map((secret) => `- \`${secret.path}:${secret.line}\` - ${secret.reason} Value: ${secret.redacted}`)
     .join("\n");
 
-  const dependencyChanges = report.risks
+  const dependencyChanges = risks
     .filter((risk) => ["Lockfile", "Package manager file", "Config file"].includes(risk.category))
     .map((risk) => `- \`${risk.path}\` - ${risk.category}`)
     .join("\n");
 
-  const ciChanges = report.risks
+  const ciChanges = risks
     .filter((risk) => risk.category === "CI/CD file" || risk.category === "Docker file")
     .map((risk) => `- \`${risk.path}\` - ${risk.category}`)
     .join("\n");
@@ -230,6 +250,17 @@ export function generateRisksMarkdown(report: SessionReport): string {
   return `# Agent Black Box Risks
 
 These findings are based on observable repository changes. They are possible review signals, not proof of a vulnerability.
+
+${filterText}
+
+## Risk summary
+
+- Score: ${report.riskSummary.score}/100
+- Max severity: ${report.riskSummary.maxSeverity}
+- High: ${report.riskSummary.severityCounts.high}
+- Medium: ${report.riskSummary.severityCounts.medium}
+- Low: ${report.riskSummary.severityCounts.low}
+- Possible secrets: ${report.riskSummary.possibleSecretCount}
 
 ## Risky files changed
 
@@ -254,6 +285,20 @@ ${ciChanges || "No CI/CD or container changes were detected."}
 - Run the repository's relevant tests and type checks.
 - Review \`git diff\` before committing or reverting changes.
 `;
+}
+
+export function filterRiskFindings(risks: RiskFinding[], filter: RiskReportFilter = {}): RiskFinding[] {
+  return risks.filter((risk) => {
+    if (filter.minSeverity && severityRank(risk.severity) < severityRank(filter.minSeverity)) {
+      return false;
+    }
+
+    if (filter.category && risk.category.toLowerCase() !== filter.category.toLowerCase()) {
+      return false;
+    }
+
+    return true;
+  });
 }
 
 export function generateRollbackMarkdown(report: SessionReport, _config?: AgentBlackBoxConfig): string {
@@ -326,4 +371,44 @@ function buildReviewPriority(report: SessionReport): string {
   }
 
   return "No repository changes were detected.";
+}
+
+function severityRank(severity: RiskFinding["severity"]): number {
+  if (severity === "high") {
+    return 3;
+  }
+
+  if (severity === "medium") {
+    return 2;
+  }
+
+  return 1;
+}
+
+function describeRiskFilter(filter: RiskReportFilter): string {
+  const parts = [];
+  if (filter.minSeverity) {
+    parts.push(`minimum severity \`${filter.minSeverity}\``);
+  }
+  if (filter.category) {
+    parts.push(`category \`${filter.category}\``);
+  }
+
+  return parts.length > 0 ? `Active filter: ${parts.join(", ")}.` : "Active filter: none.";
+}
+
+function formatIntegrity(report: SessionReport): string {
+  if (
+    report.integrity.warnings.length === 0 &&
+    report.integrity.discardedFileEventLines === 0 &&
+    report.integrity.discardedCommandEventLines === 0
+  ) {
+    return "No malformed session event records were detected.";
+  }
+
+  return [
+    `- Discarded file event lines: ${report.integrity.discardedFileEventLines}`,
+    `- Discarded command event lines: ${report.integrity.discardedCommandEventLines}`,
+    ...report.integrity.warnings.slice(0, 8).map((warning) => `- ${warning}`)
+  ].join("\n");
 }

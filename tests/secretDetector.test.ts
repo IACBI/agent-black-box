@@ -20,6 +20,16 @@ describe("secret detector", () => {
     expect(shannonEntropy("aZ9qL2xP8vN4mR7sT1uY6wE3bC5dF0hJ")).toBeGreaterThan(4);
   });
 
+  it("does not treat code identifier chains as high-entropy values", () => {
+    const findings = detectSecretsInLine(
+      "src/reports/markdown.ts",
+      "- Possible secrets: ${report.riskSummary.possibleSecretCount}",
+      263
+    );
+
+    expect(findings).toEqual([]);
+  });
+
   it("scans changed files up to configured size", async () => {
     const dir = await createTempDir();
     try {
