@@ -2,6 +2,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { Command } from "commander";
+import { recordAndRunCommand } from "./commands/commandRecorder.js";
 import { createDefaultConfig, loadConfig } from "./config/config.js";
 import { requireRepositoryRoot, getRepositoryRoot } from "./git/git.js";
 import {
@@ -91,6 +92,17 @@ program
   });
 
 program
+  .command("run")
+  .description("Run a command during an active session and record redacted command metadata.")
+  .allowUnknownOption(true)
+  .allowExcessArguments(true)
+  .argument("<command...>", "command and arguments to run")
+  .action(async (commandParts: string[]) => {
+    const exitCode = await recordAndRunCommand(commandParts, process.cwd());
+    process.exitCode = exitCode;
+  });
+
+program
   .command("report")
   .description("Print the latest session summary.")
   .action(async () => {
@@ -99,7 +111,7 @@ program
 
 program
   .command("timeline")
-  .description("Show a chronological timeline of file changes and command placeholders.")
+  .description("Show a chronological timeline of file changes and recorded commands.")
   .action(async () => {
     await printLatestReportFile("timeline.md");
   });

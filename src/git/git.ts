@@ -1,6 +1,10 @@
+import { readFile, stat } from "node:fs/promises";
+import path from "node:path";
 import { simpleGit } from "simple-git";
 import type { ChangedFile, ChangeStatus, GitSnapshot } from "../types.js";
 import { normalizePath } from "../utils/paths.js";
+
+const MAX_ESTIMATED_UNTRACKED_FILE_BYTES = 500 * 1024;
 
 export async function getRepositoryRoot(cwd: string): Promise<string | null> {
   try {
@@ -65,22 +69,28 @@ export async function collectGitSnapshot(repoRoot: string): Promise<GitSnapshot>
     ])
   );
 
-  const changedFiles = status.files.map((file) => {
+  const changedFiles = await Promise.all(status.files.map(async (file) => {
     const normalizedPath = normalizePath(file.path);
     const summary = summaryByPath.get(normalizedPath);
+    const status = mapStatus(file.index, file.working_dir);
+    const estimatedInsertions =
+      summary?.insertions === undefined && status === "added"
+        ? await estimateAddedTextFileInsertions(repoRoot, normalizedPath)
+        : undefined;
+
     return {
       path: normalizedPath,
-      status: mapStatus(file.index, file.working_dir),
-      insertions: summary?.insertions,
+      status,
+      insertions: summary?.insertions ?? estimatedInsertions,
       deletions: summary?.deletions
     };
-  });
+  }));
 
   return {
     repoRoot,
     branch: status.current || undefined,
     statusText: status.files.length === 0 ? "Working tree clean." : formatStatusFiles(changedFiles),
-    diffSummaryText: formatDiffSummary(unstagedStat, stagedStat),
+    diffSummaryText: formatDiffSummary(unstagedStat, stagedStat, changedFiles),
     changedFiles
   };
 }
@@ -111,7 +121,37 @@ function formatStatusFiles(files: ChangedFile[]): string {
   return files.map((file) => `${file.status.padEnd(8)} ${file.path}`).join("\n");
 }
 
-function formatDiffSummary(unstagedStat: string, stagedStat: string): string {
+async function estimateAddedTextFileInsertions(repoRoot: string, relativePath: string): Promise<number | undefined> {
+  const absolutePath = path.join(repoRoot, relativePath);
+
+  try {
+    const stats = await stat(absolutePath);
+    if (!stats.isFile() || stats.size > MAX_ESTIMATED_UNTRACKED_FILE_BYTES) {
+      return undefined;
+    }
+
+    const content = await readFile(absolutePath, "utf8");
+    if (content.includes("\u0000")) {
+      return undefined;
+    }
+
+    return countLines(content);
+  } catch {
+    return undefined;
+  }
+}
+
+function countLines(content: string): number {
+  if (content.length === 0) {
+    return 0;
+  }
+
+  const normalized = content.replace(/\r\n/g, "\n");
+  const trailingNewlineAdjustment = normalized.endsWith("\n") ? 1 : 0;
+  return normalized.split("\n").length - trailingNewlineAdjustment;
+}
+
+function formatDiffSummary(unstagedStat: string, stagedStat: string, changedFiles: ChangedFile[]): string {
   const sections = [];
 
   if (unstagedStat.trim()) {
@@ -122,5 +162,13 @@ function formatDiffSummary(unstagedStat: string, stagedStat: string): string {
     sections.push(`Staged diff:\n${stagedStat.trimEnd()}`);
   }
 
-  return sections.length > 0 ? sections.join("\n\n") : "No tracked Git diff was detected.";
+  if (sections.length > 0) {
+    return sections.join("\n\n");
+  }
+
+  if (changedFiles.some((file) => file.status === "added" && file.insertions !== undefined)) {
+    return "No tracked Git diff was detected. Added-line counts for untracked text files were estimated from file contents.";
+  }
+
+  return "No tracked Git diff was detected.";
 }

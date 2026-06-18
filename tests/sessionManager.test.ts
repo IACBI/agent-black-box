@@ -3,9 +3,12 @@ import { DEFAULT_CONFIG } from "../src/config/defaults.js";
 import {
   createSession,
   getActiveSessionPath,
+  getCommandsPath,
   getEventsPath,
+  readCommandEvents,
   readActiveSession,
   readFileEvents,
+  appendCommandEvent,
   appendFileEvent
 } from "../src/session/sessionManager.js";
 import { pathExists } from "../src/utils/files.js";
@@ -19,6 +22,7 @@ describe("session manager", () => {
 
       await expect(pathExists(session.sessionDir)).resolves.toBe(true);
       await expect(pathExists(getEventsPath(session.sessionDir))).resolves.toBe(true);
+      await expect(pathExists(getCommandsPath(session.sessionDir))).resolves.toBe(true);
       await expect(pathExists(getActiveSessionPath(dir, DEFAULT_CONFIG))).resolves.toBe(true);
       await expect(readActiveSession(dir, DEFAULT_CONFIG)).resolves.toMatchObject({ id: session.id });
     } finally {
@@ -41,6 +45,34 @@ describe("session manager", () => {
           timestamp: "2026-01-01T00:00:00.000Z",
           eventType: "change",
           path: "src/index.ts"
+        }
+      ]);
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
+  it("appends and reads command events", async () => {
+    const dir = await createTempDir();
+    try {
+      const session = await createSession(dir, DEFAULT_CONFIG);
+      await appendCommandEvent(session, {
+        startedAt: "2026-01-01T00:00:00.000Z",
+        endedAt: "2026-01-01T00:00:01.000Z",
+        command: "pnpm test",
+        cwd: dir,
+        exitCode: 0,
+        durationMs: 1000
+      });
+
+      await expect(readCommandEvents(session.sessionDir)).resolves.toEqual([
+        {
+          startedAt: "2026-01-01T00:00:00.000Z",
+          endedAt: "2026-01-01T00:00:01.000Z",
+          command: "pnpm test",
+          cwd: dir,
+          exitCode: 0,
+          durationMs: 1000
         }
       ]);
     } finally {

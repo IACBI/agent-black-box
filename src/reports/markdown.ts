@@ -1,8 +1,16 @@
-import type { AgentBlackBoxConfig, FileEvent, GitSnapshot, RiskFinding, SecretFinding, SessionReport } from "../types.js";
+import type {
+  AgentBlackBoxConfig,
+  CommandEvent,
+  FileEvent,
+  GitSnapshot,
+  RiskFinding,
+  SecretFinding,
+  SessionReport
+} from "../types.js";
 import { shellQuotePath } from "../utils/paths.js";
 
 const COMMAND_CAPTURE_NOTE =
-  "Command capture is not implemented in this MVP. This report is based on observable repository changes.";
+  "Only commands run through `abb run -- <command>` are recorded. Shell history, terminal output, prompts, and agent reasoning are not captured.";
 
 export function buildSessionReport(
   active: {
@@ -14,6 +22,7 @@ export function buildSessionReport(
   endedAt: string,
   finalizedBy: string,
   events: FileEvent[],
+  commands: CommandEvent[],
   git: GitSnapshot,
   risks: RiskFinding[],
   possibleSecrets: SecretFinding[]
@@ -26,10 +35,12 @@ export function buildSessionReport(
     endedAt,
     finalizedBy,
     commandCapture: {
-      implemented: false,
+      implemented: true,
+      mode: "wrapper-only",
       note: COMMAND_CAPTURE_NOTE
     },
     events,
+    commands,
     git,
     risks,
     possibleSecrets
@@ -38,8 +49,24 @@ export function buildSessionReport(
 
 export function generateTimelineMarkdown(report: SessionReport): string {
   const changedFiles = report.git.changedFiles.map((file) => `- ${file.status}: \`${file.path}\``).join("\n");
-  const events = report.events
+  const fileEvents = report.events
     .map((event) => `- ${event.timestamp} - ${event.eventType} - \`${event.path}\``)
+    .join("\n");
+  const commandEvents = report.commands
+    .map((command) => `- ${command.startedAt} - command exit ${command.exitCode ?? "unknown"} - \`${command.command}\``)
+    .join("\n");
+  const timeline = [
+    ...report.events.map((event) => ({
+      timestamp: event.timestamp,
+      line: `- ${event.timestamp} - file ${event.eventType} - \`${event.path}\``
+    })),
+    ...report.commands.map((command) => ({
+      timestamp: command.startedAt,
+      line: `- ${command.startedAt} - command exit ${command.exitCode ?? "unknown"} - \`${command.command}\``
+    }))
+  ]
+    .sort((a, b) => a.timestamp.localeCompare(b.timestamp))
+    .map((entry) => entry.line)
     .join("\n");
 
   return `# Agent Black Box Timeline
@@ -55,9 +82,15 @@ export function generateTimelineMarkdown(report: SessionReport): string {
 
 ${COMMAND_CAPTURE_NOTE}
 
+${commandEvents || "No wrapped commands were recorded. Use `abb run -- <command>` during an active session to record command metadata."}
+
 ## File events
 
-${events || "No live file events were recorded."}
+${fileEvents || "No live file events were recorded."}
+
+## Chronological timeline
+
+${timeline || "No timeline events were recorded."}
 
 ## Files added, modified, or deleted
 

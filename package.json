@@ -1,6 +1,6 @@
 {
   "name": "agent-black-box",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Local-first CLI that records and explains observable repository changes during AI coding sessions.",
   "type": "module",
   "packageManager": "pnpm@10.30.3",
@@ -17,6 +17,8 @@
   },
   "files": [
     "dist",
+    "docs",
+    "CHANGELOG.md",
     "README.md",
     "LICENSE"
   ],
@@ -24,7 +26,9 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "pnpm clean && tsc -p tsconfig.build.json",
+    "check": "pnpm typecheck && pnpm build && pnpm test",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
     "dev": "tsx src/cli.ts",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"

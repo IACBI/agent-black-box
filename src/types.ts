@@ -30,6 +30,16 @@ export interface FileEvent {
   path: string;
 }
 
+export interface CommandEvent {
+  startedAt: string;
+  endedAt: string;
+  command: string;
+  cwd: string;
+  exitCode: number | null;
+  durationMs: number;
+  error?: string;
+}
+
 export interface ChangedFile {
   path: string;
   status: ChangeStatus;
@@ -67,10 +77,12 @@ export interface SessionReport {
   endedAt: string;
   finalizedBy: string;
   commandCapture: {
-    implemented: false;
+    implemented: boolean;
+    mode: "wrapper-only";
     note: string;
   };
   events: FileEvent[];
+  commands: CommandEvent[];
   git: GitSnapshot;
   risks: RiskFinding[];
   possibleSecrets: SecretFinding[];

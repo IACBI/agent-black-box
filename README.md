@@ -1,141 +1,169 @@
 # Agent Black Box
 
-Agent Black Box is a local-first CLI tool that records and explains observable repository changes during AI-assisted coding sessions.
+[![CI](https://github.com/IACBI/agent-black-box/actions/workflows/ci.yml/badge.svg)](https://github.com/IACBI/agent-black-box/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/IACBI/agent-black-box/actions/workflows/codeql.yml/badge.svg)](https://github.com/IACBI/agent-black-box/actions/workflows/codeql.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-It is designed for developers who want a clear audit trail of what changed while using tools such as Codex, Claude Code, Cursor, Cline, or similar coding agents. The MVP does not integrate with those tools directly and does not inspect private agent reasoning. It records repository-level evidence: file events, Git status, diff summaries, risky file changes, possible secret-like values, and rollback hints.
+Agent Black Box is a local-first CLI for recording and explaining observable repository changes during AI-assisted coding sessions.
 
-## Why it exists
+It helps developers review what changed while using tools such as Codex, Claude Code, Cursor, Cline, and similar coding agents. It does not integrate with those tools directly, inspect hidden reasoning, or send repository data anywhere. It records evidence from the repository: file events, Git status, diffs, opt-in command metadata, risky file changes, possible secret-like values, and rollback hints.
 
-AI coding agents can make broad edits quickly. Agent Black Box gives developers a Git-friendly local record that helps answer practical review questions:
+## Why Use It
 
-- What files changed during the session?
-- Which changes look risky and deserve careful review?
-- Were possible secrets introduced?
-- What safe manual rollback commands should be considered?
+AI coding agents can move quickly. Agent Black Box gives you a calm audit trail before you commit:
 
-## What it can and cannot observe
+- See which files changed during a session.
+- Review risky areas such as env files, CI/CD, dependencies, auth, security, migrations, and config.
+- Detect possible secret-like values with redacted reporting.
+- Record commands you explicitly run through `abb run`.
+- Generate Markdown and JSON reports that are safe to keep beside Git workflows.
+- Get rollback suggestions without automatically discarding work.
 
-Agent Black Box can observe file changes and Git repository state while it is running. It can generate cautious reports from that observable evidence.
-
-Agent Black Box cannot see an AI agent's hidden reasoning, prompts, model internals, browser state, editor state, or command history unless those details are reflected in repository changes. Command capture is not implemented in this MVP, so reports include explicit placeholders.
-
-## Installation from source
+## Quick Start
 
 ```sh
 pnpm install
 pnpm build
+pnpm dev -- init
 ```
 
-Run the CLI during development:
+Start a recording session:
+
+```sh
+pnpm dev -- start
+```
+
+In another terminal, run commands through Agent Black Box when you want command metadata recorded:
+
+```sh
+pnpm dev -- run -- pnpm test
+```
+
+Stop and generate reports:
+
+```sh
+pnpm dev -- stop
+pnpm dev -- timeline
+pnpm dev -- risks
+pnpm dev -- rollback
+```
+
+Reports are written to:
+
+```text
+.agent-black-box/sessions/<session-id>/
+```
+
+## CLI Commands
+
+| Command | Purpose |
+| --- | --- |
+| `abb init` | Create `.agentblackbox.json`. |
+| `abb start` | Start a foreground recording session in the current Git repository. |
+| `abb run -- <command>` | Run a command and record redacted command metadata for the active session. |
+| `abb stop` | Stop the active session and generate reports. |
+| `abb status` | Show whether a session is active, stale, or absent. |
+| `abb report` | Print the latest `session.json`. |
+| `abb timeline` | Print the latest chronological timeline. |
+| `abb risks` | Print risky changes and possible secret findings. |
+| `abb rollback` | Print safe manual rollback suggestions. |
+
+Detailed usage: [docs/USAGE.md](docs/USAGE.md)
+
+## What Gets Generated
+
+Each session produces:
+
+- `session.json`: structured metadata, events, commands, Git snapshot, risks, and possible secrets.
+- `timeline.md`: chronological file and command timeline.
+- `diff-summary.md`: Git status, changed files, line counts where available, and notable categories.
+- `risks.md`: risky files, possible secrets, dependency/config changes, CI/CD changes, and review checklist.
+- `rollback.md`: manual review and rollback suggestions.
+
+Report details: [docs/REPORTS.md](docs/REPORTS.md)
+
+## Privacy And Safety Model
+
+Agent Black Box is designed for private repositories:
+
+- Local-first by default.
+- No telemetry.
+- No external AI API.
+- No repository upload.
+- No terminal output capture.
+- Possible secret values are redacted in reports.
+- Rollback is advisory only and never automatic.
+
+Command capture is opt-in. Only commands run through `abb run -- <command>` are recorded, and sensitive-looking arguments are redacted before they are written.
+
+## What It Cannot Observe
+
+Agent Black Box reports observable evidence only. It cannot see:
+
+- An AI agent's hidden reasoning.
+- Prompts or private model state.
+- Editor state.
+- Browser state.
+- Shell history for commands not run through `abb run`.
+- Why a change happened.
+
+Reports intentionally use cautious language such as "possible", "likely", and "detected from repository changes".
+
+## Project Quality
+
+- TypeScript strict mode.
+- Vitest test coverage for core behavior.
+- GitHub Actions CI for typecheck, build, and tests.
+- CodeQL analysis.
+- Dependabot for patch/minor maintenance.
+- MIT license.
+- Security reporting guide.
+- Contribution guide.
+
+Architecture notes: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+
+## Development
+
+```sh
+pnpm install
+pnpm check
+```
+
+Run the CLI locally:
 
 ```sh
 pnpm dev -- --help
 ```
 
-After building, the binary entry is:
+After building:
 
 ```sh
 node dist/cli.js --help
 ```
 
-## CLI usage
-
-```sh
-abb init
-abb start
-abb stop
-abb status
-abb report
-abb timeline
-abb risks
-abb rollback
-```
-
-During development, replace `abb` with `pnpm dev --`:
-
-```sh
-pnpm dev -- init
-pnpm dev -- start
-pnpm dev -- stop
-```
-
-## Example workflow
-
-1. Initialize config:
-
-   ```sh
-   pnpm dev -- init
-   ```
-
-2. Start a foreground recording session:
-
-   ```sh
-   pnpm dev -- start
-   ```
-
-3. Make changes with your editor or coding agent.
-
-4. From another terminal, stop the session:
-
-   ```sh
-   pnpm dev -- stop
-   ```
-
-5. Review reports:
-
-   ```sh
-   pnpm dev -- timeline
-   pnpm dev -- risks
-   pnpm dev -- rollback
-   ```
-
-## Generated reports
-
-Reports are written under `.agent-black-box/sessions/<session-id>/`:
-
-- `session.json`: structured session metadata, events, Git snapshot, risks, and possible secrets.
-- `timeline.md`: chronological file events and changed files.
-- `diff-summary.md`: Git status, diff summary, changed files, and notable categories.
-- `risks.md`: risky files changed, possible secrets, dependency/config changes, CI/CD changes, and a review checklist.
-- `rollback.md`: manual rollback hints and review commands.
-
-## Privacy model
-
-- Local-first by design.
-- No external API calls are required.
-- No telemetry is included.
-- Reports are stored in the local repository under `.agent-black-box/`.
-- Possible secret values are redacted in reports.
-
-## Project health
-
-- CI runs typecheck, build, and tests on GitHub Actions.
-- Dependency updates are tracked with Dependabot.
-- Security reporting guidance is documented in `SECURITY.md`.
-- Contributions are documented in `CONTRIBUTING.md`.
-
-## Limitations
-
-- No direct Codex, Claude Code, Cursor, or Cline integration is implemented.
-- Command capture is not implemented.
-- Risk and secret detection are heuristics and may produce false positives or miss real issues.
-- Rollback is advisory only; Agent Black Box does not automatically revert changes.
-- Git diff line counts may not include untracked files until they are staged or otherwise tracked by Git.
-
 ## Roadmap
 
-- Optional command capture through explicit wrappers or shell integration.
-- Richer diff analysis for untracked files.
-- Safer interactive rollback workflows with confirmation.
-- Editor integrations.
+Near-term improvements:
+
+- Better command grouping in reports.
+- Optional interactive report summary.
+- Stronger binary file detection.
+- More precise diff stats for untracked files.
+- Confirmed interactive rollback flow.
+
+Out of scope for the MVP:
+
 - Web dashboard.
+- VS Code extension.
+- Cloud sync.
+- Private agent API integrations.
+- Automatic destructive rollback.
+- Paid AI features.
 
-## Contributing
+## Maintainer
 
-Contributions are welcome. Keep changes focused, tested, local-first, and respectful of private repositories. Avoid telemetry and external service dependencies unless they are optional and clearly documented.
-
-Maintainer: 𝓐.𝓒.𝓑
+𝓐.𝓒.𝓑
 
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE).

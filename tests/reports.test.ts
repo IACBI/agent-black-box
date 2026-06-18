@@ -17,6 +17,16 @@ const baseReport = buildSessionReport(
   "2026-01-01T00:01:00.000Z",
   "test",
   [{ timestamp: "2026-01-01T00:00:10.000Z", eventType: "change", path: "src/index.ts" }],
+  [
+    {
+      startedAt: "2026-01-01T00:00:20.000Z",
+      endedAt: "2026-01-01T00:00:21.000Z",
+      command: "pnpm test",
+      cwd: "/repo",
+      exitCode: 0,
+      durationMs: 1000
+    }
+  ],
   {
     repoRoot: "/repo",
     branch: "main",
@@ -32,8 +42,9 @@ describe("markdown reports", () => {
   it("generates timeline with command placeholder", () => {
     const markdown = generateTimelineMarkdown(baseReport);
 
-    expect(markdown).toContain("Command capture is not implemented");
+    expect(markdown).toContain("abb run -- <command>");
     expect(markdown).toContain("src/index.ts");
+    expect(markdown).toContain("pnpm test");
   });
 
   it("generates diff summary", () => {

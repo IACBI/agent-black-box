@@ -1,6 +1,6 @@
 import { appendFile, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { ActiveSession, AgentBlackBoxConfig, FileEvent, SessionReport, StopRequest } from "../types.js";
+import type { ActiveSession, AgentBlackBoxConfig, CommandEvent, FileEvent, SessionReport, StopRequest } from "../types.js";
 import { collectGitSnapshot } from "../git/git.js";
 import { detectRisks } from "../risks/riskDetector.js";
 import { detectPossibleSecrets } from "../risks/secretDetector.js";
@@ -11,6 +11,7 @@ import { ensureDir, getNewestDirectory, pathExists, readJsonFile, removeFileIfEx
 const ACTIVE_SESSION_FILE = "active-session.json";
 const STOP_REQUEST_FILE = "stop-request.json";
 const EVENTS_FILE = "events.ndjson";
+const COMMANDS_FILE = "commands.ndjson";
 const SESSION_START_FILE = "session-start.json";
 
 export function getSessionRoot(repoRoot: string, config: AgentBlackBoxConfig): string {
@@ -33,6 +34,10 @@ export function getEventsPath(sessionDir: string): string {
   return path.join(sessionDir, EVENTS_FILE);
 }
 
+export function getCommandsPath(sessionDir: string): string {
+  return path.join(sessionDir, COMMANDS_FILE);
+}
+
 export async function createSession(repoRoot: string, config: AgentBlackBoxConfig): Promise<ActiveSession> {
   const existing = await readActiveSession(repoRoot, config);
   if (existing && isProcessRunning(existing.pid)) {
@@ -52,6 +57,7 @@ export async function createSession(repoRoot: string, config: AgentBlackBoxConfi
 
   await ensureDir(sessionDir);
   await writeFile(getEventsPath(sessionDir), "", "utf8");
+  await writeFile(getCommandsPath(sessionDir), "", "utf8");
   await writeJsonFile(path.join(sessionDir, SESSION_START_FILE), session);
   await writeJsonFile(getActiveSessionPath(repoRoot, config), session);
   await removeFileIfExists(getStopRequestPath(repoRoot, config));
@@ -94,6 +100,10 @@ export async function appendFileEvent(session: ActiveSession, event: FileEvent):
   await appendFile(getEventsPath(session.sessionDir), `${JSON.stringify(event)}\n`, "utf8");
 }
 
+export async function appendCommandEvent(session: ActiveSession, event: CommandEvent): Promise<void> {
+  await appendFile(getCommandsPath(session.sessionDir), `${JSON.stringify(event)}\n`, "utf8");
+}
+
 export async function readFileEvents(sessionDir: string): Promise<FileEvent[]> {
   const eventsPath = getEventsPath(sessionDir);
   if (!(await pathExists(eventsPath))) {
@@ -107,6 +117,19 @@ export async function readFileEvents(sessionDir: string): Promise<FileEvent[]> {
     .map((line) => JSON.parse(line) as FileEvent);
 }
 
+export async function readCommandEvents(sessionDir: string): Promise<CommandEvent[]> {
+  const commandsPath = getCommandsPath(sessionDir);
+  if (!(await pathExists(commandsPath))) {
+    return [];
+  }
+
+  const raw = await readFile(commandsPath, "utf8");
+  return raw
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as CommandEvent);
+}
+
 export async function finalizeSession(
   active: ActiveSession,
   config: AgentBlackBoxConfig,
@@ -114,10 +137,11 @@ export async function finalizeSession(
 ): Promise<SessionReport> {
   const endedAt = new Date().toISOString();
   const events = await readFileEvents(active.sessionDir);
+  const commands = await readCommandEvents(active.sessionDir);
   const git = await collectGitSnapshot(active.repoRoot);
   const risks = detectRisks(git.changedFiles, config);
   const possibleSecrets = await detectPossibleSecrets(active.repoRoot, git.changedFiles, config);
-  const report = buildSessionReport(active, endedAt, finalizedBy, events, git, risks, possibleSecrets);
+  const report = buildSessionReport(active, endedAt, finalizedBy, events, commands, git, risks, possibleSecrets);
 
   await writeReports(report);
   await removeFileIfExists(getActiveSessionPath(active.repoRoot, config));
