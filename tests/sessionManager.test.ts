@@ -1,0 +1,50 @@
+import { describe, expect, it } from "vitest";
+import { DEFAULT_CONFIG } from "../src/config/defaults.js";
+import {
+  createSession,
+  getActiveSessionPath,
+  getEventsPath,
+  readActiveSession,
+  readFileEvents,
+  appendFileEvent
+} from "../src/session/sessionManager.js";
+import { pathExists } from "../src/utils/files.js";
+import { createTempDir, removeTempDir } from "./testUtils.js";
+
+describe("session manager", () => {
+  it("creates a session and active session state", async () => {
+    const dir = await createTempDir();
+    try {
+      const session = await createSession(dir, DEFAULT_CONFIG);
+
+      await expect(pathExists(session.sessionDir)).resolves.toBe(true);
+      await expect(pathExists(getEventsPath(session.sessionDir))).resolves.toBe(true);
+      await expect(pathExists(getActiveSessionPath(dir, DEFAULT_CONFIG))).resolves.toBe(true);
+      await expect(readActiveSession(dir, DEFAULT_CONFIG)).resolves.toMatchObject({ id: session.id });
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
+  it("appends and reads file events", async () => {
+    const dir = await createTempDir();
+    try {
+      const session = await createSession(dir, DEFAULT_CONFIG);
+      await appendFileEvent(session, {
+        timestamp: "2026-01-01T00:00:00.000Z",
+        eventType: "change",
+        path: "src/index.ts"
+      });
+
+      await expect(readFileEvents(session.sessionDir)).resolves.toEqual([
+        {
+          timestamp: "2026-01-01T00:00:00.000Z",
+          eventType: "change",
+          path: "src/index.ts"
+        }
+      ]);
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+});
