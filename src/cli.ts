@@ -4,7 +4,9 @@ import path from "node:path";
 import { Command } from "commander";
 import { recordAndRunCommand } from "./commands/commandRecorder.js";
 import { createDefaultConfig, loadConfig } from "./config/config.js";
+import { renderDoctorReport, runDoctor } from "./doctor/doctor.js";
 import { requireRepositoryRoot, getRepositoryRoot } from "./git/git.js";
+import { applyRollbackPlan, confirmRollback, createRollbackPlan, renderRollbackPlan } from "./rollback/rollback.js";
 import {
   finalizeSession,
   getLatestSessionDir,
@@ -14,13 +16,14 @@ import {
 } from "./session/sessionManager.js";
 import { runWatcher } from "./watcher/watcher.js";
 import { pathExists } from "./utils/files.js";
+import type { SessionReport } from "./types.js";
 
 const program = new Command();
 
 program
   .name("abb")
   .description("Record and explain observable repository changes during AI coding sessions.")
-  .version("0.1.0");
+  .version("0.3.0");
 
 program
   .command("init")
@@ -92,21 +95,46 @@ program
   });
 
 program
+  .command("doctor")
+  .description("Check local prerequisites, repository state, config, and session health.")
+  .action(async () => {
+    const report = await runDoctor(process.cwd());
+    console.log(renderDoctorReport(report));
+    process.exitCode = report.ok ? 0 : 1;
+  });
+
+program
   .command("run")
   .description("Run a command during an active session and record redacted command metadata.")
+  .option("--cwd <path>", "run command from a repository-relative directory")
+  .option("--label <label>", "attach a short label to the recorded command")
   .allowUnknownOption(true)
   .allowExcessArguments(true)
   .argument("<command...>", "command and arguments to run")
-  .action(async (commandParts: string[]) => {
-    const exitCode = await recordAndRunCommand(commandParts, process.cwd());
+  .action(async (commandParts: string[], options: { cwd?: string; label?: string }) => {
+    const exitCode = await recordAndRunCommand(commandParts, process.cwd(), options);
     process.exitCode = exitCode;
   });
 
 program
   .command("report")
-  .description("Print the latest session summary.")
+  .description("Print the latest structured session JSON report.")
   .action(async () => {
     await printLatestReportFile("session.json");
+  });
+
+program
+  .command("summary")
+  .description("Print the latest human-readable session summary.")
+  .action(async () => {
+    await printLatestReportFile("summary.md");
+  });
+
+program
+  .command("commands")
+  .description("Print commands recorded in the latest session.")
+  .action(async () => {
+    await printLatestReportFile("commands.md");
   });
 
 program
@@ -126,8 +154,30 @@ program
 program
   .command("rollback")
   .description("Print safe rollback suggestions based on Git diffs.")
-  .action(async () => {
-    await printLatestReportFile("rollback.md");
+  .option("--apply", "interactively restore eligible tracked files from the latest session")
+  .option("--file <path...>", "limit interactive restore to one or more repository-relative files")
+  .action(async (options: { apply?: boolean; file?: string[] }) => {
+    if (!options.apply) {
+      await printLatestReportFile("rollback.md");
+      return;
+    }
+
+    const repoRoot = await requireRepositoryRoot(process.cwd());
+    const report = await readLatestSessionReport(repoRoot);
+    const plan = createRollbackPlan(report, options.file ?? []);
+    console.log(renderRollbackPlan(plan));
+
+    if (plan.restorableFiles.length === 0) {
+      return;
+    }
+
+    if (!(await confirmRollback(plan))) {
+      console.log("Rollback cancelled.");
+      return;
+    }
+
+    await applyRollbackPlan(repoRoot, plan);
+    console.log("Eligible files restored. Review `git status --short` before continuing.");
   });
 
 async function printLatestReportFile(fileName: string): Promise<void> {
@@ -145,6 +195,22 @@ async function printLatestReportFile(fileName: string): Promise<void> {
   }
 
   console.log(await readFile(reportPath, "utf8"));
+}
+
+async function readLatestSessionReport(repoRoot: string): Promise<SessionReport> {
+  const config = await loadConfig(repoRoot);
+  const latestSessionDir = await getLatestSessionDir(repoRoot, config);
+
+  if (!latestSessionDir) {
+    throw new Error("No Agent Black Box sessions were found.");
+  }
+
+  const reportPath = path.join(latestSessionDir, "session.json");
+  if (!(await pathExists(reportPath))) {
+    throw new Error("Latest session does not contain session.json.");
+  }
+
+  return JSON.parse(await readFile(reportPath, "utf8")) as SessionReport;
 }
 
 async function waitForSessionToFinalize(repoRoot: string, config: Awaited<ReturnType<typeof loadConfig>>, sessionDir: string): Promise<boolean> {

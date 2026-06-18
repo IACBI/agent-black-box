@@ -35,6 +35,7 @@ export interface CommandEvent {
   endedAt: string;
   command: string;
   cwd: string;
+  label?: string;
   exitCode: number | null;
   durationMs: number;
   error?: string;

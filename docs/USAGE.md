@@ -52,12 +52,14 @@ Command recording is opt-in:
 ```sh
 abb run -- pnpm test
 abb run -- git status --short
+abb run --cwd packages/app --label unit-tests -- pnpm test
 ```
 
 Only metadata is recorded:
 
 - Redacted command line.
 - Working directory.
+- Optional label.
 - Start and end time.
 - Duration.
 - Exit code.
@@ -90,6 +92,8 @@ If the watcher process is stale, `abb stop` finalizes from the current Git state
 
 ```sh
 abb report
+abb summary
+abb commands
 abb timeline
 abb risks
 abb rollback
@@ -110,6 +114,26 @@ Reports are stored under:
 5. Run `abb stop`.
 6. Read `timeline.md`, `risks.md`, and `rollback.md`.
 7. Review `git diff` before committing.
+
+## Doctor
+
+Use `doctor` when setup or session state looks wrong:
+
+```sh
+abb doctor
+```
+
+It checks Node.js, Git repository detection, config, write access, session directory, and active/stale session state.
+
+## Safe Rollback Apply
+
+Rollback is advisory by default. To restore eligible tracked modified/deleted files, use explicit interactive mode:
+
+```sh
+abb rollback --apply --file src/example.ts
+```
+
+Agent Black Box prints a plan and requires typed confirmation before running `git restore`. Added or untracked files are never removed automatically.
 
 ## Common Problems
 

@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   buildSessionReport,
+  generateCommandsMarkdown,
   generateDiffSummaryMarkdown,
   generateRisksMarkdown,
   generateRollbackMarkdown,
+  generateSummaryMarkdown,
   generateTimelineMarkdown
 } from "../src/reports/markdown.js";
 
@@ -22,7 +24,8 @@ const baseReport = buildSessionReport(
       startedAt: "2026-01-01T00:00:20.000Z",
       endedAt: "2026-01-01T00:00:21.000Z",
       command: "pnpm test",
-      cwd: "/repo",
+      cwd: ".",
+      label: "tests",
       exitCode: 0,
       durationMs: 1000
     }
@@ -45,6 +48,15 @@ describe("markdown reports", () => {
     expect(markdown).toContain("abb run -- <command>");
     expect(markdown).toContain("src/index.ts");
     expect(markdown).toContain("pnpm test");
+    expect(markdown).toContain("[tests]");
+  });
+
+  it("generates command report", () => {
+    const markdown = generateCommandsMarkdown(baseReport);
+
+    expect(markdown).toContain("Recorded commands");
+    expect(markdown).toContain("pnpm test");
+    expect(markdown).toContain("[tests]");
   });
 
   it("generates diff summary", () => {
@@ -52,6 +64,15 @@ describe("markdown reports", () => {
 
     expect(markdown).toContain("Git status");
     expect(markdown).toContain("| `src/index.ts` | modified | 2 | 0 |");
+  });
+
+  it("generates an executive summary", () => {
+    const markdown = generateSummaryMarkdown(baseReport);
+
+    expect(markdown).toContain("Agent Black Box Summary");
+    expect(markdown).toContain("Changed files: 1");
+    expect(markdown).toContain("Possible secrets: 1");
+    expect(markdown).toContain("Review `risks.md` first");
   });
 
   it("generates risks without raw secret values", () => {

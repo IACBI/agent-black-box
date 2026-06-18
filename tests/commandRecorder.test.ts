@@ -1,10 +1,13 @@
+import { mkdir } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {
   buildWindowsCommandLine,
   formatCommand,
   normalizeCommandParts,
-  redactCommandParts
+  redactCommandParts,
+  resolveRunCwd
 } from "../src/commands/commandRecorder.js";
+import { createTempDir, removeTempDir } from "./testUtils.js";
 
 describe("command recorder", () => {
   it("redacts sensitive assignments and flags", () => {
@@ -46,5 +49,17 @@ describe("command recorder", () => {
     expect(buildWindowsCommandLine(["pnpm.cmd", "run", "name with spaces", "a&b"])).toBe(
       'pnpm.cmd run "name with spaces" a^&b'
     );
+  });
+
+  it("resolves command working directories inside the repository", async () => {
+    const dir = await createTempDir();
+    try {
+      await mkdir(`${dir}/packages/app`, { recursive: true });
+
+      await expect(resolveRunCwd(dir, "packages/app")).resolves.toContain("packages");
+      await expect(resolveRunCwd(dir, "../outside")).rejects.toThrow("inside the repository");
+    } finally {
+      await removeTempDir(dir);
+    }
   });
 });

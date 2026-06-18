@@ -13,6 +13,33 @@ Structured session output containing:
 - Risk findings.
 - Possible secret findings with redacted values.
 
+## `summary.md`
+
+Short review-first summary:
+
+- Session metadata.
+- Changed file count.
+- Recorded command count.
+- Possible secret count.
+- Risk severity counts.
+- Review priority.
+- Notable changed files.
+- Top risk signals.
+
+Use this report when you need the fastest overview.
+
+## `commands.md`
+
+Command metadata explicitly recorded through `abb run`:
+
+- Redacted command line.
+- Optional label.
+- Repository-relative working directory.
+- Exit code.
+- Timestamp.
+
+Terminal output is not captured.
+
 ## `timeline.md`
 
 Chronological view of observable activity:
@@ -61,6 +88,7 @@ Manual rollback guidance:
 - `git diff`.
 - File-level `git diff -- <file>` suggestions.
 - `git restore -- <file>` and `git checkout -- <file>` suggestions for modified tracked files.
+- Optional interactive apply mode for eligible tracked modified/deleted files.
 
 Agent Black Box never automatically reverts changes.
 

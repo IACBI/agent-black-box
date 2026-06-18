@@ -60,7 +60,8 @@ describe("session manager", () => {
         startedAt: "2026-01-01T00:00:00.000Z",
         endedAt: "2026-01-01T00:00:01.000Z",
         command: "pnpm test",
-        cwd: dir,
+        cwd: ".",
+        label: "tests",
         exitCode: 0,
         durationMs: 1000
       });
@@ -70,7 +71,8 @@ describe("session manager", () => {
           startedAt: "2026-01-01T00:00:00.000Z",
           endedAt: "2026-01-01T00:00:01.000Z",
           command: "pnpm test",
-          cwd: dir,
+          cwd: ".",
+          label: "tests",
           exitCode: 0,
           durationMs: 1000
         }

@@ -7,6 +7,7 @@ Thanks for helping improve Agent Black Box. The project is intentionally local-f
 ```sh
 pnpm install
 pnpm check
+pnpm release:check
 ```
 
 `pnpm check` runs typecheck, build, and tests.

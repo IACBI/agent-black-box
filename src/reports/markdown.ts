@@ -53,7 +53,7 @@ export function generateTimelineMarkdown(report: SessionReport): string {
     .map((event) => `- ${event.timestamp} - ${event.eventType} - \`${event.path}\``)
     .join("\n");
   const commandEvents = report.commands
-    .map((command) => `- ${command.startedAt} - command exit ${command.exitCode ?? "unknown"} - \`${command.command}\``)
+    .map((command) => formatCommandEvent(command))
     .join("\n");
   const timeline = [
     ...report.events.map((event) => ({
@@ -62,7 +62,7 @@ export function generateTimelineMarkdown(report: SessionReport): string {
     })),
     ...report.commands.map((command) => ({
       timestamp: command.startedAt,
-      line: `- ${command.startedAt} - command exit ${command.exitCode ?? "unknown"} - \`${command.command}\``
+      line: formatCommandEvent(command)
     }))
   ]
     .sort((a, b) => a.timestamp.localeCompare(b.timestamp))
@@ -96,6 +96,79 @@ ${timeline || "No timeline events were recorded."}
 
 ${changedFiles || "No changed files were detected by Git."}
 `;
+}
+
+export function generateCommandsMarkdown(report: SessionReport): string {
+  const commands = report.commands.map((command) => formatCommandEvent(command)).join("\n");
+
+  return `# Agent Black Box Commands
+
+${COMMAND_CAPTURE_NOTE}
+
+## Recorded commands
+
+${commands || "No wrapped commands were recorded."}
+`;
+}
+
+export function generateSummaryMarkdown(report: SessionReport): string {
+  const changedFileCount = report.git.changedFiles.length;
+  const commandCount = report.commands.length;
+  const highRisks = report.risks.filter((risk) => risk.severity === "high").length;
+  const mediumRisks = report.risks.filter((risk) => risk.severity === "medium").length;
+  const lowRisks = report.risks.filter((risk) => risk.severity === "low").length;
+  const topChangedFiles = report.git.changedFiles
+    .slice(0, 12)
+    .map((file) => `- ${file.status}: \`${file.path}\``)
+    .join("\n");
+  const topRisks = report.risks
+    .slice(0, 8)
+    .map((risk) => `- ${risk.severity.toUpperCase()} - \`${risk.path}\` - ${risk.category}`)
+    .join("\n");
+
+  return `# Agent Black Box Summary
+
+## Session
+
+- Session ID: \`${report.id}\`
+- Started: ${report.startedAt}
+- Ended: ${report.endedAt}
+- Finalized by: ${report.finalizedBy}
+
+## At a glance
+
+- Changed files: ${changedFileCount}
+- Recorded commands: ${commandCount}
+- File watcher events: ${report.events.length}
+- Possible secrets: ${report.possibleSecrets.length}
+- Risks: ${highRisks} high, ${mediumRisks} medium, ${lowRisks} low
+
+## Review priority
+
+${buildReviewPriority(report)}
+
+## Notable changed files
+
+${topChangedFiles || "No changed files were detected by Git."}
+
+## Top risk signals
+
+${topRisks || "No risky file changes were detected."}
+
+## Recommended next checks
+
+- Read \`risks.md\` before committing.
+- Review \`git diff\` for every risky or security-sensitive file.
+- Confirm possible secrets are false positives or rotate exposed values.
+- Run the repository's relevant test suite.
+- Use \`rollback.md\` for manual rollback hints if needed.
+`;
+}
+
+function formatCommandEvent(command: CommandEvent): string {
+  const label = command.label ? ` [${command.label}]` : "";
+  const cwd = command.cwd && command.cwd !== "." ? ` cwd \`${command.cwd}\`` : "";
+  return `- ${command.startedAt}${label} - command exit ${command.exitCode ?? "unknown"}${cwd} - \`${command.command}\``;
 }
 
 export function generateDiffSummaryMarkdown(report: SessionReport): string {
@@ -233,4 +306,24 @@ ${suggestions || "No changed files were detected."}
 function summarizeNotableCategories(risks: RiskFinding[]): string {
   const categories = [...new Set(risks.map((risk) => risk.category))];
   return categories.map((category) => `- ${category}`).join("\n");
+}
+
+function buildReviewPriority(report: SessionReport): string {
+  if (report.possibleSecrets.length > 0) {
+    return "Possible secret-like values were detected. Review `risks.md` first and rotate any exposed real credentials.";
+  }
+
+  if (report.risks.some((risk) => risk.severity === "high")) {
+    return "High-signal risky files changed. Review authentication, security, or environment-related changes before committing.";
+  }
+
+  if (report.risks.length > 0) {
+    return "Risk signals were detected. Review dependency, config, CI/CD, Docker, migration, or related changes carefully.";
+  }
+
+  if (report.git.changedFiles.length > 0) {
+    return "No risk signals were detected, but changed files should still be reviewed with `git diff`.";
+  }
+
+  return "No repository changes were detected.";
 }

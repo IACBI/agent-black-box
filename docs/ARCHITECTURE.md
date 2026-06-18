@@ -41,6 +41,8 @@ Final reports:
 
 - `session.json`
 - `timeline.md`
+- `summary.md`
+- `commands.md`
 - `diff-summary.md`
 - `risks.md`
 - `rollback.md`
@@ -52,6 +54,7 @@ Final reports:
 - Terminal output is not captured.
 - Possible secret values are redacted.
 - Rollback remains advisory.
+- Interactive rollback apply only restores eligible tracked files after typed confirmation.
 - Direct AI-agent private APIs are not used.
 
 ## Performance Notes

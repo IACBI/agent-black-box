@@ -1,11 +1,19 @@
 import { spawn } from "node:child_process";
+import { stat } from "node:fs/promises";
+import path from "node:path";
 import { loadConfig } from "../config/config.js";
 import { requireRepositoryRoot } from "../git/git.js";
 import { appendCommandEvent, isProcessRunning, readActiveSession } from "../session/sessionManager.js";
+import { normalizePath, toRepoRelative } from "../utils/paths.js";
 
 const SENSITIVE_PATTERN = /(api[_-]?key|secret|token|password|passwd|private[_-]?key|client[_-]?secret|access[_-]?key)/i;
 
-export async function recordAndRunCommand(commandParts: string[], cwd: string): Promise<number> {
+export interface RecordCommandOptions {
+  cwd?: string;
+  label?: string;
+}
+
+export async function recordAndRunCommand(commandParts: string[], cwd: string, options: RecordCommandOptions = {}): Promise<number> {
   const normalizedCommandParts = normalizeCommandParts(commandParts);
 
   if (normalizedCommandParts.length === 0) {
@@ -24,24 +32,46 @@ export async function recordAndRunCommand(commandParts: string[], cwd: string): 
     throw new Error(`Active session ${active.id} appears stale. Run \`abb stop\` to finalize it first.`);
   }
 
+  const runCwd = await resolveRunCwd(repoRoot, options.cwd);
   const startedAtDate = new Date();
   const startedAt = startedAtDate.toISOString();
   const redactedCommand = formatCommand(redactCommandParts(normalizedCommandParts));
 
-  const result = await spawnCommand(normalizedCommandParts, repoRoot);
+  const result = await spawnCommand(normalizedCommandParts, runCwd);
   const endedAtDate = new Date();
 
   await appendCommandEvent(active, {
     startedAt,
     endedAt: endedAtDate.toISOString(),
     command: redactedCommand,
-    cwd: repoRoot,
+    cwd: toRepoRelative(repoRoot, runCwd) || ".",
+    ...(options.label ? { label: options.label } : {}),
     exitCode: result.exitCode,
     durationMs: endedAtDate.getTime() - startedAtDate.getTime(),
     ...(result.error ? { error: result.error } : {})
   });
 
   return result.exitCode ?? 1;
+}
+
+export async function resolveRunCwd(repoRoot: string, requestedCwd?: string): Promise<string> {
+  if (!requestedCwd) {
+    return repoRoot;
+  }
+
+  const resolved = path.resolve(repoRoot, requestedCwd);
+  const relative = normalizePath(path.relative(repoRoot, resolved));
+
+  if (relative === ".." || relative.startsWith("../") || path.isAbsolute(relative)) {
+    throw new Error("--cwd must stay inside the repository.");
+  }
+
+  const stats = await stat(resolved);
+  if (!stats.isDirectory()) {
+    throw new Error(`--cwd must point to a directory: ${requestedCwd}`);
+  }
+
+  return resolved;
 }
 
 export function normalizeCommandParts(parts: string[]): string[] {

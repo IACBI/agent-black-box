@@ -43,6 +43,7 @@ Stop and generate reports:
 
 ```sh
 pnpm dev -- stop
+pnpm dev -- summary
 pnpm dev -- timeline
 pnpm dev -- risks
 pnpm dev -- rollback
@@ -60,10 +61,13 @@ Reports are written to:
 | --- | --- |
 | `abb init` | Create `.agentblackbox.json`. |
 | `abb start` | Start a foreground recording session in the current Git repository. |
+| `abb doctor` | Check local prerequisites, repository state, config, and session health. |
 | `abb run -- <command>` | Run a command and record redacted command metadata for the active session. |
 | `abb stop` | Stop the active session and generate reports. |
 | `abb status` | Show whether a session is active, stale, or absent. |
 | `abb report` | Print the latest `session.json`. |
+| `abb summary` | Print the latest human-readable session summary. |
+| `abb commands` | Print commands recorded in the latest session. |
 | `abb timeline` | Print the latest chronological timeline. |
 | `abb risks` | Print risky changes and possible secret findings. |
 | `abb rollback` | Print safe manual rollback suggestions. |
@@ -75,6 +79,8 @@ Detailed usage: [docs/USAGE.md](docs/USAGE.md)
 Each session produces:
 
 - `session.json`: structured metadata, events, commands, Git snapshot, risks, and possible secrets.
+- `summary.md`: concise review-first session summary.
+- `commands.md`: command metadata recorded through `abb run`.
 - `timeline.md`: chronological file and command timeline.
 - `diff-summary.md`: Git status, changed files, line counts where available, and notable categories.
 - `risks.md`: risky files, possible secrets, dependency/config changes, CI/CD changes, and review checklist.
@@ -116,6 +122,7 @@ Reports intentionally use cautious language such as "possible", "likely", and "d
 - GitHub Actions CI for typecheck, build, and tests.
 - CodeQL analysis.
 - Dependabot for patch/minor maintenance.
+- Tag-driven release workflow.
 - MIT license.
 - Security reporting guide.
 - Contribution guide.
