@@ -8,6 +8,7 @@ import type {
   SessionReport
 } from "../types.js";
 import { summarizeRisks } from "../risks/riskDetector.js";
+import { escapeMarkdownTableCell, escapeMarkdownText, markdownInlineCode, markdownTableCode } from "../utils/markdown.js";
 import { shellQuotePath } from "../utils/paths.js";
 
 const COMMAND_CAPTURE_NOTE =
@@ -61,9 +62,9 @@ export interface RiskReportFilter {
 }
 
 export function generateTimelineMarkdown(report: SessionReport): string {
-  const changedFiles = report.git.changedFiles.map((file) => `- ${file.status}: \`${file.path}\``).join("\n");
+  const changedFiles = report.git.changedFiles.map((file) => `- ${file.status}: ${markdownInlineCode(file.path)}`).join("\n");
   const fileEvents = report.events
-    .map((event) => `- ${event.timestamp} - ${event.eventType} - \`${event.path}\``)
+    .map((event) => `- ${event.timestamp} - ${event.eventType} - ${markdownInlineCode(event.path)}`)
     .join("\n");
   const commandEvents = report.commands
     .map((command) => formatCommandEvent(command))
@@ -71,7 +72,7 @@ export function generateTimelineMarkdown(report: SessionReport): string {
   const timeline = [
     ...report.events.map((event) => ({
       timestamp: event.timestamp,
-      line: `- ${event.timestamp} - file ${event.eventType} - \`${event.path}\``
+      line: `- ${event.timestamp} - file ${event.eventType} - ${markdownInlineCode(event.path)}`
     })),
     ...report.commands.map((command) => ({
       timestamp: command.startedAt,
@@ -86,8 +87,8 @@ export function generateTimelineMarkdown(report: SessionReport): string {
 
 ## Session metadata
 
-- Session ID: \`${report.id}\`
-- Repository: \`${report.repoRoot}\`
+- Session ID: ${markdownInlineCode(report.id)}
+- Repository: ${markdownInlineCode(report.repoRoot)}
 - Started: ${report.startedAt}
 - Ended: ${report.endedAt}
 
@@ -134,18 +135,18 @@ export function generateSummaryMarkdown(report: SessionReport): string {
   const lowRisks = report.risks.filter((risk) => risk.severity === "low").length;
   const topChangedFiles = report.git.changedFiles
     .slice(0, 12)
-    .map((file) => `- ${file.status}: \`${file.path}\``)
+    .map((file) => `- ${file.status}: ${markdownInlineCode(file.path)}`)
     .join("\n");
   const topRisks = report.risks
     .slice(0, 8)
-    .map((risk) => `- ${risk.severity.toUpperCase()} - \`${risk.path}\` - ${risk.category}`)
+    .map((risk) => `- ${risk.severity.toUpperCase()} - ${markdownInlineCode(risk.path)} - ${escapeMarkdownText(risk.category)}`)
     .join("\n");
 
   return `# Agent Black Box Summary
 
 ## Session
 
-- Session ID: \`${report.id}\`
+- Session ID: ${markdownInlineCode(report.id)}
 - Started: ${report.startedAt}
 - Ended: ${report.endedAt}
 - Finalized by: ${report.finalizedBy}
@@ -188,11 +189,11 @@ ${formatIntegrity(report)}
 }
 
 function formatCommandEvent(command: CommandEvent): string {
-  const label = command.label ? ` [${command.label}]` : "";
-  const group = command.group ? ` group \`${command.group}\`` : "";
-  const phase = command.phase ? ` phase \`${command.phase}\`` : "";
-  const cwd = command.cwd && command.cwd !== "." ? ` cwd \`${command.cwd}\`` : "";
-  return `- ${command.startedAt}${label} - command exit ${command.exitCode ?? "unknown"}${group}${phase}${cwd} - \`${command.command}\``;
+  const label = command.label ? ` [${escapeMarkdownText(command.label)}]` : "";
+  const group = command.group ? ` group ${markdownInlineCode(command.group)}` : "";
+  const phase = command.phase ? ` phase ${markdownInlineCode(command.phase)}` : "";
+  const cwd = command.cwd && command.cwd !== "." ? ` cwd ${markdownInlineCode(command.cwd)}` : "";
+  return `- ${command.startedAt}${label} - command exit ${command.exitCode ?? "unknown"}${group}${phase}${cwd} - ${markdownInlineCode(command.command)}`;
 }
 
 export function generateDiffSummaryMarkdown(report: SessionReport): string {
@@ -203,7 +204,7 @@ export function generateDiffSummaryMarkdown(report: SessionReport): string {
       const kind = file.kind ?? "unknown";
       const source = file.lineStatsSource ?? "unknown";
       const note = file.statsNote ?? "";
-      return `| \`${escapeTableCell(file.path)}\` | ${file.status} | ${kind} | ${formatBytes(file.sizeBytes)} | ${insertions} | ${deletions} | ${source} | ${escapeTableCell(note)} |`;
+      return `| ${markdownTableCode(file.path)} | ${file.status} | ${kind} | ${formatBytes(file.sizeBytes)} | ${insertions} | ${deletions} | ${source} | ${escapeMarkdownTableCell(note)} |`;
     })
     .join("\n");
 
@@ -239,21 +240,27 @@ export function generateRisksMarkdown(report: SessionReport, filter: RiskReportF
   const risks = filterRiskFindings(report.risks, filter);
   const filterText = describeRiskFilter(filter);
   const riskyFiles = risks
-    .map((risk) => `- ${risk.severity.toUpperCase()} (${risk.score}/100) - \`${risk.path}\` - ${risk.category}: ${risk.reason}`)
+    .map(
+      (risk) =>
+        `- ${risk.severity.toUpperCase()} (${risk.score}/100) - ${markdownInlineCode(risk.path)} - ${escapeMarkdownText(risk.category)}: ${escapeMarkdownText(risk.reason)}`
+    )
     .join("\n");
 
   const secrets = report.possibleSecrets
-    .map((secret) => `- \`${secret.path}:${secret.line}\` - ${secret.reason} Value: ${secret.redacted}`)
+    .map(
+      (secret) =>
+        `- ${markdownInlineCode(`${secret.path}:${secret.line}`)} - ${escapeMarkdownText(secret.reason)} Value: ${escapeMarkdownText(secret.redacted)}`
+    )
     .join("\n");
 
   const dependencyChanges = risks
     .filter((risk) => ["Lockfile", "Package manager file", "Config file"].includes(risk.category))
-    .map((risk) => `- \`${risk.path}\` - ${risk.category}`)
+    .map((risk) => `- ${markdownInlineCode(risk.path)} - ${escapeMarkdownText(risk.category)}`)
     .join("\n");
 
   const ciChanges = risks
     .filter((risk) => risk.category === "CI/CD file" || risk.category === "Docker file")
-    .map((risk) => `- \`${risk.path}\` - ${risk.category}`)
+    .map((risk) => `- ${markdownInlineCode(risk.path)} - ${escapeMarkdownText(risk.category)}`)
     .join("\n");
 
   return `# Agent Black Box Risks
@@ -315,7 +322,7 @@ export function generateRollbackMarkdown(report: SessionReport, _config?: AgentB
     .map((file) => {
       const quotedPath = shellQuotePath(file.path);
       if (file.status === "added") {
-        return `### \`${file.path}\`
+        return `### ${markdownInlineCode(file.path)}
 
 This appears to be an added or untracked file. Review it before removing it manually.
 
@@ -324,7 +331,7 @@ git diff -- ${quotedPath}
 \`\`\``;
       }
 
-      return `### \`${file.path}\`
+      return `### ${markdownInlineCode(file.path)}
 
 \`\`\`sh
 git diff -- ${quotedPath}
@@ -359,7 +366,7 @@ ${suggestions || "No changed files were detected."}
 
 function summarizeNotableCategories(risks: RiskFinding[]): string {
   const categories = [...new Set(risks.map((risk) => risk.category))];
-  return categories.map((category) => `- ${category}`).join("\n");
+  return categories.map((category) => `- ${escapeMarkdownText(category)}`).join("\n");
 }
 
 function formatGroupedCommands(commands: CommandEvent[]): string {
@@ -376,7 +383,7 @@ function formatGroupedCommands(commands: CommandEvent[]): string {
   return [...groups.entries()]
     .map(([group, groupCommands]) => {
       const lines = groupCommands.map((command) => formatCommandEvent(command)).join("\n");
-      return `### ${group}\n\n${lines}`;
+      return `### ${escapeMarkdownText(group)}\n\n${lines}`;
     })
     .join("\n\n");
 }
@@ -399,10 +406,6 @@ function formatBytes(value: number | undefined): string {
   }
 
   return `${(value / 1024).toFixed(1)} KiB`;
-}
-
-function escapeTableCell(value: string): string {
-  return value.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
 }
 
 function buildReviewPriority(report: SessionReport): string {
@@ -461,6 +464,6 @@ function formatIntegrity(report: SessionReport): string {
   return [
     `- Discarded file event lines: ${report.integrity.discardedFileEventLines}`,
     `- Discarded command event lines: ${report.integrity.discardedCommandEventLines}`,
-    ...report.integrity.warnings.slice(0, 8).map((warning) => `- ${warning}`)
+    ...report.integrity.warnings.slice(0, 8).map((warning) => `- ${escapeMarkdownText(warning)}`)
   ].join("\n");
 }

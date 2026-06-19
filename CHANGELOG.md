@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.3
+
+- Hardened Markdown report rendering for repository-controlled paths, command metadata, risk text, and integrity warnings.
+- Hardened shell command previews in rollback reports by using single-quoted path arguments and neutralizing line breaks.
+- Added regression coverage for Markdown table escaping and shell-sensitive rollback path previews.
+
 ## 0.5.2
 
 - Replaced short localized README blurbs with full in-page documentation sections for 11 non-English languages.

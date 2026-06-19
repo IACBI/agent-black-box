@@ -35,5 +35,27 @@ export function pathMatchesPattern(relativePath: string, pattern: string): boole
 }
 
 export function shellQuotePath(relativePath: string): string {
-  return `"${relativePath.replace(/"/g, '\\"')}"`;
+  let quoted = "'";
+
+  for (const character of relativePath) {
+    switch (character) {
+      case "'":
+        quoted += "'\\''";
+        break;
+      case "\r":
+        quoted += "\\r";
+        break;
+      case "\n":
+        quoted += "\\n";
+        break;
+      case "\0":
+        quoted += "\\0";
+        break;
+      default:
+        quoted += character;
+        break;
+    }
+  }
+
+  return `${quoted}'`;
 }

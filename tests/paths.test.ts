@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isPathExcluded, normalizePath, pathMatchesPattern } from "../src/utils/paths.js";
+import { isPathExcluded, normalizePath, pathMatchesPattern, shellQuotePath } from "../src/utils/paths.js";
 
 describe("path utilities", () => {
   it("normalizes Windows-style paths", () => {
@@ -16,5 +16,12 @@ describe("path utilities", () => {
   it("matches slash-separated risk patterns", () => {
     expect(pathMatchesPattern(".github/workflows/ci.yml", ".github/workflows")).toBe(true);
     expect(pathMatchesPattern("packages/app/.github/workflows/ci.yml", ".github/workflows")).toBe(true);
+  });
+
+  it("quotes paths for shell previews without allowing command breaks", () => {
+    const quoted = shellQuotePath("src/weird'$(touch owned)\nfile.ts");
+
+    expect(quoted).toBe("'src/weird'\\''$(touch owned)\\nfile.ts'");
+    expect(quoted).not.toContain("\n");
   });
 });

@@ -68,7 +68,27 @@ describe("markdown reports", () => {
     const markdown = generateDiffSummaryMarkdown(baseReport);
 
     expect(markdown).toContain("Git status");
-    expect(markdown).toContain("| `src/index.ts` | modified | unknown | unknown | 2 | 0 | unknown |  |");
+    expect(markdown).toContain("| <code>src/index.ts</code> | modified | unknown | unknown | 2 | 0 | unknown |  |");
+  });
+
+  it("escapes repository-controlled values in diff summary tables", () => {
+    const markdown = generateDiffSummaryMarkdown({
+      ...baseReport,
+      git: {
+        ...baseReport.git,
+        changedFiles: [
+          {
+            path: "src/a|`b`.ts",
+            status: "modified",
+            insertions: 1,
+            deletions: 1,
+            statsNote: "line one | line two\nnext"
+          }
+        ]
+      }
+    });
+
+    expect(markdown).toContain("| <code>src/a&#124;&#96;b&#96;.ts</code> | modified | unknown | unknown | 1 | 1 | unknown | line one \\| line two next |");
   });
 
   it("generates an executive summary", () => {
@@ -87,7 +107,7 @@ describe("markdown reports", () => {
   it("generates risks without raw secret values", () => {
     const markdown = generateRisksMarkdown(baseReport);
 
-    expect(markdown).toContain("<redacted>");
+    expect(markdown).toContain("&lt;redacted&gt;");
     expect(markdown).toContain("(60/100)");
     expect(markdown).not.toContain("raw-secret");
   });
@@ -105,8 +125,21 @@ describe("markdown reports", () => {
   it("generates rollback suggestions without executing changes", () => {
     const markdown = generateRollbackMarkdown(baseReport);
 
-    expect(markdown).toContain("git diff -- \"src/index.ts\"");
-    expect(markdown).toContain("git restore -- \"src/index.ts\"");
+    expect(markdown).toContain("git diff -- 'src/index.ts'");
+    expect(markdown).toContain("git restore -- 'src/index.ts'");
     expect(markdown).toContain("does not automatically revert");
+  });
+
+  it("escapes shell-sensitive rollback paths in command previews", () => {
+    const markdown = generateRollbackMarkdown({
+      ...baseReport,
+      git: {
+        ...baseReport.git,
+        changedFiles: [{ path: "src/weird'$(touch owned)\nfile.ts", status: "modified" }]
+      }
+    });
+
+    expect(markdown).toContain("git diff -- 'src/weird'\\''$(touch owned)\\nfile.ts'");
+    expect(markdown).not.toContain("\nfile.ts");
   });
 });
