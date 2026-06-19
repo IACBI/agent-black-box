@@ -9,6 +9,9 @@ Full localized README documentation is available in the language section: [Langu
 Structured session output containing:
 
 - Session ID, repository root, session path, start time, end time, and finalization reason.
+- Git start baseline with capture time, HEAD, branch, index fingerprint, and pre-existing changed paths.
+- Per-path evidence showing whether a path was changed at start, observed during the session, present at the end, or changed in Git metadata.
+- Net file changes between the start and end HEAD so committed work remains visible with a clean final worktree.
 - File events observed by the watcher.
 - Commands explicitly run through `abb run`.
 - Git branch, status, diff summary, and changed files.
@@ -32,6 +35,7 @@ Short review-first summary:
 - Notable changed files.
 - Top risk signals.
 - Report integrity status.
+- Baseline availability, HEAD/branch/index changes, pre-existing path count, watcher-observed path count, and session-relevant final change count.
 
 Use this report when you need the fastest overview.
 
@@ -56,6 +60,7 @@ Chronological view of observable activity:
 - Wrapped command metadata.
 - File add/change/delete events.
 - Combined chronological timeline.
+- Net start-to-end HEAD changes.
 - Files added, modified, deleted, renamed, or otherwise detected by Git.
 
 Use this report first when you want to understand the shape of a session.
@@ -88,6 +93,8 @@ Review signals based on path patterns and changed files:
 
 Findings are not proof of a vulnerability. They are prompts for human review.
 
+When a valid start baseline exists, risk and possible-secret analysis excludes unchanged pre-existing paths. If the Git index changes without reliable per-file watcher attribution, all final changes remain in scope as a cautious fallback. If the baseline is missing or unreadable, all final Git changes also remain in scope and the report records limited attribution confidence.
+
 Each risk includes a deterministic score from 0 to 100. Scores are derived from severity, change size, and file status. Possible secret findings raise the overall session risk score but still require human validation.
 
 Filter latest risk output:
@@ -117,8 +124,11 @@ Manual rollback guidance:
 - File-level `git diff -- <file>` suggestions.
 - `git restore -- <file>` and `git checkout -- <file>` suggestions for modified tracked files.
 - Optional interactive apply mode for eligible tracked modified/deleted files.
+- Automatic exclusion of paths that already had changes at session start.
 
 Agent Black Box never automatically reverts changes.
+
+Interactive apply restores to `HEAD`, not to the session baseline. Excluding pre-existing changes prevents the command from discarding work that predates the session.
 
 ## Redaction
 

@@ -58,6 +58,8 @@ abb start
 
 `abb start` runs as a foreground watcher. Leave it open while your editor, scripts, or coding agent changes files.
 
+Before watcher observations begin, Agent Black Box stores a Git baseline. Starting from a clean or understood worktree gives the clearest attribution, but a dirty worktree is supported and its existing changes are marked as pre-existing.
+
 ## Record Commands
 
 Command recording is opt-in:
@@ -155,6 +157,8 @@ abb rollback --apply --file src/example.ts
 ```
 
 Agent Black Box prints a plan and requires typed confirmation before running `git restore`. Added or untracked files are never removed automatically.
+
+Files that already had changes at session start are not eligible for interactive restore. `git restore --source=HEAD` cannot preserve their pre-session state, so applying it would risk data loss.
 
 ## Export
 

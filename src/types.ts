@@ -71,10 +71,35 @@ export interface ChangedFile {
 
 export interface GitSnapshot {
   repoRoot: string;
+  head?: string;
+  indexFingerprint?: string;
   branch?: string;
   statusText: string;
   diffSummaryText: string;
   changedFiles: ChangedFile[];
+}
+
+export interface SessionBaseline {
+  capturedAt: string;
+  git: GitSnapshot;
+}
+
+export interface FileChangeEvidence {
+  path: string;
+  atStart: boolean | null;
+  observedDuringSession: boolean;
+  atEnd: boolean;
+  gitMetadataChanged: boolean | null;
+}
+
+export interface SessionChangeEvidence {
+  baselineAvailable: boolean;
+  baselineCapturedAt?: string;
+  headChanged: boolean | null;
+  indexChanged: boolean | null;
+  branchChanged: boolean | null;
+  committedChanges: ChangedFile[];
+  files: FileChangeEvidence[];
 }
 
 export interface RiskFinding {
@@ -113,6 +138,8 @@ export interface SessionReport {
   };
   events: FileEvent[];
   commands: CommandEvent[];
+  baseline: SessionBaseline | null;
+  changeEvidence: SessionChangeEvidence;
   git: GitSnapshot;
   risks: RiskFinding[];
   riskSummary: RiskSummary;

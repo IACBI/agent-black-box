@@ -16,6 +16,8 @@ Start a foreground session:
 abb start
 ```
 
+The start command records a Git baseline before watcher observations begin. Existing worktree changes remain visible in reports but are marked as pre-existing.
+
 In another terminal, run commands through Agent Black Box when command metadata should be recorded:
 
 ```sh
@@ -39,4 +41,4 @@ abb rollback
 abb rollback --apply --file src/example.ts
 ```
 
-`abb rollback --apply` prints a plan and requires typed confirmation before restoring eligible tracked files.
+`abb rollback --apply` prints a plan and requires typed confirmation before restoring eligible tracked files. Files already changed at session start are excluded from automatic restore.

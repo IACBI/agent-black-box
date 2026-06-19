@@ -41,7 +41,22 @@ const baseReport = buildSessionReport(
     changedFiles: [{ path: "src/index.ts", status: "modified", insertions: 2, deletions: 0 }]
   },
   [{ path: "src/config.ts", category: "Config file", severity: "medium", score: 60, reason: "Configuration changed." }],
-  [{ path: "src/config.ts", line: 4, reason: "Possible token detected.", redacted: "<redacted>" }]
+  [{ path: "src/config.ts", line: 4, reason: "Possible token detected.", redacted: "<redacted>" }],
+  {
+    warnings: [],
+    discardedFileEventLines: 0,
+    discardedCommandEventLines: 0
+  },
+  {
+    capturedAt: "2026-01-01T00:00:00.000Z",
+    git: {
+      repoRoot: "/repo",
+      branch: "main",
+      statusText: "Working tree clean for included paths.",
+      diffSummaryText: "No tracked Git diff was detected.",
+      changedFiles: []
+    }
+  }
 );
 
 describe("markdown reports", () => {
@@ -68,7 +83,7 @@ describe("markdown reports", () => {
     const markdown = generateDiffSummaryMarkdown(baseReport);
 
     expect(markdown).toContain("Git status");
-    expect(markdown).toContain("| <code>src/index.ts</code> | modified | unknown | unknown | 2 | 0 | unknown |  |");
+    expect(markdown).toContain("| <code>src/index.ts</code> | modified | no | yes | unknown | unknown | 2 | 0 | unknown |  |");
   });
 
   it("escapes repository-controlled values in diff summary tables", () => {
@@ -88,14 +103,15 @@ describe("markdown reports", () => {
       }
     });
 
-    expect(markdown).toContain("| <code>src/a&#124;&#96;b&#96;.ts</code> | modified | unknown | unknown | 1 | 1 | unknown | line one \\| line two next |");
+    expect(markdown).toContain("| <code>src/a&#124;&#96;b&#96;.ts</code> | modified | unknown | unknown | unknown | unknown | 1 | 1 | unknown | line one \\| line two next |");
   });
 
   it("generates an executive summary", () => {
     const markdown = generateSummaryMarkdown(baseReport);
 
     expect(markdown).toContain("Agent Black Box Summary");
-    expect(markdown).toContain("Changed files: 1");
+    expect(markdown).toContain("Final worktree changed files: 1");
+    expect(markdown).toContain("Session-relevant repository changes: 1");
     expect(markdown).toContain("Command groups: 1");
     expect(markdown).toContain("Command phases: 1");
     expect(markdown).toContain("Possible secrets: 1");

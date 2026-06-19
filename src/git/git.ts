@@ -1,4 +1,5 @@
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { simpleGit } from "simple-git";
 import type { ChangedFile, ChangeStatus, GitSnapshot } from "../types.js";
 import { inspectTextFile, type FileInspection } from "../utils/fileInspection.js";
@@ -53,8 +54,10 @@ export async function isGitRepository(cwd: string): Promise<boolean> {
 export async function collectGitSnapshot(repoRoot: string, excludePatterns: string[] = []): Promise<GitSnapshot> {
   const git = simpleGit({ baseDir: repoRoot, binary: "git" });
   const diffPathspecs = buildDiffPathspecs(excludePatterns);
-  const [status, diffSummary, unstagedStat, stagedStat] = await Promise.all([
+  const [status, head, indexFingerprint, diffSummary, unstagedStat, stagedStat] = await Promise.all([
     git.status(),
+    getHeadRevision(git),
+    getIndexFingerprint(git, diffPathspecs),
     git.diffSummary(),
     git.raw(diffPathspecs.length > 0 ? ["diff", "--stat", "--", ...diffPathspecs] : ["diff", "--stat"]),
     git.raw(diffPathspecs.length > 0 ? ["diff", "--cached", "--stat", "--", ...diffPathspecs] : ["diff", "--cached", "--stat"])
@@ -100,11 +103,74 @@ export async function collectGitSnapshot(repoRoot: string, excludePatterns: stri
 
   return {
     repoRoot,
+    ...(head ? { head } : {}),
+    indexFingerprint,
     branch: status.current || undefined,
-    statusText: status.files.length === 0 ? "Working tree clean." : formatStatusFiles(changedFiles),
+    statusText: changedFiles.length === 0 ? "Working tree clean for included paths." : formatStatusFiles(changedFiles),
     diffSummaryText: formatDiffSummary(unstagedStat, stagedStat, changedFiles),
     changedFiles
   };
+}
+
+export async function collectGitChangesBetween(
+  repoRoot: string,
+  fromHead: string | undefined,
+  toHead: string | undefined,
+  excludePatterns: string[] = []
+): Promise<ChangedFile[]> {
+  if (!toHead || fromHead === toHead) {
+    return [];
+  }
+
+  if (!isGitObjectId(toHead) || (fromHead && !isGitObjectId(fromHead))) {
+    throw new Error("Git revision comparison requires full hexadecimal object IDs.");
+  }
+
+  const git = simpleGit({ baseDir: repoRoot, binary: "git" });
+  if (!fromHead) {
+    const output = await git.raw(["ls-tree", "-r", "--name-only", "-z", toHead]);
+    return output
+      .split("\0")
+      .filter(Boolean)
+      .map((filePath) => ({ path: normalizePath(filePath), status: "added" as const }))
+      .filter((file) => !isPathExcluded(file.path, excludePatterns));
+  }
+
+  const pathspecs = buildDiffPathspecs(excludePatterns);
+  const output = await git.raw([
+    "diff",
+    "--name-status",
+    "-z",
+    "--find-renames",
+    fromHead,
+    toHead,
+    ...(pathspecs.length > 0 ? ["--", ...pathspecs] : [])
+  ]);
+
+  return parseNameStatus(output).filter((file) => !isPathExcluded(file.path, excludePatterns));
+}
+
+function isGitObjectId(value: string): boolean {
+  return /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(value);
+}
+
+async function getIndexFingerprint(
+  git: ReturnType<typeof simpleGit>,
+  pathspecs: string[]
+): Promise<string> {
+  const args = pathspecs.length > 0
+    ? ["diff", "--cached", "--raw", "-z", "--", ...pathspecs]
+    : ["diff", "--cached", "--raw", "-z"];
+  const stagedState = await git.raw(args);
+  return createHash("sha256").update(stagedState).digest("hex");
+}
+
+async function getHeadRevision(git: ReturnType<typeof simpleGit>): Promise<string | undefined> {
+  try {
+    return (await git.revparse(["--verify", "HEAD"])).trim() || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function buildDiffPathspecs(excludePatterns: string[]): string[] {
@@ -113,7 +179,58 @@ function buildDiffPathspecs(excludePatterns: string[]): string[] {
     return [];
   }
 
-  return [":(top).", ...normalized.map((pattern) => `:(top,exclude)${pattern}`)];
+  return [
+    ":(top,glob)**",
+    ...normalized.flatMap((pattern) => [
+      `:(top,exclude)${pattern}`,
+      `:(top,glob,exclude)**/${pattern}`,
+      `:(top,glob,exclude)**/${pattern}/**`
+    ])
+  ];
+}
+
+function parseNameStatus(output: string): ChangedFile[] {
+  const tokens = output.split("\0");
+  const files: ChangedFile[] = [];
+
+  for (let index = 0; index < tokens.length;) {
+    const statusToken = tokens[index++];
+    if (!statusToken) {
+      continue;
+    }
+
+    if (statusToken.startsWith("R") || statusToken.startsWith("C")) {
+      index += 1;
+      const destination = tokens[index++];
+      if (destination) {
+        files.push({ path: normalizePath(destination), status: "renamed" });
+      }
+      continue;
+    }
+
+    const filePath = tokens[index++];
+    if (filePath) {
+      files.push({ path: normalizePath(filePath), status: mapDiffStatus(statusToken) });
+    }
+  }
+
+  return files;
+}
+
+function mapDiffStatus(status: string): ChangeStatus {
+  if (status.startsWith("A")) {
+    return "added";
+  }
+  if (status.startsWith("D")) {
+    return "deleted";
+  }
+  if (status.startsWith("R") || status.startsWith("C")) {
+    return "renamed";
+  }
+  if (status.startsWith("M") || status.startsWith("T")) {
+    return "modified";
+  }
+  return "unknown";
 }
 
 function mapStatus(indexStatus: string, workingTreeStatus: string): ChangeStatus {

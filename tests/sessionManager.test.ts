@@ -7,30 +7,37 @@ import {
   getActiveSessionPath,
   getCommandsPath,
   getEventsPath,
+  getGitBaselinePath,
   getSessionLockPath,
   readCommandEvents,
   readActiveSession,
   readActiveSessionState,
   readFileEvents,
   readFileEventsWithDiagnostics,
+  readSessionBaseline,
   appendCommandEvent,
   appendFileEvent
 } from "../src/session/sessionManager.js";
 import { pathExists } from "../src/utils/files.js";
-import { createTempDir, removeTempDir } from "./testUtils.js";
+import { createTempDir, initGitRepo, removeTempDir } from "./testUtils.js";
 
 describe("session manager", () => {
   it("creates a session and active session state", async () => {
     const dir = await createTempDir();
     try {
+      initGitRepo(dir);
       const session = await createSession(dir, DEFAULT_CONFIG);
 
       await expect(pathExists(session.sessionDir)).resolves.toBe(true);
       await expect(pathExists(getEventsPath(session.sessionDir))).resolves.toBe(true);
       await expect(pathExists(getCommandsPath(session.sessionDir))).resolves.toBe(true);
+      await expect(pathExists(getGitBaselinePath(session.sessionDir))).resolves.toBe(true);
       await expect(pathExists(getActiveSessionPath(dir, DEFAULT_CONFIG))).resolves.toBe(true);
       await expect(pathExists(getSessionLockPath(dir, DEFAULT_CONFIG))).resolves.toBe(true);
       await expect(readActiveSession(dir, DEFAULT_CONFIG)).resolves.toMatchObject({ id: session.id });
+      await expect(readSessionBaseline(session.sessionDir)).resolves.toMatchObject({
+        git: { repoRoot: dir }
+      });
     } finally {
       await removeTempDir(dir);
     }
@@ -39,6 +46,7 @@ describe("session manager", () => {
   it("appends and reads file events", async () => {
     const dir = await createTempDir();
     try {
+      initGitRepo(dir);
       const session = await createSession(dir, DEFAULT_CONFIG);
       await appendFileEvent(session, {
         timestamp: "2026-01-01T00:00:00.000Z",
@@ -61,6 +69,7 @@ describe("session manager", () => {
   it("appends and reads command events", async () => {
     const dir = await createTempDir();
     try {
+      initGitRepo(dir);
       const session = await createSession(dir, DEFAULT_CONFIG);
       await appendCommandEvent(session, {
         startedAt: "2026-01-01T00:00:00.000Z",
@@ -95,6 +104,7 @@ describe("session manager", () => {
   it("recovers readable records when event data contains malformed lines", async () => {
     const dir = await createTempDir();
     try {
+      initGitRepo(dir);
       const session = await createSession(dir, DEFAULT_CONFIG);
       await writeFile(
         getEventsPath(session.sessionDir),

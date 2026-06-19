@@ -25,3 +25,4 @@ Do not include real secrets in reports. Use redacted values or clearly fake exam
 - Command recording must not capture terminal output.
 - Runtime behavior must not require telemetry or external APIs.
 - Rollback behavior must not discard work without explicit user confirmation.
+- Interactive rollback must exclude files whose pre-session state cannot be restored safely.

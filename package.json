@@ -1,6 +1,6 @@
 {
   "name": "agent-black-box",
-  "version": "0.5.3",
+  "version": "0.6.0",
   "description": "Local-first CLI that records and explains observable repository changes during AI coding sessions.",
   "type": "module",
   "packageManager": "pnpm@10.30.3",

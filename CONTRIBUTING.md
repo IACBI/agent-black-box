@@ -19,6 +19,7 @@ pnpm release:check
 3. Update docs when user-facing behavior changes.
 4. Keep reports based on observable repository evidence.
 5. Use cautious language for heuristic findings.
+6. Preserve the distinction between pre-existing changes, watcher observations, and final Git state.
 
 ## Design Principles
 
@@ -35,7 +36,7 @@ pnpm release:check
 - New behavior has focused tests.
 - README or `docs/` pages are updated when needed.
 - Security-sensitive behavior has been reviewed for secret exposure.
-- Rollback behavior remains advisory unless explicit confirmation is implemented.
+- Rollback apply behavior never restores paths that were already changed at session start.
 
 ## Dependency Updates
 

@@ -1,13 +1,17 @@
 import type {
   AgentBlackBoxConfig,
   CommandEvent,
+  ChangedFile,
+  FileChangeEvidence,
   FileEvent,
   GitSnapshot,
   RiskFinding,
   SecretFinding,
+  SessionBaseline,
   SessionReport
 } from "../types.js";
 import { summarizeRisks } from "../risks/riskDetector.js";
+import { buildChangeEvidence, indexFileChangeEvidence, selectSessionRelevantChanges } from "../session/changeEvidence.js";
 import { escapeMarkdownTableCell, escapeMarkdownText, markdownInlineCode, markdownTableCode } from "../utils/markdown.js";
 import { shellQuotePath } from "../utils/paths.js";
 
@@ -32,8 +36,12 @@ export function buildSessionReport(
     warnings: [],
     discardedFileEventLines: 0,
     discardedCommandEventLines: 0
-  }
+  },
+  baseline: SessionBaseline | null = null,
+  committedChanges: ChangedFile[] = []
 ): SessionReport {
+  const changeEvidence = buildChangeEvidence(baseline, events, git, committedChanges);
+
   return {
     id: active.id,
     repoRoot: active.repoRoot,
@@ -48,6 +56,8 @@ export function buildSessionReport(
     },
     events,
     commands,
+    baseline,
+    changeEvidence,
     git,
     risks,
     riskSummary: summarizeRisks(risks, possibleSecrets),
@@ -62,7 +72,13 @@ export interface RiskReportFilter {
 }
 
 export function generateTimelineMarkdown(report: SessionReport): string {
-  const changedFiles = report.git.changedFiles.map((file) => `- ${file.status}: ${markdownInlineCode(file.path)}`).join("\n");
+  const evidenceByPath = indexFileChangeEvidence(report.changeEvidence);
+  const changedFiles = report.git.changedFiles
+    .map((file) => `- ${file.status}: ${markdownInlineCode(file.path)} (${formatEvidenceLabel(evidenceByPath.get(file.path))})`)
+    .join("\n");
+  const committedChanges = (report.changeEvidence?.committedChanges ?? [])
+    .map((file) => `- ${file.status}: ${markdownInlineCode(file.path)}`)
+    .join("\n");
   const fileEvents = report.events
     .map((event) => `- ${event.timestamp} - ${event.eventType} - ${markdownInlineCode(event.path)}`)
     .join("\n");
@@ -92,6 +108,8 @@ export function generateTimelineMarkdown(report: SessionReport): string {
 - Started: ${report.startedAt}
 - Ended: ${report.endedAt}
 
+${formatChangeEvidenceSummary(report)}
+
 ## Command history
 
 ${COMMAND_CAPTURE_NOTE}
@@ -105,6 +123,10 @@ ${fileEvents || "No live file events were recorded."}
 ## Chronological timeline
 
 ${timeline || "No timeline events were recorded."}
+
+## Files changed between start and end HEAD
+
+${committedChanges || "No start-to-end HEAD changes were detected."}
 
 ## Files added, modified, or deleted
 
@@ -133,7 +155,13 @@ export function generateSummaryMarkdown(report: SessionReport): string {
   const highRisks = report.risks.filter((risk) => risk.severity === "high").length;
   const mediumRisks = report.risks.filter((risk) => risk.severity === "medium").length;
   const lowRisks = report.risks.filter((risk) => risk.severity === "low").length;
-  const topChangedFiles = report.git.changedFiles
+  const evidence = report.changeEvidence?.files ?? [];
+  const preExistingCount = evidence.filter((file) => file.atStart === true).length;
+  const observedPathCount = evidence.filter((file) => file.observedDuringSession).length;
+  const sessionRelevantChanges = selectSessionRelevantChanges(report.git, getChangeEvidence(report));
+  const sessionRelevantChangeCount = sessionRelevantChanges.length;
+  const committedChangeCount = report.changeEvidence?.committedChanges.length ?? 0;
+  const topChangedFiles = sessionRelevantChanges
     .slice(0, 12)
     .map((file) => `- ${file.status}: ${markdownInlineCode(file.path)}`)
     .join("\n");
@@ -153,7 +181,11 @@ export function generateSummaryMarkdown(report: SessionReport): string {
 
 ## At a glance
 
-- Changed files: ${changedFileCount}
+- Final worktree changed files: ${changedFileCount}
+- Pre-existing changed paths: ${preExistingCount}
+- Paths observed during session: ${observedPathCount}
+- Start-to-end HEAD changed paths: ${committedChangeCount}
+- Session-relevant repository changes: ${sessionRelevantChangeCount}
 - Recorded commands: ${commandCount}
 - Command groups: ${commandGroupCount}
 - Command phases: ${commandPhaseCount}
@@ -162,13 +194,15 @@ export function generateSummaryMarkdown(report: SessionReport): string {
 - Risks: ${highRisks} high, ${mediumRisks} medium, ${lowRisks} low
 - Risk score: ${report.riskSummary.score}/100 (${report.riskSummary.maxSeverity})
 
+${formatChangeEvidenceSummary(report)}
+
 ## Review priority
 
 ${buildReviewPriority(report)}
 
-## Notable changed files
+## Notable session-relevant changes
 
-${topChangedFiles || "No changed files were detected by Git."}
+${topChangedFiles || "No session-relevant repository changes were detected."}
 
 ## Top risk signals
 
@@ -197,6 +231,7 @@ function formatCommandEvent(command: CommandEvent): string {
 }
 
 export function generateDiffSummaryMarkdown(report: SessionReport): string {
+  const evidenceByPath = indexFileChangeEvidence(report.changeEvidence);
   const rows = report.git.changedFiles
     .map((file) => {
       const insertions = file.insertions ?? 0;
@@ -204,11 +239,15 @@ export function generateDiffSummaryMarkdown(report: SessionReport): string {
       const kind = file.kind ?? "unknown";
       const source = file.lineStatsSource ?? "unknown";
       const note = file.statsNote ?? "";
-      return `| ${markdownTableCode(file.path)} | ${file.status} | ${kind} | ${formatBytes(file.sizeBytes)} | ${insertions} | ${deletions} | ${source} | ${escapeMarkdownTableCell(note)} |`;
+      const evidence = evidenceByPath.get(file.path);
+      return `| ${markdownTableCode(file.path)} | ${file.status} | ${formatEvidenceValue(evidence?.atStart)} | ${formatEvidenceValue(evidence?.observedDuringSession)} | ${kind} | ${formatBytes(file.sizeBytes)} | ${insertions} | ${deletions} | ${source} | ${escapeMarkdownTableCell(note)} |`;
     })
     .join("\n");
 
   const categories = summarizeNotableCategories(report.risks);
+  const committedRows = (report.changeEvidence?.committedChanges ?? [])
+    .map((file) => `| ${markdownTableCode(file.path)} | ${file.status} |`)
+    .join("\n");
 
   return `# Agent Black Box Diff Summary
 
@@ -224,11 +263,19 @@ ${report.git.statusText}
 ${report.git.diffSummaryText}
 \`\`\`
 
+${formatChangeEvidenceSummary(report)}
+
+## Start-to-end HEAD changes
+
+| File | Status |
+| --- | --- |
+${committedRows || "| None | unchanged |"}
+
 ## Changed files
 
-| File | Status | Kind | Size | Added lines | Deleted lines | Line stats | Note |
-| --- | --- | --- | ---: | ---: | ---: | --- | --- |
-${rows || "| None | clean | unknown | 0 B | 0 | 0 | skipped | |"}
+| File | Status | At start | Observed | Kind | Size | Added lines | Deleted lines | Line stats | Note |
+| --- | --- | --- | --- | --- | ---: | ---: | ---: | --- | --- |
+${rows || "| None | clean | no | no | unknown | 0 B | 0 | 0 | skipped | |"}
 
 ## Notable file categories
 
@@ -266,6 +313,8 @@ export function generateRisksMarkdown(report: SessionReport, filter: RiskReportF
   return `# Agent Black Box Risks
 
 These findings are based on observable repository changes. They are possible review signals, not proof of a vulnerability.
+
+${formatChangeEvidenceSummary(report)}
 
 ${filterText}
 
@@ -318,13 +367,28 @@ export function filterRiskFindings(risks: RiskFinding[], filter: RiskReportFilte
 }
 
 export function generateRollbackMarkdown(report: SessionReport, _config?: AgentBlackBoxConfig): string {
+  const evidenceByPath = indexFileChangeEvidence(report.changeEvidence);
   const suggestions = report.git.changedFiles
     .map((file) => {
       const quotedPath = shellQuotePath(file.path);
+      const evidence = evidenceByPath.get(file.path);
       if (file.status === "added") {
         return `### ${markdownInlineCode(file.path)}
 
 This appears to be an added or untracked file. Review it before removing it manually.
+
+\`\`\`sh
+git diff -- ${quotedPath}
+\`\`\``;
+      }
+
+      if (evidence?.atStart !== false) {
+        const reason = evidence?.atStart === true
+          ? "This path already had changes when the session started. Restore commands are omitted because they could discard pre-session work."
+          : "No reliable start baseline is available for this path. Restore commands are omitted.";
+        return `### ${markdownInlineCode(file.path)}
+
+${reason}
 
 \`\`\`sh
 git diff -- ${quotedPath}
@@ -344,6 +408,8 @@ git checkout -- ${quotedPath}
   return `# Agent Black Box Rollback Hints
 
 Agent Black Box does not automatically revert changes in this MVP. Review every command before running it. \`git restore\`, \`git checkout --\`, file removal, and cleanup commands can discard work.
+
+${formatChangeEvidenceSummary(report)}
 
 ## Current Git status
 
@@ -421,11 +487,79 @@ function buildReviewPriority(report: SessionReport): string {
     return "Risk signals were detected. Review dependency, config, CI/CD, Docker, migration, or related changes carefully.";
   }
 
-  if (report.git.changedFiles.length > 0) {
+  if (selectSessionRelevantChanges(report.git, getChangeEvidence(report)).length > 0) {
     return "No risk signals were detected, but changed files should still be reviewed with `git diff`.";
   }
 
+  if (report.git.changedFiles.length > 0) {
+    return "No session-relevant final changes were detected. Pre-existing repository changes may still be present and should be reviewed separately.";
+  }
+
   return "No repository changes were detected.";
+}
+
+function getChangeEvidence(report: SessionReport): SessionReport["changeEvidence"] {
+  return report.changeEvidence ?? {
+    baselineAvailable: false,
+    headChanged: null,
+    indexChanged: null,
+    branchChanged: null,
+    committedChanges: [],
+    files: report.git.changedFiles.map((file) => ({
+      path: file.path,
+      atStart: null,
+      observedDuringSession: false,
+      atEnd: true,
+      gitMetadataChanged: null
+    }))
+  };
+}
+
+function formatChangeEvidenceSummary(report: SessionReport): string {
+  const evidence = getChangeEvidence(report);
+  if (!evidence.baselineAvailable || !report.baseline) {
+    return `## Change evidence
+
+- Git start baseline: unavailable
+- Attribution confidence: limited; final Git changes cannot be separated from pre-existing work.`;
+  }
+
+  return `## Change evidence
+
+- Git start baseline: ${escapeMarkdownText(evidence.baselineCapturedAt ?? report.baseline.capturedAt)}
+- Start HEAD: ${report.baseline.git.head ? markdownInlineCode(report.baseline.git.head) : "unborn repository"}
+- End HEAD: ${report.git.head ? markdownInlineCode(report.git.head) : "unborn repository"}
+- HEAD changed during session: ${formatEvidenceValue(evidence.headChanged)}
+- Git index changed during session: ${formatEvidenceValue(evidence.indexChanged)}
+- Branch changed during session: ${formatEvidenceValue(evidence.branchChanged)}
+- Start-to-end HEAD changed paths: ${evidence.committedChanges.length}
+- Watcher evidence indicates that a path changed during the session; it does not identify which tool or person changed it.`;
+}
+
+function formatEvidenceLabel(evidence: FileChangeEvidence | undefined): string {
+  if (!evidence || evidence.atStart === null) {
+    return "start state unknown";
+  }
+  if (evidence.atStart && evidence.observedDuringSession) {
+    return "pre-existing, observed during session";
+  }
+  if (evidence.atStart) {
+    return "pre-existing";
+  }
+  if (evidence.observedDuringSession) {
+    return "observed during session";
+  }
+  return "detected at finalization";
+}
+
+function formatEvidenceValue(value: boolean | null | undefined): string {
+  if (value === true) {
+    return "yes";
+  }
+  if (value === false) {
+    return "no";
+  }
+  return "unknown";
 }
 
 function severityRank(severity: RiskFinding["severity"]): number {

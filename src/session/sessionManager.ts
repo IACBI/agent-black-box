@@ -1,12 +1,22 @@
 import { appendFile, open, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { ActiveSession, AgentBlackBoxConfig, CommandEvent, FileEvent, SessionReport, StopRequest } from "../types.js";
-import { collectGitSnapshot } from "../git/git.js";
+import type {
+  ActiveSession,
+  AgentBlackBoxConfig,
+  CommandEvent,
+  FileEvent,
+  GitSnapshot,
+  SessionBaseline,
+  SessionReport,
+  StopRequest
+} from "../types.js";
+import { collectGitChangesBetween, collectGitSnapshot } from "../git/git.js";
 import { detectRisks } from "../risks/riskDetector.js";
 import { detectPossibleSecrets } from "../risks/secretDetector.js";
 import { buildSessionReport } from "../reports/markdown.js";
 import { writeReports } from "../reports/reportWriter.js";
 import { ensureDir, getNewestDirectory, pathExists, readJsonFile, removeFileIfExists, writeJsonFile } from "../utils/files.js";
+import { buildChangeEvidence, selectSessionRelevantChanges } from "./changeEvidence.js";
 
 const ACTIVE_SESSION_FILE = "active-session.json";
 const STOP_REQUEST_FILE = "stop-request.json";
@@ -14,6 +24,7 @@ const SESSION_LOCK_FILE = "session.lock";
 const EVENTS_FILE = "events.ndjson";
 const COMMANDS_FILE = "commands.ndjson";
 const SESSION_START_FILE = "session-start.json";
+const GIT_BASELINE_FILE = "git-start.json";
 
 interface SessionLock {
   sessionId: string;
@@ -62,6 +73,10 @@ export function getCommandsPath(sessionDir: string): string {
   return path.join(sessionDir, COMMANDS_FILE);
 }
 
+export function getGitBaselinePath(sessionDir: string): string {
+  return path.join(sessionDir, GIT_BASELINE_FILE);
+}
+
 export async function createSession(repoRoot: string, config: AgentBlackBoxConfig): Promise<ActiveSession> {
   const startedAt = new Date().toISOString();
   const id = createSessionId(startedAt);
@@ -72,6 +87,10 @@ export async function createSession(repoRoot: string, config: AgentBlackBoxConfi
     sessionDir,
     startedAt,
     pid: process.pid
+  };
+  const baseline: SessionBaseline = {
+    capturedAt: new Date().toISOString(),
+    git: await collectGitSnapshot(repoRoot, config.exclude)
   };
 
   await ensureDir(getStateDir(repoRoot, config));
@@ -94,6 +113,7 @@ export async function createSession(repoRoot: string, config: AgentBlackBoxConfi
     await ensureDir(sessionDir);
     await writeFile(getEventsPath(sessionDir), "", "utf8");
     await writeFile(getCommandsPath(sessionDir), "", "utf8");
+    await writeJsonFile(getGitBaselinePath(sessionDir), baseline);
     await writeJsonFile(path.join(sessionDir, SESSION_START_FILE), session);
     await writeJsonFile(getActiveSessionPath(repoRoot, config), session);
     await removeFileIfExists(getStopRequestPath(repoRoot, config));
@@ -155,6 +175,10 @@ export async function readCommandEvents(sessionDir: string): Promise<CommandEven
   return (await readCommandEventsWithDiagnostics(sessionDir)).records;
 }
 
+export async function readSessionBaseline(sessionDir: string): Promise<SessionBaseline | null> {
+  return (await readStateFile<SessionBaseline>(getGitBaselinePath(sessionDir), isSessionBaseline)).value;
+}
+
 export async function readFileEventsWithDiagnostics(sessionDir: string): Promise<NdjsonReadResult<FileEvent>> {
   return readNdjsonRecords(getEventsPath(sessionDir), isFileEvent, "file event");
 }
@@ -171,14 +195,27 @@ export async function finalizeSession(
   const endedAt = new Date().toISOString();
   const fileEvents = await readFileEventsWithDiagnostics(active.sessionDir);
   const commandEvents = await readCommandEventsWithDiagnostics(active.sessionDir);
+  const baselineState = await readStateFile<SessionBaseline>(getGitBaselinePath(active.sessionDir), isSessionBaseline);
   const git = await collectGitSnapshot(active.repoRoot, config.exclude);
-  const risks = detectRisks(git.changedFiles, config);
-  const possibleSecrets = await detectPossibleSecrets(active.repoRoot, git.changedFiles, config);
+  const committedChanges = baselineState.value
+    ? await collectGitChangesBetween(active.repoRoot, baselineState.value.git.head, git.head, config.exclude)
+    : [];
+  const changeEvidence = buildChangeEvidence(baselineState.value, fileEvents.records, git, committedChanges);
+  const sessionRelevantChanges = selectSessionRelevantChanges(git, changeEvidence);
+  const risks = detectRisks(sessionRelevantChanges, config);
+  const possibleSecrets = await detectPossibleSecrets(active.repoRoot, sessionRelevantChanges, config);
+  const baselineWarnings = baselineState.value
+    ? []
+    : [
+        baselineState.corrupted
+          ? `Git start baseline was unreadable: ${baselineState.error ?? "unexpected shape"}. Change attribution is limited.`
+          : "Git start baseline was missing. Change attribution is limited."
+      ];
   const report = buildSessionReport(active, endedAt, finalizedBy, fileEvents.records, commandEvents.records, git, risks, possibleSecrets, {
-    warnings: [...fileEvents.warnings, ...commandEvents.warnings],
+    warnings: [...fileEvents.warnings, ...commandEvents.warnings, ...baselineWarnings],
     discardedFileEventLines: fileEvents.discardedLines,
     discardedCommandEventLines: commandEvents.discardedLines
-  });
+  }, baselineState.value, committedChanges);
 
   await writeReports(report);
   await removeFileIfExists(getActiveSessionPath(active.repoRoot, config));
@@ -356,6 +393,29 @@ function isCommandEvent(value: unknown): value is CommandEvent {
     (typeof value.exitCode === "number" || value.exitCode === null) &&
     typeof value.durationMs === "number" &&
     (typeof value.error === "string" || value.error === undefined)
+  );
+}
+
+function isSessionBaseline(value: unknown): value is SessionBaseline {
+  return isRecord(value) && typeof value.capturedAt === "string" && isGitSnapshot(value.git);
+}
+
+function isGitSnapshot(value: unknown): value is GitSnapshot {
+  return (
+    isRecord(value) &&
+    typeof value.repoRoot === "string" &&
+    (typeof value.head === "string" || value.head === undefined) &&
+    (typeof value.indexFingerprint === "string" || value.indexFingerprint === undefined) &&
+    (typeof value.branch === "string" || value.branch === undefined) &&
+    typeof value.statusText === "string" &&
+    typeof value.diffSummaryText === "string" &&
+    Array.isArray(value.changedFiles) &&
+    value.changedFiles.every(
+      (file) =>
+        isRecord(file) &&
+        typeof file.path === "string" &&
+        ["added", "modified", "deleted", "renamed", "unknown"].includes(String(file.status))
+    )
   );
 }
 

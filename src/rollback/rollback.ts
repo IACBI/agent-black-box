@@ -1,7 +1,8 @@
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { simpleGit } from "simple-git";
-import type { ChangedFile, SessionReport } from "../types.js";
+import type { ChangedFile, FileChangeEvidence, SessionReport } from "../types.js";
+import { indexFileChangeEvidence } from "../session/changeEvidence.js";
 import { shellQuotePath } from "../utils/paths.js";
 
 export interface RollbackPlan {
@@ -18,14 +19,15 @@ export function createRollbackPlan(report: SessionReport, requestedFiles: string
     requestedFiles.length > 0
       ? report.git.changedFiles.filter((file) => requested.has(file.path))
       : report.git.changedFiles;
+  const evidenceByPath = indexFileChangeEvidence(report.changeEvidence);
   const missingFiles = requestedFiles.filter((file) => !report.git.changedFiles.some((changed) => changed.path === file));
-  const restorableFiles = candidateFiles.filter((file) => RESTORABLE_STATUSES.has(file.status));
+  const restorableFiles = candidateFiles.filter((file) => isSafelyRestorable(file, evidenceByPath.get(file.path)));
   const skippedFiles = [
     ...candidateFiles
-      .filter((file) => !RESTORABLE_STATUSES.has(file.status))
+      .filter((file) => !isSafelyRestorable(file, evidenceByPath.get(file.path)))
       .map((file) => ({
         path: file.path,
-        reason: file.status === "added" ? "Added or untracked files are not removed automatically." : `Status ${file.status} is not automatically restored.`
+        reason: getSkipReason(file, evidenceByPath.get(file.path))
       })),
     ...missingFiles.map((file) => ({
       path: file,
@@ -38,6 +40,30 @@ export function createRollbackPlan(report: SessionReport, requestedFiles: string
     restorableFiles,
     skippedFiles
   };
+}
+
+function isSafelyRestorable(file: ChangedFile, evidence: FileChangeEvidence | undefined): boolean {
+  if (!RESTORABLE_STATUSES.has(file.status)) {
+    return false;
+  }
+
+  return evidence?.atStart === false;
+}
+
+function getSkipReason(file: ChangedFile, evidence: FileChangeEvidence | undefined): string {
+  if (file.status === "added") {
+    return "Added or untracked files are not removed automatically.";
+  }
+
+  if (!RESTORABLE_STATUSES.has(file.status)) {
+    return `Status ${file.status} is not automatically restored.`;
+  }
+
+  if (evidence?.atStart === true) {
+    return "File already had changes at session start; restoring to HEAD could discard pre-session work.";
+  }
+
+  return "No reliable session-start baseline is available for this file.";
 }
 
 export function renderRollbackPlan(plan: RollbackPlan): string {

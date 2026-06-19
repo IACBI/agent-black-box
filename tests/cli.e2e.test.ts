@@ -1,4 +1,4 @@
-import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { execFile, execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createRequire } from "node:module";
@@ -24,6 +24,7 @@ describe("CLI end-to-end", () => {
 
       const init = await runCli(repo, ["init"]);
       expect(init.stdout).toContain("Created .agentblackbox.json");
+      await writeFile(path.join(repo, ".env"), "APP_MODE=test\n", "utf8");
 
       const configValidate = await runCli(repo, ["config", "validate"]);
       expect(configValidate.exitCode).toBe(0);
@@ -39,6 +40,12 @@ describe("CLI end-to-end", () => {
 
       await writeFile(path.join(repo, "notes.md"), "# Notes\n\nhello\n", "utf8");
       await mkdir(path.join(repo, "packages", "app"), { recursive: true });
+      execFileSync("git", ["add", "notes.md"], { cwd: repo });
+      execFileSync(
+        "git",
+        ["-c", "user.name=Agent Black Box Tests", "-c", "user.email=tests@example.invalid", "commit", "-m", "add notes"],
+        { cwd: repo }
+      );
 
       const command = await runCli(repo, [
         "run",
@@ -76,7 +83,7 @@ describe("CLI end-to-end", () => {
 
       const summary = await runCli(repo, ["summary"]);
       expect(summary.stdout).toContain("Agent Black Box Summary");
-      expect(summary.stdout).toContain("Changed files:");
+      expect(summary.stdout).toContain("Final worktree changed files:");
 
       const risks = await runCli(repo, ["risks"]);
       expect(risks.stdout).toContain("No possible secrets were detected");
@@ -94,12 +101,27 @@ describe("CLI end-to-end", () => {
 
       const report = await runCli(repo, ["report"]);
       const session = JSON.parse(report.stdout) as {
+        baseline: { capturedAt: string } | null;
+        changeEvidence: {
+          baselineAvailable: boolean;
+          committedChanges: Array<{ path: string; status: string }>;
+          files: Array<{ path: string; atStart: boolean | null; observedDuringSession: boolean }>;
+        };
         commands: Array<{ group?: string; phase?: string }>;
         git: { changedFiles: Array<{ path: string }> };
+        risks: Array<{ path: string }>;
       };
+      expect(session.baseline).not.toBeNull();
+      expect(session.changeEvidence.baselineAvailable).toBe(true);
+      expect(session.changeEvidence.files).toContainEqual(expect.objectContaining({ path: ".env", atStart: true }));
+      expect(session.changeEvidence.files).toContainEqual(
+        expect.objectContaining({ path: "notes.md", atStart: false, observedDuringSession: true })
+      );
+      expect(session.changeEvidence.committedChanges).toContainEqual({ path: "notes.md", status: "added" });
       expect(session.commands).toHaveLength(1);
       expect(session.commands[0]).toMatchObject({ group: "validation", phase: "smoke" });
-      expect(session.git.changedFiles.some((file) => file.path === "notes.md")).toBe(true);
+      expect(session.git.changedFiles.some((file) => file.path === "notes.md")).toBe(false);
+      expect(session.risks.some((risk) => risk.path === ".env")).toBe(false);
     } finally {
       await removeTempDir(repo);
     }

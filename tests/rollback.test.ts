@@ -23,7 +23,31 @@ const report = {
     changedFiles: [
       { path: "src/index.ts", status: "modified" },
       { path: "README.md", status: "added" },
-      { path: "src/old.ts", status: "deleted" }
+      { path: "src/old.ts", status: "deleted" },
+      { path: "src/pre-existing.ts", status: "modified" }
+    ]
+  },
+  baseline: {
+    capturedAt: "2026-01-01T00:00:00.000Z",
+    git: {
+      repoRoot: "/repo",
+      statusText: "modified src/pre-existing.ts",
+      diffSummaryText: "",
+      changedFiles: [{ path: "src/pre-existing.ts", status: "modified" }]
+    }
+  },
+  changeEvidence: {
+    baselineAvailable: true,
+    baselineCapturedAt: "2026-01-01T00:00:00.000Z",
+    headChanged: false,
+    indexChanged: false,
+    branchChanged: false,
+    committedChanges: [],
+    files: [
+      { path: "src/index.ts", atStart: false, observedDuringSession: true, atEnd: true, gitMetadataChanged: true },
+      { path: "README.md", atStart: false, observedDuringSession: true, atEnd: true, gitMetadataChanged: true },
+      { path: "src/old.ts", atStart: false, observedDuringSession: true, atEnd: true, gitMetadataChanged: true },
+      { path: "src/pre-existing.ts", atStart: true, observedDuringSession: false, atEnd: true, gitMetadataChanged: false }
     ]
   },
   risks: [],
@@ -54,6 +78,10 @@ describe("rollback planner", () => {
       {
         path: "README.md",
         reason: "Added or untracked files are not removed automatically."
+      },
+      {
+        path: "src/pre-existing.ts",
+        reason: "File already had changes at session start; restoring to HEAD could discard pre-session work."
       }
     ]);
     expect(getConfirmationText(plan)).toBe("RESTORE 2 files");

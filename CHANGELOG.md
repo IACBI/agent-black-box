@@ -1,9 +1,16 @@
 # Changelog
 
-## Unreleased
+## 0.6.0
 
 - Made the tag-driven release workflow idempotent when a GitHub Release already exists for the tag.
 - Updated release documentation to avoid manual release creation before tag pushes.
+- Added a persisted Git start baseline with HEAD, branch, index fingerprint, and pre-existing changed paths.
+- Added change evidence that separates pre-existing paths, watcher observations, final-state changes, and transient observations.
+- Added start-to-end HEAD tree comparison so committed changes remain visible when the final worktree is clean.
+- Limited risk and possible-secret analysis to session-relevant final changes when a start baseline is available.
+- Prevented interactive rollback from restoring files that already had changes at session start.
+- Added baseline and attribution details to JSON, summary, timeline, diff, risk, and rollback reports.
+- Added multilingual README parity coverage for all 12 in-page language sections.
 
 ## 0.5.3
 

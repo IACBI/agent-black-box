@@ -1,6 +1,7 @@
-import { writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { mkdir, writeFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import { collectGitSnapshot, getRepositoryRoot, isGitRepository } from "../src/git/git.js";
+import { collectGitChangesBetween, collectGitSnapshot, getRepositoryRoot, isGitRepository } from "../src/git/git.js";
 import { createTempDir, initGitRepo, removeTempDir } from "./testUtils.js";
 
 describe("git helpers", () => {
@@ -65,6 +66,48 @@ describe("git helpers", () => {
       });
       expect(file?.insertions).toBeUndefined();
       expect(snapshot.diffSummaryText).toContain("line counts were skipped");
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
+  it("collects committed changes between session HEAD revisions and respects excludes", async () => {
+    const dir = await createTempDir();
+    try {
+      initGitRepo(dir);
+      execFileSync("git", ["config", "user.email", "tests@example.invalid"], { cwd: dir });
+      execFileSync("git", ["config", "user.name", "Agent Black Box Tests"], { cwd: dir });
+      await mkdir(`${dir}/src`, { recursive: true });
+      await writeFile(`${dir}/src/index.ts`, "export const value = 1;\n", "utf8");
+      execFileSync("git", ["add", "."], { cwd: dir });
+      execFileSync("git", ["commit", "-m", "initial"], { cwd: dir });
+      const startHead = (await collectGitSnapshot(dir)).head;
+      await expect(collectGitChangesBetween(dir, undefined, startHead, ["dist"])).resolves.toEqual([
+        { path: "src/index.ts", status: "added" }
+      ]);
+
+      await writeFile(`${dir}/src/index.ts`, "export const value = 2;\n", "utf8");
+      await mkdir(`${dir}/dist`, { recursive: true });
+      await writeFile(`${dir}/dist/output.js`, "generated\n", "utf8");
+      execFileSync("git", ["add", "."], { cwd: dir });
+      execFileSync("git", ["commit", "-m", "change files"], { cwd: dir });
+      const endHead = (await collectGitSnapshot(dir)).head;
+
+      await expect(collectGitChangesBetween(dir, startHead, endHead, ["dist"])).resolves.toEqual([
+        { path: "src/index.ts", status: "modified" }
+      ]);
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
+  it("rejects untrusted revision strings before invoking Git", async () => {
+    const dir = await createTempDir();
+    try {
+      initGitRepo(dir);
+      await expect(collectGitChangesBetween(dir, "--output=unexpected", "a".repeat(40))).rejects.toThrow(
+        "full hexadecimal object IDs"
+      );
     } finally {
       await removeTempDir(dir);
     }

@@ -10,6 +10,7 @@ export * from "./rollback/rollback.js";
 export * from "./risks/riskDetector.js";
 export * from "./risks/secretDetector.js";
 export * from "./session/sessionManager.js";
+export * from "./session/changeEvidence.js";
 export * from "./types.js";
 export * from "./utils/fileInspection.js";
 export * from "./utils/files.js";

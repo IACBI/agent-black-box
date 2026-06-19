@@ -98,6 +98,10 @@ Each session produces:
 
 `session.json` also includes deterministic risk summary, file kind and size metadata where available, line-stat source details, and integrity metadata for malformed session records skipped during recovery.
 
+At session start, Agent Black Box stores a Git baseline containing the current HEAD, branch, index fingerprint, and already changed paths. Reports distinguish pre-existing changes, paths observed by the watcher, and changes detected at finalization. Risk and possible-secret analysis focuses on session-relevant final changes. Interactive rollback excludes paths that were already changed at session start because restoring them to HEAD could discard pre-session work.
+
+Net file changes committed between the start and end HEAD are included even when the final worktree is clean.
+
 Report details: [docs/REPORTS.md](docs/REPORTS.md)
 
 ## Privacy And Safety Model
@@ -160,6 +164,32 @@ After building:
 ```sh
 node dist/cli.js --help
 ```
+
+## Roadmap
+
+Near-term improvements:
+
+- Session history, explicit session selection, and session comparison.
+- Watcherless CI analysis with threshold-based exit codes and SARIF output.
+- npm publishing with provenance and a cross-platform fixture matrix.
+- Optional TUI-style report browser.
+
+Out of scope for the MVP:
+
+- Web dashboard.
+- VS Code extension.
+- Cloud sync.
+- Private agent API integrations.
+- Automatic destructive rollback.
+- Paid AI features.
+
+## Maintainer
+
+𝓐.𝓒.𝓑
+
+## License
+
+MIT. See [LICENSE](LICENSE).
 
 ## Full Documentation In Other Languages
 
@@ -254,6 +284,10 @@ Her oturum şunları üretir:
 
 `session.json` ayrıca deterministic risk summary, mevcutsa dosya türü ve boyut metadata'sı, line-stat source detayları ve bozuk session kayıtları için integrity metadata içerir.
 
+Agent Black Box, oturum başlarken mevcut HEAD, branch, Git index parmak izi ve önceden değişmiş yolları içeren bir Git başlangıç referansı kaydeder. Raporlar oturum öncesi değişiklikleri, watcher tarafından oturum sırasında gözlenen yolları ve sonlandırma sırasında tespit edilen değişiklikleri birbirinden ayırır. Risk ve olası secret analizi oturumla ilgili son değişikliklere odaklanır. Etkileşimli rollback, HEAD'e geri yüklemenin oturum öncesi çalışmayı silebileceği yolları otomatik işlem dışında bırakır.
+
+Başlangıç ve bitiş HEAD'i arasında commit edilen net dosya değişiklikleri, son worktree temiz olsa bile rapora dahil edilir.
+
 Rapor ayrıntıları: [docs/REPORTS.md](docs/REPORTS.md)
 
 #### Gizlilik ve Güvenlik Modeli
@@ -321,9 +355,10 @@ node dist/cli.js --help
 
 Yakın vadeli geliştirmeler:
 
+- Oturum geçmişini listeleme, açık oturum seçimi ve oturum karşılaştırma.
+- Watcher gerektirmeyen CI analizi, eşik tabanlı exit code'ları ve SARIF çıktısı.
+- Platformlar arası fixture matrisiyle npm publish ve provenance hazırlığı.
 - İsteğe bağlı TUI tarzı rapor gezgini.
-- npm publish hazırlığı.
-- Daha fazla dil ekosistemi için repository fixture suite.
 
 MVP kapsamı dışında:
 
@@ -433,6 +468,10 @@ Cada sesión produce:
 
 `session.json` también incluye resumen de riesgo determinístico, metadata de tipo y tamaño de archivo cuando está disponible, detalles de origen de estadísticas de líneas e integrity metadata para registros corruptos omitidos durante recuperación.
 
+Al iniciar una sesión, Agent Black Box guarda una referencia Git con el HEAD actual, la rama, la huella del índice y las rutas que ya estaban modificadas. Los reportes distinguen cambios preexistentes, rutas observadas durante la sesión y cambios detectados al finalizar. El análisis de riesgos y posibles secretos se centra en los cambios finales relacionados con la sesión. El rollback interactivo excluye las rutas modificadas antes del inicio porque restaurarlas a HEAD podría eliminar trabajo previo.
+
+Los cambios netos confirmados entre el HEAD inicial y final se incluyen incluso cuando el worktree termina limpio.
+
 Detalles de reportes: [docs/REPORTS.md](docs/REPORTS.md)
 
 #### Privacidad y Seguridad
@@ -500,9 +539,10 @@ node dist/cli.js --help
 
 Mejoras cercanas:
 
+- Historial de sesiones, selección explícita y comparación entre sesiones.
+- Análisis CI sin watcher, códigos de salida por umbral y salida SARIF.
+- Publicación npm con provenance y matriz de fixtures multiplataforma.
 - Navegador de reportes opcional estilo TUI.
-- Preparación para publicación en npm.
-- Suite de fixtures de repositorio para más ecosistemas de lenguajes.
 
 Fuera del alcance del MVP:
 
@@ -612,6 +652,10 @@ Jede Session erzeugt:
 
 `session.json` enthält außerdem deterministische Risiko-Zusammenfassung, Dateityp- und Größenmetadaten, Details zur Quelle der Zeilenstatistiken und Integrity-Metadaten für fehlerhafte Session Records.
 
+Beim Session-Start speichert Agent Black Box eine Git-Baseline mit aktuellem HEAD, Branch, Index-Fingerabdruck und bereits geänderten Pfaden. Reports unterscheiden vorbestehende Änderungen, während der Session beobachtete Pfade und erst bei der Finalisierung erkannte Änderungen. Risiko- und Possible-Secret-Analysen konzentrieren sich auf sessionrelevante Endänderungen. Der interaktive Rollback schließt Pfade aus, die bereits beim Start geändert waren, weil eine Wiederherstellung auf HEAD frühere Arbeit verwerfen könnte.
+
+Netto-Dateiänderungen zwischen Start- und End-HEAD werden auch bei einem sauberen finalen Worktree einbezogen.
+
 Report-Details: [docs/REPORTS.md](docs/REPORTS.md)
 
 #### Datenschutz- Und Sicherheitsmodell
@@ -679,9 +723,10 @@ node dist/cli.js --help
 
 Nahe Verbesserungen:
 
+- Session-Verlauf, explizite Session-Auswahl und Session-Vergleich.
+- Watcherlose CI-Analyse, schwellenwertbasierte Exit-Codes und SARIF-Ausgabe.
+- npm Publishing mit Provenance und plattformübergreifender Fixture-Matrix.
 - Optionaler TUI-artiger Report-Browser.
-- Vorbereitung für npm publishing.
-- Repository-Fixture-Suite für weitere Sprachökosysteme.
 
 Außerhalb des MVP-Scopes:
 
@@ -791,6 +836,10 @@ Chaque session produit :
 
 `session.json` inclut aussi un résumé déterministe du risque, les métadonnées de type et taille de fichier, l'origine des statistiques de lignes et les métadonnées d'intégrité pour les enregistrements corrompus ignorés.
 
+Au démarrage d'une session, Agent Black Box enregistre une référence Git contenant le HEAD courant, la branche, l'empreinte de l'index et les chemins déjà modifiés. Les rapports distinguent les changements préexistants, les chemins observés pendant la session et les changements détectés à la finalisation. L'analyse des risques et des secrets possibles se concentre sur les changements finaux liés à la session. Le rollback interactif exclut les chemins déjà modifiés au démarrage, car une restauration vers HEAD pourrait supprimer du travail antérieur.
+
+Les changements nets validés entre les HEAD de début et de fin sont inclus même si le worktree final est propre.
+
 Détails des rapports : [docs/REPORTS.md](docs/REPORTS.md)
 
 #### Confidentialité Et Sécurité
@@ -858,9 +907,10 @@ node dist/cli.js --help
 
 Améliorations à court terme :
 
+- Historique des sessions, sélection explicite et comparaison de sessions.
+- Analyse CI sans watcher, codes de sortie par seuil et sortie SARIF.
+- Publication npm avec provenance et matrice de fixtures multiplateforme.
 - Navigateur de rapports optionnel de style TUI.
-- Préparation de la publication npm.
-- Suite de fixtures de dépôt pour davantage d'écosystèmes de langages.
 
 Hors périmètre du MVP :
 
@@ -970,6 +1020,10 @@ Cada sessão produz:
 
 `session.json` também inclui resumo determinístico de risco, metadados de tipo e tamanho de arquivo, fonte das estatísticas de linhas e metadados de integridade para registros corrompidos ignorados.
 
+Ao iniciar uma sessão, o Agent Black Box salva uma referência Git com o HEAD atual, a branch, a impressão digital do índice e os caminhos que já estavam alterados. Os relatórios distinguem alterações preexistentes, caminhos observados durante a sessão e alterações detectadas na finalização. A análise de riscos e possíveis segredos se concentra nas alterações finais relacionadas à sessão. O rollback interativo exclui caminhos já alterados no início, pois restaurá-los para HEAD poderia descartar trabalho anterior.
+
+As alterações líquidas commitadas entre o HEAD inicial e final são incluídas mesmo quando o worktree termina limpo.
+
 Detalhes dos relatórios: [docs/REPORTS.md](docs/REPORTS.md)
 
 #### Privacidade E Segurança
@@ -1037,9 +1091,10 @@ node dist/cli.js --help
 
 Melhorias de curto prazo:
 
+- Histórico de sessões, seleção explícita e comparação entre sessões.
+- Análise CI sem watcher, exit codes por limite e saída SARIF.
+- Publicação npm com provenance e matriz de fixtures multiplataforma.
 - Navegador de relatórios opcional em estilo TUI.
-- Preparação para publicação npm.
-- Suite de fixtures de repositório para mais ecossistemas de linguagens.
 
 Fora do escopo do MVP:
 
@@ -1149,6 +1204,10 @@ pnpm dev -- rollback
 
 `session.json` 还包含确定性的风险摘要、可用时的文件类型和大小元数据、行统计来源详情，以及恢复时跳过的损坏记录的完整性元数据。
 
+会话开始时，Agent Black Box 会保存一个 Git 基线，其中包含当前 HEAD、分支、索引指纹以及开始前已变更的路径。报告会区分会话前已有的变更、会话期间由监视器观察到的路径，以及结束时才检测到的变更。风险和可能的 secret 分析只关注与本次会话相关的最终变更。交互式 rollback 会排除会话开始前已经变更的路径，因为恢复到 HEAD 可能会删除会话前的工作。
+
+即使最终 worktree 是干净的，开始与结束 HEAD 之间已提交的净文件变更也会包含在报告中。
+
 报告详情：[docs/REPORTS.md](docs/REPORTS.md)
 
 #### 隐私和安全模型
@@ -1216,9 +1275,10 @@ node dist/cli.js --help
 
 近期改进：
 
+- 会话历史记录、显式会话选择和会话比较。
+- 无需 watcher 的 CI 分析、基于阈值的退出码和 SARIF 输出。
+- 带 provenance 的 npm 发布和跨平台 fixture 矩阵。
 - 可选的 TUI 风格报告浏览器。
-- npm publish 准备。
-- 面向更多语言生态的 repository fixture suite。
 
 MVP 范围之外：
 
@@ -1328,6 +1388,10 @@ Detailed usage: [docs/USAGE.md](docs/USAGE.md)
 
 `session.json` deterministic risk summary, file kind और size metadata, line-stat source details, और malformed session records के लिए integrity metadata भी include करता है।
 
+Session शुरू होने पर Agent Black Box current HEAD, branch, Git index fingerprint और पहले से बदले हुए paths वाला Git baseline store करता है। Reports pre-existing changes, session के दौरान watcher द्वारा observe किए गए paths और finalization पर detect हुए changes को अलग दिखाते हैं। Risk और possible-secret analysis केवल session-relevant final changes पर focus करता है। Interactive rollback उन paths को exclude करता है जो session शुरू होने से पहले बदले हुए थे, क्योंकि उन्हें HEAD पर restore करने से पुराना work मिट सकता है।
+
+Start और end HEAD के बीच commit हुए net file changes final worktree clean होने पर भी report में शामिल रहते हैं।
+
 Report details: [docs/REPORTS.md](docs/REPORTS.md)
 
 #### Privacy और Safety Model
@@ -1395,9 +1459,10 @@ node dist/cli.js --help
 
 Near-term improvements:
 
+- Session history, explicit session selection और session comparison।
+- Watcher के बिना CI analysis, threshold-based exit codes और SARIF output।
+- Provenance और cross-platform fixture matrix के साथ npm publish।
 - Optional TUI-style report browser।
-- npm publish preparation।
-- More language ecosystems के लिए repository fixture suite।
 
 MVP scope से बाहर:
 
@@ -1507,6 +1572,10 @@ pnpm dev -- rollback
 
 يتضمن `session.json` أيضا ملخصا حتميا للمخاطر، metadata لنوع وحجم الملفات عند توفرها، تفاصيل مصدر إحصاءات الأسطر، وبيانات integrity للسجلات التالفة التي تم تجاهلها أثناء الاسترداد.
 
+عند بدء الجلسة، يحفظ Agent Black Box خط أساس Git يتضمن HEAD الحالي والفرع وبصمة الفهرس والمسارات التي كانت معدلة مسبقا. تميز التقارير بين التغييرات السابقة للجلسة، والمسارات التي راقبها watcher أثناء الجلسة، والتغييرات التي اكتشفت عند الإنهاء. يركز تحليل المخاطر والأسرار المحتملة على التغييرات النهائية المرتبطة بالجلسة. يستبعد rollback التفاعلي المسارات التي كانت معدلة عند البدء لأن استعادتها إلى HEAD قد تحذف عملا سابقا.
+
+تدرج تغييرات الملفات الصافية التي تم commit لها بين HEAD البداية والنهاية حتى عندما تكون شجرة العمل النهائية نظيفة.
+
 تفاصيل التقارير: [docs/REPORTS.md](docs/REPORTS.md)
 
 #### نموذج الخصوصية والسلامة
@@ -1574,9 +1643,10 @@ node dist/cli.js --help
 
 تحسينات قريبة:
 
+- سجل الجلسات والاختيار الصريح للجلسة والمقارنة بين الجلسات.
+- تحليل CI دون watcher مع رموز خروج حسب العتبة ومخرجات SARIF.
+- نشر npm مع provenance ومصفوفة fixtures متعددة المنصات.
 - متصفح تقارير اختياري بأسلوب TUI.
-- التحضير للنشر على npm.
-- مجموعة repository fixtures لمزيد من أنظمة اللغات.
 
 خارج نطاق MVP:
 
@@ -1686,6 +1756,10 @@ pnpm dev -- rollback
 
 `session.json` также включает deterministic risk summary, metadata типа и размера файла, line-stat source details и integrity metadata для malformed session records, пропущенных при recovery.
 
+При запуске сессии Agent Black Box сохраняет Git baseline с текущими HEAD, branch, отпечатком index и путями, которые уже были изменены. Отчеты разделяют ранее существовавшие изменения, пути, замеченные watcher во время сессии, и изменения, обнаруженные при завершении. Анализ рисков и возможных секретов сосредоточен на итоговых изменениях, относящихся к сессии. Интерактивный rollback исключает пути, измененные до старта, потому что восстановление до HEAD может удалить предыдущую работу.
+
+Итоговые изменения файлов, закоммиченные между начальным и конечным HEAD, включаются даже при чистом финальном worktree.
+
 Детали отчетов: [docs/REPORTS.md](docs/REPORTS.md)
 
 #### Privacy And Safety Model
@@ -1753,9 +1827,10 @@ node dist/cli.js --help
 
 Ближайшие улучшения:
 
+- История сессий, явный выбор сессии и сравнение сессий.
+- CI-анализ без watcher, пороговые exit codes и вывод SARIF.
+- Публикация npm с provenance и кроссплатформенной fixture matrix.
 - Опциональный TUI-style report browser.
-- Подготовка к npm publish.
-- Repository fixture suite для большего числа языковых экосистем.
 
 Вне области MVP:
 
@@ -1865,6 +1940,10 @@ Reports は以下に書き込まれます:
 
 `session.json` には deterministic risk summary、利用可能な file kind と size metadata、line-stat source details、recovery 中に skipped された malformed session records の integrity metadata も含まれます。
 
+Session 開始時に Agent Black Box は、現在の HEAD、branch、Git index fingerprint、開始前から変更されていた path を含む Git baseline を保存します。Reports は pre-existing changes、session 中に watcher が観測した path、finalization 時に検出された changes を区別します。Risk と possible-secret analysis は session に関連する最終 changes に絞られます。Interactive rollback は開始時点ですでに変更されていた path を除外し、HEAD への restore による session 前の作業消失を防ぎます。
+
+Start HEAD と end HEAD の間で commit された net file changes は、final worktree が clean でも含まれます。
+
 Report details: [docs/REPORTS.md](docs/REPORTS.md)
 
 #### プライバシーと安全モデル
@@ -1932,9 +2011,10 @@ node dist/cli.js --help
 
 近い将来の改善:
 
+- Session history、明示的な session selection、session comparison。
+- Watcher 不要の CI analysis、threshold-based exit codes、SARIF output。
+- Provenance と cross-platform fixture matrix を備えた npm publish。
 - Optional TUI-style report browser。
-- npm publish preparation。
-- より多くの language ecosystems 向け repository fixture suite。
 
 MVP の範囲外:
 
@@ -2044,6 +2124,10 @@ Setiap session menghasilkan:
 
 `session.json` juga mencakup deterministic risk summary, file kind dan size metadata jika tersedia, detail line-stat source, serta integrity metadata untuk malformed session records yang dilewati saat recovery.
 
+Saat session dimulai, Agent Black Box menyimpan Git baseline yang berisi HEAD saat ini, branch, fingerprint index, dan path yang sudah berubah sebelumnya. Report membedakan perubahan pre-existing, path yang diamati watcher selama session, dan perubahan yang baru terdeteksi saat finalization. Analisis risk dan possible secret berfokus pada perubahan akhir yang relevan dengan session. Interactive rollback mengecualikan path yang sudah berubah saat session dimulai karena restore ke HEAD dapat menghapus pekerjaan sebelumnya.
+
+Perubahan file net yang di-commit antara HEAD awal dan akhir tetap disertakan meskipun worktree akhir bersih.
+
 Detail laporan: [docs/REPORTS.md](docs/REPORTS.md)
 
 #### Model Privasi Dan Keamanan
@@ -2111,9 +2195,10 @@ node dist/cli.js --help
 
 Peningkatan jangka dekat:
 
+- Riwayat session, pemilihan session eksplisit, dan perbandingan session.
+- Analisis CI tanpa watcher, exit code berbasis threshold, dan output SARIF.
+- npm publish dengan provenance dan fixture matrix lintas platform.
 - Browser laporan opsional bergaya TUI.
-- Persiapan npm publish.
-- Repository fixture suite untuk lebih banyak ekosistem bahasa.
 
 Di luar cakupan MVP:
 
@@ -2131,28 +2216,3 @@ Di luar cakupan MVP:
 #### License
 
 MIT. Lihat [LICENSE](LICENSE).
-
-## Roadmap
-
-Near-term improvements:
-
-- Optional TUI-style report browser.
-- npm publish preparation.
-- Repository fixture suite for more language ecosystems.
-
-Out of scope for the MVP:
-
-- Web dashboard.
-- VS Code extension.
-- Cloud sync.
-- Private agent API integrations.
-- Automatic destructive rollback.
-- Paid AI features.
-
-## Maintainer
-
-𝓐.𝓒.𝓑
-
-## License
-
-MIT. See [LICENSE](LICENSE).
