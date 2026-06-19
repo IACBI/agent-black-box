@@ -31,7 +31,7 @@ const program = new Command();
 program
   .name("abb")
   .description("Record and explain observable repository changes during AI coding sessions.")
-  .version("0.5.1");
+  .version("0.5.2");
 
 program
   .command("init")

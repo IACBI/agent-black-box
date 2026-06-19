@@ -2,7 +2,7 @@
 
 Agent Black Box is a TypeScript CLI built around observable repository state.
 
-Localized quick guides are available in the README language section: [Languages](../README.md#languages).
+Full localized README documentation is available in the language section: [Languages](../README.md#languages).
 
 ## Main Modules
 

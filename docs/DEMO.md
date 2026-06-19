@@ -2,7 +2,7 @@
 
 This transcript shows the intended local workflow without relying on any cloud service.
 
-Localized quick guides are available in the README language section: [Languages](../README.md#languages).
+Full localized README documentation is available in the language section: [Languages](../README.md#languages).
 
 ```sh
 abb init

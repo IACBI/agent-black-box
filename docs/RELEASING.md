@@ -2,7 +2,7 @@
 
 Agent Black Box releases are tag-driven.
 
-Localized quick guides are available in the README language section: [Languages](../README.md#languages).
+Full localized README documentation is available in the language section: [Languages](../README.md#languages).
 
 ## Preflight
 

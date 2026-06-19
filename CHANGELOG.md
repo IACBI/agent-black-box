@@ -1,8 +1,14 @@
 # Changelog
 
+## 0.5.2
+
+- Replaced short localized README blurbs with full in-page documentation sections for 11 non-English languages.
+- Removed unnecessary explanatory text from the README language selector.
+- Updated supporting docs to point to the full localized README documentation.
+
 ## 0.5.1
 
-- Added a multilingual README language index with in-page anchors and localized quick guides.
+- Added a multilingual README language index with in-page anchors.
 - Added local documentation references from usage, reports, and demo docs back to the README language section.
 - Merged Dependabot's GitHub Actions maintenance update for `actions/checkout`.
 
