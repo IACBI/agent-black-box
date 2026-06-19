@@ -2,6 +2,8 @@
 
 Agent Black Box generates Markdown reports for humans and `session.json` for tools.
 
+Localized quick guides are available in the README language section: [Languages](../README.md#languages).
+
 ## `session.json`
 
 Structured session output containing:

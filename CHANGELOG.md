@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1
+
+- Added a multilingual README language index with in-page anchors and localized quick guides.
+- Added local documentation references from usage, reports, and demo docs back to the README language section.
+- Merged Dependabot's GitHub Actions maintenance update for `actions/checkout`.
+
 ## 0.5.0
 
 - Added shared binary/text file inspection for Git snapshots and possible secret scanning.

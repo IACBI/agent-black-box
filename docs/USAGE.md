@@ -2,6 +2,8 @@
 
 This guide walks through the normal Agent Black Box workflow from setup to report review.
 
+Localized quick guides are available in the README language section: [Languages](../README.md#languages).
+
 ## Requirements
 
 - Node.js 20 or newer.

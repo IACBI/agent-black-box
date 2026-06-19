@@ -2,6 +2,8 @@
 
 Agent Black Box releases are tag-driven.
 
+Localized quick guides are available in the README language section: [Languages](../README.md#languages).
+
 ## Preflight
 
 Run:
@@ -37,8 +39,8 @@ Use semver:
 After merging to `main` and confirming CI is green:
 
 ```sh
-git tag v0.3.0
-git push origin v0.3.0
+git tag vX.Y.Z
+git push origin vX.Y.Z
 ```
 
 The release workflow builds, tests, packs the npm tarball, and creates a GitHub Release with the artifact attached.
