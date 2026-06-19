@@ -1,6 +1,16 @@
+import { execFileSync } from "node:child_process";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { createRollbackPlan, getConfirmationText, renderRollbackPlan } from "../src/rollback/rollback.js";
+import {
+  applyRollbackPlan,
+  createRollbackPlan,
+  getConfirmationText,
+  renderRollbackPlan,
+  toLiteralGitPathspec
+} from "../src/rollback/rollback.js";
 import type { SessionReport } from "../src/types.js";
+import { createTempDir, initGitRepo, removeTempDir } from "./testUtils.js";
 
 const report = {
   id: "session-test",
@@ -93,5 +103,36 @@ describe("rollback planner", () => {
     expect(plan.restorableFiles).toEqual([]);
     expect(renderRollbackPlan(plan)).toContain("missing.ts");
     expect(renderRollbackPlan(plan)).toContain("not present");
+  });
+
+  it("converts report paths to literal top-level Git pathspecs", () => {
+    expect(toLiteralGitPathspec("src/[special]*.ts")).toBe(":(top,literal)src/[special]*.ts");
+    expect(toLiteralGitPathspec("src\\index.ts")).toBe(":(top,literal)src/index.ts");
+  });
+
+  it("applies a literal rollback pathspec to the intended tracked file", async () => {
+    const repo = await createTempDir("abb-rollback-");
+    try {
+      initGitRepo(repo);
+      execFileSync("git", ["config", "user.email", "tests@example.invalid"], { cwd: repo });
+      execFileSync("git", ["config", "user.name", "Agent Black Box Tests"], { cwd: repo });
+      const filePath = path.join(repo, "src", "index.txt");
+      await mkdir(path.dirname(filePath), { recursive: true });
+      await writeFile(filePath, "original\n", "utf8");
+      execFileSync("git", ["add", "."], { cwd: repo });
+      execFileSync("git", ["commit", "-m", "initial"], { cwd: repo });
+      await writeFile(filePath, "changed\n", "utf8");
+
+      await applyRollbackPlan(repo, {
+        requestedFiles: [],
+        restorableFiles: [{ path: "src/index.txt", status: "modified" }],
+        skippedFiles: []
+      });
+
+      const restored = await readFile(filePath, "utf8");
+      expect(restored.replace(/\r\n/g, "\n")).toBe("original\n");
+    } finally {
+      await removeTempDir(repo);
+    }
   });
 });

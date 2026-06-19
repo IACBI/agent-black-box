@@ -25,6 +25,9 @@ const REQUIRED_COMMANDS = [
   "abb run",
   "abb stop",
   "abb status",
+  "abb sessions list",
+  "abb sessions show <id>",
+  "abb sessions compare <from> <to>",
   "abb report",
   "abb summary",
   "abb commands",
@@ -36,6 +39,7 @@ const REQUIRED_COMMANDS = [
 
 const REQUIRED_REPORTS = [
   "session.json",
+  "session-metadata.json",
   "summary.md",
   "commands.md",
   "timeline.md",
@@ -47,6 +51,7 @@ const REQUIRED_REPORTS = [
 describe("multilingual README", () => {
   it("keeps every language section aligned with the documented CLI and report surface", async () => {
     const readme = await readFile("README.md", "utf8");
+    expect(readme).not.toContain("pnpm dev -- ");
 
     for (const [index, anchor] of LANGUAGE_ANCHORS.entries()) {
       const startMarker = `<a id="${anchor}"></a>`;
@@ -67,6 +72,8 @@ describe("multilingual README", () => {
 
       expect(section).toContain("HEAD");
       expect(section).toContain("SARIF");
+      expect(section).toContain("--session <id>");
+      expect(section).toContain("pnpm dev init");
       expect(section).toContain("docs/USAGE.md");
       expect(section).toContain("docs/REPORTS.md");
       expect(section).toContain("docs/ARCHITECTURE.md");

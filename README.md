@@ -30,30 +30,30 @@ AI coding agents can move quickly. Agent Black Box gives you a calm audit trail 
 ```sh
 pnpm install
 pnpm build
-pnpm dev -- init
+pnpm dev init
 ```
 
 Start a recording session:
 
 ```sh
-pnpm dev -- start
+pnpm dev start
 ```
 
 In another terminal, run commands through Agent Black Box when you want command metadata recorded:
 
 ```sh
-pnpm dev -- run --group validation --phase test -- pnpm test
+pnpm dev run --group validation --phase test -- pnpm test
 ```
 
 Stop and generate reports:
 
 ```sh
-pnpm dev -- stop
-pnpm dev -- summary
-pnpm dev -- timeline
-pnpm dev -- risks
-pnpm dev -- export --output abb-session.md
-pnpm dev -- rollback
+pnpm dev stop
+pnpm dev summary
+pnpm dev timeline
+pnpm dev risks
+pnpm dev export --output abb-session.md
+pnpm dev rollback
 ```
 
 Reports are written to:
@@ -74,6 +74,9 @@ Reports are written to:
 | `abb run -- <command>` | Run a command and record redacted command metadata for the active session. Supports `--group` and `--phase`. |
 | `abb stop` | Stop the active session and generate reports. |
 | `abb status` | Show whether a session is active, stale, or absent. |
+| `abb sessions list` | List complete, incomplete, and corrupt sessions. |
+| `abb sessions show <id>` | Show a selected session summary or normalized JSON report. |
+| `abb sessions compare <from> <to>` | Compare files, risks, commands, and HEAD revisions across two sessions. |
 | `abb report` | Print the latest `session.json`. |
 | `abb summary` | Print the latest human-readable session summary. |
 | `abb commands` | Print commands recorded in the latest session. |
@@ -89,6 +92,7 @@ Detailed usage: [docs/USAGE.md](docs/USAGE.md)
 Each session produces:
 
 - `session.json`: structured metadata, events, commands, Git snapshot, risks, and possible secrets.
+- `session-metadata.json`: compact history metadata for fast listing and safe session selection.
 - `summary.md`: concise review-first session summary.
 - `commands.md`: command metadata recorded through `abb run`.
 - `timeline.md`: chronological file and command timeline.
@@ -101,6 +105,8 @@ Each session produces:
 At session start, Agent Black Box stores a Git baseline containing the current HEAD, branch, index fingerprint, and already changed paths. Reports distinguish pre-existing changes, paths observed by the watcher, and changes detected at finalization. Risk and possible-secret analysis focuses on session-relevant final changes. Interactive rollback excludes paths that were already changed at session start because restoring them to HEAD could discard pre-session work.
 
 Net file changes committed between the start and end HEAD are included even when the final worktree is clean.
+
+Use `abb sessions list`, `abb sessions show`, and `abb sessions compare` to inspect history. Report commands accept `--session <id>` with `latest`, a full ID, or a unique ID prefix. Incomplete and corrupt sessions remain visible in the catalog but cannot be selected.
 
 Report details: [docs/REPORTS.md](docs/REPORTS.md)
 
@@ -156,7 +162,7 @@ pnpm check
 Run the CLI locally:
 
 ```sh
-pnpm dev -- --help
+pnpm dev --help
 ```
 
 After building:
@@ -169,7 +175,6 @@ node dist/cli.js --help
 
 Near-term improvements:
 
-- Session history, explicit session selection, and session comparison.
 - Watcherless CI analysis with threshold-based exit codes and SARIF output.
 - npm publishing with provenance and a cross-platform fixture matrix.
 - Optional TUI-style report browser.
@@ -216,30 +221,30 @@ AI kodlama ajanları hızlı hareket edebilir. Agent Black Box commit atmadan ö
 ```sh
 pnpm install
 pnpm build
-pnpm dev -- init
+pnpm dev init
 ```
 
 Kayıt oturumu başlatın:
 
 ```sh
-pnpm dev -- start
+pnpm dev start
 ```
 
 Başka bir terminalde metadata kaydetmek istediğiniz komutları Agent Black Box üzerinden çalıştırın:
 
 ```sh
-pnpm dev -- run --group validation --phase test -- pnpm test
+pnpm dev run --group validation --phase test -- pnpm test
 ```
 
 Oturumu durdurup raporları oluşturun:
 
 ```sh
-pnpm dev -- stop
-pnpm dev -- summary
-pnpm dev -- timeline
-pnpm dev -- risks
-pnpm dev -- export --output abb-session.md
-pnpm dev -- rollback
+pnpm dev stop
+pnpm dev summary
+pnpm dev timeline
+pnpm dev risks
+pnpm dev export --output abb-session.md
+pnpm dev rollback
 ```
 
 Raporlar şu dizine yazılır:
@@ -260,6 +265,9 @@ Raporlar şu dizine yazılır:
 | `abb run -- <command>` | Komutu çalıştırır ve aktif oturum için redakte edilmiş komut metadata'sı kaydeder. `--group` ve `--phase` destekler. |
 | `abb stop` | Aktif oturumu durdurur ve raporları üretir. |
 | `abb status` | Oturumun active, stale veya absent olup olmadığını gösterir. |
+| `abb sessions list` | Tamamlanmış, eksik ve bozuk oturumları listeler. |
+| `abb sessions show <id>` | Seçilen oturumun özetini veya normalize JSON raporunu gösterir. |
+| `abb sessions compare <from> <to>` | İki oturumun dosya, risk, komut ve HEAD farklarını karşılaştırır. |
 | `abb report` | En son `session.json` çıktısını yazdırır. |
 | `abb summary` | En son insan okunabilir oturum özetini yazdırır. |
 | `abb commands` | En son oturumda kaydedilen komutları yazdırır. |
@@ -275,6 +283,7 @@ Ayrıntılı kullanım: [docs/USAGE.md](docs/USAGE.md)
 Her oturum şunları üretir:
 
 - `session.json`: metadata, events, commands, Git snapshot, risks ve possible secrets içeren yapılandırılmış çıktı.
+- `session-metadata.json`: hızlı listeleme ve güvenli oturum seçimi için kompakt geçmiş metadata'sı.
 - `summary.md`: inceleme öncelikli kısa oturum özeti.
 - `commands.md`: `abb run` ile kaydedilen komut metadata'sı.
 - `timeline.md`: dosya ve komut olaylarının kronolojik akışı.
@@ -287,6 +296,8 @@ Her oturum şunları üretir:
 Agent Black Box, oturum başlarken mevcut HEAD, branch, Git index parmak izi ve önceden değişmiş yolları içeren bir Git başlangıç referansı kaydeder. Raporlar oturum öncesi değişiklikleri, watcher tarafından oturum sırasında gözlenen yolları ve sonlandırma sırasında tespit edilen değişiklikleri birbirinden ayırır. Risk ve olası secret analizi oturumla ilgili son değişikliklere odaklanır. Etkileşimli rollback, HEAD'e geri yüklemenin oturum öncesi çalışmayı silebileceği yolları otomatik işlem dışında bırakır.
 
 Başlangıç ve bitiş HEAD'i arasında commit edilen net dosya değişiklikleri, son worktree temiz olsa bile rapora dahil edilir.
+
+Geçmişi incelemek için `abb sessions list`, `abb sessions show` ve `abb sessions compare` kullanılır. Rapor komutları `latest`, tam ID veya benzersiz ID prefix'iyle `--session <id>` kabul eder. Eksik ve bozuk oturumlar catalog içinde görünür ancak seçilemez.
 
 Rapor ayrıntıları: [docs/REPORTS.md](docs/REPORTS.md)
 
@@ -342,7 +353,7 @@ pnpm check
 CLI'yi yerelde çalıştırma:
 
 ```sh
-pnpm dev -- --help
+pnpm dev --help
 ```
 
 Build sonrası:
@@ -355,7 +366,6 @@ node dist/cli.js --help
 
 Yakın vadeli geliştirmeler:
 
-- Oturum geçmişini listeleme, açık oturum seçimi ve oturum karşılaştırma.
 - Watcher gerektirmeyen CI analizi, eşik tabanlı exit code'ları ve SARIF çıktısı.
 - Platformlar arası fixture matrisiyle npm publish ve provenance hazırlığı.
 - İsteğe bağlı TUI tarzı rapor gezgini.
@@ -400,30 +410,30 @@ Los agentes de IA pueden moverse rápido. Agent Black Box ofrece una pista de au
 ```sh
 pnpm install
 pnpm build
-pnpm dev -- init
+pnpm dev init
 ```
 
 Iniciar una sesión de registro:
 
 ```sh
-pnpm dev -- start
+pnpm dev start
 ```
 
 En otra terminal, ejecutar comandos mediante Agent Black Box cuando se quiera registrar metadata:
 
 ```sh
-pnpm dev -- run --group validation --phase test -- pnpm test
+pnpm dev run --group validation --phase test -- pnpm test
 ```
 
 Detener y generar reportes:
 
 ```sh
-pnpm dev -- stop
-pnpm dev -- summary
-pnpm dev -- timeline
-pnpm dev -- risks
-pnpm dev -- export --output abb-session.md
-pnpm dev -- rollback
+pnpm dev stop
+pnpm dev summary
+pnpm dev timeline
+pnpm dev risks
+pnpm dev export --output abb-session.md
+pnpm dev rollback
 ```
 
 Los reportes se escriben en:
@@ -444,6 +454,9 @@ Los reportes se escriben en:
 | `abb run -- <command>` | Ejecuta un comando y registra metadata redactada para la sesión activa. Soporta `--group` y `--phase`. |
 | `abb stop` | Detiene la sesión activa y genera reportes. |
 | `abb status` | Muestra si la sesión está active, stale o absent. |
+| `abb sessions list` | Lista sesiones completas, incompletas y corruptas. |
+| `abb sessions show <id>` | Muestra el resumen o JSON normalizado de una sesión seleccionada. |
+| `abb sessions compare <from> <to>` | Compara archivos, riesgos, comandos y revisiones HEAD entre dos sesiones. |
 | `abb report` | Imprime el último `session.json`. |
 | `abb summary` | Imprime el resumen humano más reciente. |
 | `abb commands` | Imprime comandos registrados en la última sesión. |
@@ -459,6 +472,7 @@ Uso detallado: [docs/USAGE.md](docs/USAGE.md)
 Cada sesión produce:
 
 - `session.json`: metadata estructurada, events, commands, Git snapshot, risks y possible secrets.
+- `session-metadata.json`: metadata compacta para listar el historial y seleccionar sesiones de forma segura.
 - `summary.md`: resumen breve orientado a revisión.
 - `commands.md`: metadata de comandos registrada mediante `abb run`.
 - `timeline.md`: timeline cronológico de archivos y comandos.
@@ -471,6 +485,8 @@ Cada sesión produce:
 Al iniciar una sesión, Agent Black Box guarda una referencia Git con el HEAD actual, la rama, la huella del índice y las rutas que ya estaban modificadas. Los reportes distinguen cambios preexistentes, rutas observadas durante la sesión y cambios detectados al finalizar. El análisis de riesgos y posibles secretos se centra en los cambios finales relacionados con la sesión. El rollback interactivo excluye las rutas modificadas antes del inicio porque restaurarlas a HEAD podría eliminar trabajo previo.
 
 Los cambios netos confirmados entre el HEAD inicial y final se incluyen incluso cuando el worktree termina limpio.
+
+Usa `abb sessions list`, `abb sessions show` y `abb sessions compare` para revisar el historial. Los comandos de reporte aceptan `--session <id>` con `latest`, un ID completo o un prefijo único. Las sesiones incompletas o corruptas se muestran, pero no se pueden seleccionar.
 
 Detalles de reportes: [docs/REPORTS.md](docs/REPORTS.md)
 
@@ -526,7 +542,7 @@ pnpm check
 Ejecutar la CLI localmente:
 
 ```sh
-pnpm dev -- --help
+pnpm dev --help
 ```
 
 Después de compilar:
@@ -539,7 +555,6 @@ node dist/cli.js --help
 
 Mejoras cercanas:
 
-- Historial de sesiones, selección explícita y comparación entre sesiones.
 - Análisis CI sin watcher, códigos de salida por umbral y salida SARIF.
 - Publicación npm con provenance y matriz de fixtures multiplataforma.
 - Navegador de reportes opcional estilo TUI.
@@ -584,30 +599,30 @@ KI-Coding-Agenten können sehr schnell Änderungen erzeugen. Agent Black Box gib
 ```sh
 pnpm install
 pnpm build
-pnpm dev -- init
+pnpm dev init
 ```
 
 Aufzeichnung starten:
 
 ```sh
-pnpm dev -- start
+pnpm dev start
 ```
 
 In einem zweiten Terminal Befehle über Agent Black Box ausführen, wenn Metadaten aufgezeichnet werden sollen:
 
 ```sh
-pnpm dev -- run --group validation --phase test -- pnpm test
+pnpm dev run --group validation --phase test -- pnpm test
 ```
 
 Stoppen und Reports erzeugen:
 
 ```sh
-pnpm dev -- stop
-pnpm dev -- summary
-pnpm dev -- timeline
-pnpm dev -- risks
-pnpm dev -- export --output abb-session.md
-pnpm dev -- rollback
+pnpm dev stop
+pnpm dev summary
+pnpm dev timeline
+pnpm dev risks
+pnpm dev export --output abb-session.md
+pnpm dev rollback
 ```
 
 Reports werden hier geschrieben:
@@ -628,6 +643,9 @@ Reports werden hier geschrieben:
 | `abb run -- <command>` | Führt einen Befehl aus und speichert redigierte Metadaten für die aktive Session. Unterstützt `--group` und `--phase`. |
 | `abb stop` | Stoppt die aktive Session und erzeugt Reports. |
 | `abb status` | Zeigt, ob eine Session active, stale oder absent ist. |
+| `abb sessions list` | Listet vollständige, unvollständige und beschädigte Sessions. |
+| `abb sessions show <id>` | Zeigt Summary oder normalisiertes JSON einer gewählten Session. |
+| `abb sessions compare <from> <to>` | Vergleicht Dateien, Risiken, Befehle und HEAD-Stände zweier Sessions. |
 | `abb report` | Gibt das neueste `session.json` aus. |
 | `abb summary` | Gibt die neueste menschenlesbare Session-Zusammenfassung aus. |
 | `abb commands` | Gibt die in der letzten Session aufgezeichneten Befehle aus. |
@@ -643,6 +661,7 @@ Detaillierte Nutzung: [docs/USAGE.md](docs/USAGE.md)
 Jede Session erzeugt:
 
 - `session.json`: strukturierte Metadaten, Events, Commands, Git Snapshot, Risks und Possible Secrets.
+- `session-metadata.json`: kompakte Verlaufsmetadaten für schnelle Auflistung und sichere Session-Auswahl.
 - `summary.md`: kurze Review-first Zusammenfassung.
 - `commands.md`: über `abb run` aufgezeichnete Befehlsmetadaten.
 - `timeline.md`: chronologische Datei- und Befehlstimeline.
@@ -655,6 +674,8 @@ Jede Session erzeugt:
 Beim Session-Start speichert Agent Black Box eine Git-Baseline mit aktuellem HEAD, Branch, Index-Fingerabdruck und bereits geänderten Pfaden. Reports unterscheiden vorbestehende Änderungen, während der Session beobachtete Pfade und erst bei der Finalisierung erkannte Änderungen. Risiko- und Possible-Secret-Analysen konzentrieren sich auf sessionrelevante Endänderungen. Der interaktive Rollback schließt Pfade aus, die bereits beim Start geändert waren, weil eine Wiederherstellung auf HEAD frühere Arbeit verwerfen könnte.
 
 Netto-Dateiänderungen zwischen Start- und End-HEAD werden auch bei einem sauberen finalen Worktree einbezogen.
+
+Mit `abb sessions list`, `abb sessions show` und `abb sessions compare` wird der Verlauf geprüft. Report-Befehle akzeptieren `--session <id>` mit `latest`, vollständiger ID oder eindeutigem Präfix. Unvollständige und beschädigte Sessions bleiben sichtbar, sind aber nicht auswählbar.
 
 Report-Details: [docs/REPORTS.md](docs/REPORTS.md)
 
@@ -710,7 +731,7 @@ pnpm check
 CLI lokal ausführen:
 
 ```sh
-pnpm dev -- --help
+pnpm dev --help
 ```
 
 Nach dem Build:
@@ -723,7 +744,6 @@ node dist/cli.js --help
 
 Nahe Verbesserungen:
 
-- Session-Verlauf, explizite Session-Auswahl und Session-Vergleich.
 - Watcherlose CI-Analyse, schwellenwertbasierte Exit-Codes und SARIF-Ausgabe.
 - npm Publishing mit Provenance und plattformübergreifender Fixture-Matrix.
 - Optionaler TUI-artiger Report-Browser.
@@ -768,30 +788,30 @@ Les agents de codage IA peuvent aller vite. Agent Black Box fournit une piste d'
 ```sh
 pnpm install
 pnpm build
-pnpm dev -- init
+pnpm dev init
 ```
 
 Démarrer une session :
 
 ```sh
-pnpm dev -- start
+pnpm dev start
 ```
 
 Dans un autre terminal, exécuter les commandes via Agent Black Box quand les métadonnées doivent être enregistrées :
 
 ```sh
-pnpm dev -- run --group validation --phase test -- pnpm test
+pnpm dev run --group validation --phase test -- pnpm test
 ```
 
 Arrêter et générer les rapports :
 
 ```sh
-pnpm dev -- stop
-pnpm dev -- summary
-pnpm dev -- timeline
-pnpm dev -- risks
-pnpm dev -- export --output abb-session.md
-pnpm dev -- rollback
+pnpm dev stop
+pnpm dev summary
+pnpm dev timeline
+pnpm dev risks
+pnpm dev export --output abb-session.md
+pnpm dev rollback
 ```
 
 Les rapports sont écrits dans :
@@ -812,6 +832,9 @@ Les rapports sont écrits dans :
 | `abb run -- <command>` | Exécute une commande et enregistre des métadonnées masquées pour la session active. Supporte `--group` et `--phase`. |
 | `abb stop` | Arrête la session active et génère les rapports. |
 | `abb status` | Indique si une session est active, stale ou absent. |
+| `abb sessions list` | Liste les sessions terminées, incomplètes et corrompues. |
+| `abb sessions show <id>` | Affiche le résumé ou le JSON normalisé d'une session choisie. |
+| `abb sessions compare <from> <to>` | Compare fichiers, risques, commandes et révisions HEAD de deux sessions. |
 | `abb report` | Affiche le dernier `session.json`. |
 | `abb summary` | Affiche le dernier résumé lisible. |
 | `abb commands` | Affiche les commandes enregistrées dans la dernière session. |
@@ -827,6 +850,7 @@ Utilisation détaillée : [docs/USAGE.md](docs/USAGE.md)
 Chaque session produit :
 
 - `session.json` : métadonnées structurées, events, commands, Git snapshot, risks et possible secrets.
+- `session-metadata.json` : métadonnées compactes pour lister rapidement et sélectionner sûrement les sessions.
 - `summary.md` : résumé concis orienté revue.
 - `commands.md` : métadonnées de commandes enregistrées via `abb run`.
 - `timeline.md` : chronologie des fichiers et commandes.
@@ -839,6 +863,8 @@ Chaque session produit :
 Au démarrage d'une session, Agent Black Box enregistre une référence Git contenant le HEAD courant, la branche, l'empreinte de l'index et les chemins déjà modifiés. Les rapports distinguent les changements préexistants, les chemins observés pendant la session et les changements détectés à la finalisation. L'analyse des risques et des secrets possibles se concentre sur les changements finaux liés à la session. Le rollback interactif exclut les chemins déjà modifiés au démarrage, car une restauration vers HEAD pourrait supprimer du travail antérieur.
 
 Les changements nets validés entre les HEAD de début et de fin sont inclus même si le worktree final est propre.
+
+Utilisez `abb sessions list`, `abb sessions show` et `abb sessions compare` pour consulter l'historique. Les commandes de rapport acceptent `--session <id>` avec `latest`, un ID complet ou un préfixe unique. Les sessions incomplètes ou corrompues restent visibles mais ne peuvent pas être sélectionnées.
 
 Détails des rapports : [docs/REPORTS.md](docs/REPORTS.md)
 
@@ -894,7 +920,7 @@ pnpm check
 Exécuter la CLI localement :
 
 ```sh
-pnpm dev -- --help
+pnpm dev --help
 ```
 
 Après build :
@@ -907,7 +933,6 @@ node dist/cli.js --help
 
 Améliorations à court terme :
 
-- Historique des sessions, sélection explicite et comparaison de sessions.
 - Analyse CI sans watcher, codes de sortie par seuil et sortie SARIF.
 - Publication npm avec provenance et matrice de fixtures multiplateforme.
 - Navigateur de rapports optionnel de style TUI.
@@ -952,30 +977,30 @@ Agentes de codificação com IA podem se mover rapidamente. Agent Black Box forn
 ```sh
 pnpm install
 pnpm build
-pnpm dev -- init
+pnpm dev init
 ```
 
 Iniciar uma sessão:
 
 ```sh
-pnpm dev -- start
+pnpm dev start
 ```
 
 Em outro terminal, execute comandos pelo Agent Black Box quando quiser registrar metadados:
 
 ```sh
-pnpm dev -- run --group validation --phase test -- pnpm test
+pnpm dev run --group validation --phase test -- pnpm test
 ```
 
 Parar e gerar relatórios:
 
 ```sh
-pnpm dev -- stop
-pnpm dev -- summary
-pnpm dev -- timeline
-pnpm dev -- risks
-pnpm dev -- export --output abb-session.md
-pnpm dev -- rollback
+pnpm dev stop
+pnpm dev summary
+pnpm dev timeline
+pnpm dev risks
+pnpm dev export --output abb-session.md
+pnpm dev rollback
 ```
 
 Os relatórios são gravados em:
@@ -996,6 +1021,9 @@ Os relatórios são gravados em:
 | `abb run -- <command>` | Executa um comando e registra metadados mascarados para a sessão ativa. Suporta `--group` e `--phase`. |
 | `abb stop` | Para a sessão ativa e gera relatórios. |
 | `abb status` | Mostra se a sessão está active, stale ou absent. |
+| `abb sessions list` | Lista sessões completas, incompletas e corrompidas. |
+| `abb sessions show <id>` | Mostra o resumo ou JSON normalizado de uma sessão selecionada. |
+| `abb sessions compare <from> <to>` | Compara arquivos, riscos, comandos e revisões HEAD entre duas sessões. |
 | `abb report` | Imprime o último `session.json`. |
 | `abb summary` | Imprime o último resumo legível. |
 | `abb commands` | Imprime comandos registrados na última sessão. |
@@ -1011,6 +1039,7 @@ Uso detalhado: [docs/USAGE.md](docs/USAGE.md)
 Cada sessão produz:
 
 - `session.json`: metadados estruturados, events, commands, Git snapshot, risks e possible secrets.
+- `session-metadata.json`: metadados compactos para listagem rápida e seleção segura de sessões.
 - `summary.md`: resumo curto orientado à revisão.
 - `commands.md`: metadados de comandos registrados via `abb run`.
 - `timeline.md`: linha do tempo cronológica de arquivos e comandos.
@@ -1023,6 +1052,8 @@ Cada sessão produz:
 Ao iniciar uma sessão, o Agent Black Box salva uma referência Git com o HEAD atual, a branch, a impressão digital do índice e os caminhos que já estavam alterados. Os relatórios distinguem alterações preexistentes, caminhos observados durante a sessão e alterações detectadas na finalização. A análise de riscos e possíveis segredos se concentra nas alterações finais relacionadas à sessão. O rollback interativo exclui caminhos já alterados no início, pois restaurá-los para HEAD poderia descartar trabalho anterior.
 
 As alterações líquidas commitadas entre o HEAD inicial e final são incluídas mesmo quando o worktree termina limpo.
+
+Use `abb sessions list`, `abb sessions show` e `abb sessions compare` para revisar o histórico. Os comandos de relatório aceitam `--session <id>` com `latest`, ID completo ou prefixo único. Sessões incompletas e corrompidas permanecem visíveis, mas não podem ser selecionadas.
 
 Detalhes dos relatórios: [docs/REPORTS.md](docs/REPORTS.md)
 
@@ -1078,7 +1109,7 @@ pnpm check
 Executar a CLI localmente:
 
 ```sh
-pnpm dev -- --help
+pnpm dev --help
 ```
 
 Após build:
@@ -1091,7 +1122,6 @@ node dist/cli.js --help
 
 Melhorias de curto prazo:
 
-- Histórico de sessões, seleção explícita e comparação entre sessões.
 - Análise CI sem watcher, exit codes por limite e saída SARIF.
 - Publicação npm com provenance e matriz de fixtures multiplataforma.
 - Navegador de relatórios opcional em estilo TUI.
@@ -1136,30 +1166,30 @@ AI 编码代理可能很快地产生变更。Agent Black Box 在 commit 前提�
 ```sh
 pnpm install
 pnpm build
-pnpm dev -- init
+pnpm dev init
 ```
 
 启动记录会话：
 
 ```sh
-pnpm dev -- start
+pnpm dev start
 ```
 
 在另一个终端中，当你希望记录命令元数据时，通过 Agent Black Box 运行命令：
 
 ```sh
-pnpm dev -- run --group validation --phase test -- pnpm test
+pnpm dev run --group validation --phase test -- pnpm test
 ```
 
 停止并生成报告：
 
 ```sh
-pnpm dev -- stop
-pnpm dev -- summary
-pnpm dev -- timeline
-pnpm dev -- risks
-pnpm dev -- export --output abb-session.md
-pnpm dev -- rollback
+pnpm dev stop
+pnpm dev summary
+pnpm dev timeline
+pnpm dev risks
+pnpm dev export --output abb-session.md
+pnpm dev rollback
 ```
 
 报告写入：
@@ -1180,6 +1210,9 @@ pnpm dev -- rollback
 | `abb run -- <command>` | 运行命令，并为活动会话记录已脱敏的命令元数据。支持 `--group` 和 `--phase`。 |
 | `abb stop` | 停止活动会话并生成报告。 |
 | `abb status` | 显示会话是 active、stale 还是 absent。 |
+| `abb sessions list` | 列出已完成、不完整和损坏的会话。 |
+| `abb sessions show <id>` | 显示所选会话的摘要或规范化 JSON 报告。 |
+| `abb sessions compare <from> <to>` | 比较两个会话的文件、风险、命令和 HEAD 修订。 |
 | `abb report` | 打印最新的 `session.json`。 |
 | `abb summary` | 打印最新的人类可读会话摘要。 |
 | `abb commands` | 打印最新会话中记录的命令。 |
@@ -1195,6 +1228,7 @@ pnpm dev -- rollback
 每个会话会生成：
 
 - `session.json`：结构化元数据、events、commands、Git snapshot、risks 和 possible secrets。
+- `session-metadata.json`：用于快速列出历史记录和安全选择会话的紧凑元数据。
 - `summary.md`：以审查为中心的简短摘要。
 - `commands.md`：通过 `abb run` 记录的命令元数据。
 - `timeline.md`：文件和命令的时间线。
@@ -1207,6 +1241,8 @@ pnpm dev -- rollback
 会话开始时，Agent Black Box 会保存一个 Git 基线，其中包含当前 HEAD、分支、索引指纹以及开始前已变更的路径。报告会区分会话前已有的变更、会话期间由监视器观察到的路径，以及结束时才检测到的变更。风险和可能的 secret 分析只关注与本次会话相关的最终变更。交互式 rollback 会排除会话开始前已经变更的路径，因为恢复到 HEAD 可能会删除会话前的工作。
 
 即使最终 worktree 是干净的，开始与结束 HEAD 之间已提交的净文件变更也会包含在报告中。
+
+使用 `abb sessions list`、`abb sessions show` 和 `abb sessions compare` 查看历史记录。报告命令支持 `--session <id>`，可使用 `latest`、完整 ID 或唯一 ID 前缀。不完整和损坏的会话会显示在列表中，但不能被选择。
 
 报告详情：[docs/REPORTS.md](docs/REPORTS.md)
 
@@ -1262,7 +1298,7 @@ pnpm check
 本地运行 CLI：
 
 ```sh
-pnpm dev -- --help
+pnpm dev --help
 ```
 
 构建后：
@@ -1275,7 +1311,6 @@ node dist/cli.js --help
 
 近期改进：
 
-- 会话历史记录、显式会话选择和会话比较。
 - 无需 watcher 的 CI 分析、基于阈值的退出码和 SARIF 输出。
 - 带 provenance 的 npm 发布和跨平台 fixture 矩阵。
 - 可选的 TUI 风格报告浏览器。
@@ -1320,30 +1355,30 @@ AI coding agents तेजी से बदलाव कर सकते है�
 ```sh
 pnpm install
 pnpm build
-pnpm dev -- init
+pnpm dev init
 ```
 
 Recording session start करें:
 
 ```sh
-pnpm dev -- start
+pnpm dev start
 ```
 
 दूसरे terminal में, command metadata record करने के लिए Agent Black Box से command चलाएं:
 
 ```sh
-pnpm dev -- run --group validation --phase test -- pnpm test
+pnpm dev run --group validation --phase test -- pnpm test
 ```
 
 Session stop करके reports generate करें:
 
 ```sh
-pnpm dev -- stop
-pnpm dev -- summary
-pnpm dev -- timeline
-pnpm dev -- risks
-pnpm dev -- export --output abb-session.md
-pnpm dev -- rollback
+pnpm dev stop
+pnpm dev summary
+pnpm dev timeline
+pnpm dev risks
+pnpm dev export --output abb-session.md
+pnpm dev rollback
 ```
 
 Reports यहां लिखे जाते हैं:
@@ -1364,6 +1399,9 @@ Reports यहां लिखे जाते हैं:
 | `abb run -- <command>` | command चलाता है और active session के लिए redacted command metadata record करता है। `--group` और `--phase` support करता है। |
 | `abb stop` | active session stop करता है और reports generate करता है। |
 | `abb status` | session active, stale या absent है यह दिखाता है। |
+| `abb sessions list` | complete, incomplete और corrupt sessions list करता है। |
+| `abb sessions show <id>` | selected session का summary या normalized JSON report दिखाता है। |
+| `abb sessions compare <from> <to>` | दो sessions के files, risks, commands और HEAD revisions compare करता है। |
 | `abb report` | latest `session.json` print करता है। |
 | `abb summary` | latest human-readable session summary print करता है। |
 | `abb commands` | latest session में recorded commands print करता है। |
@@ -1379,6 +1417,7 @@ Detailed usage: [docs/USAGE.md](docs/USAGE.md)
 हर session ये files produce करता है:
 
 - `session.json`: structured metadata, events, commands, Git snapshot, risks और possible secrets।
+- `session-metadata.json`: fast listing और safe session selection के लिए compact history metadata।
 - `summary.md`: concise review-first session summary।
 - `commands.md`: `abb run` से recorded command metadata।
 - `timeline.md`: chronological file और command timeline।
@@ -1391,6 +1430,8 @@ Detailed usage: [docs/USAGE.md](docs/USAGE.md)
 Session शुरू होने पर Agent Black Box current HEAD, branch, Git index fingerprint और पहले से बदले हुए paths वाला Git baseline store करता है। Reports pre-existing changes, session के दौरान watcher द्वारा observe किए गए paths और finalization पर detect हुए changes को अलग दिखाते हैं। Risk और possible-secret analysis केवल session-relevant final changes पर focus करता है। Interactive rollback उन paths को exclude करता है जो session शुरू होने से पहले बदले हुए थे, क्योंकि उन्हें HEAD पर restore करने से पुराना work मिट सकता है।
 
 Start और end HEAD के बीच commit हुए net file changes final worktree clean होने पर भी report में शामिल रहते हैं।
+
+History देखने के लिए `abb sessions list`, `abb sessions show` और `abb sessions compare` उपयोग करें। Report commands `latest`, full ID या unique ID prefix के साथ `--session <id>` स्वीकार करते हैं। Incomplete और corrupt sessions catalog में दिखते हैं लेकिन select नहीं किए जा सकते।
 
 Report details: [docs/REPORTS.md](docs/REPORTS.md)
 
@@ -1446,7 +1487,7 @@ pnpm check
 CLI locally चलाएं:
 
 ```sh
-pnpm dev -- --help
+pnpm dev --help
 ```
 
 Build के बाद:
@@ -1459,7 +1500,6 @@ node dist/cli.js --help
 
 Near-term improvements:
 
-- Session history, explicit session selection और session comparison।
 - Watcher के बिना CI analysis, threshold-based exit codes और SARIF output।
 - Provenance और cross-platform fixture matrix के साथ npm publish।
 - Optional TUI-style report browser।
@@ -1504,30 +1544,30 @@ Agent Black Box هو أداة CLI محلية أولا لتسجيل وشرح تغ
 ```sh
 pnpm install
 pnpm build
-pnpm dev -- init
+pnpm dev init
 ```
 
 ابدأ جلسة تسجيل:
 
 ```sh
-pnpm dev -- start
+pnpm dev start
 ```
 
 في طرفية أخرى، شغّل الأوامر عبر Agent Black Box عندما تريد تسجيل بياناتها:
 
 ```sh
-pnpm dev -- run --group validation --phase test -- pnpm test
+pnpm dev run --group validation --phase test -- pnpm test
 ```
 
 أوقف الجلسة وأنشئ التقارير:
 
 ```sh
-pnpm dev -- stop
-pnpm dev -- summary
-pnpm dev -- timeline
-pnpm dev -- risks
-pnpm dev -- export --output abb-session.md
-pnpm dev -- rollback
+pnpm dev stop
+pnpm dev summary
+pnpm dev timeline
+pnpm dev risks
+pnpm dev export --output abb-session.md
+pnpm dev rollback
 ```
 
 تكتب التقارير في:
@@ -1548,6 +1588,9 @@ pnpm dev -- rollback
 | `abb run -- <command>` | يشغل الأمر ويسجل بيانات أوامر مخفية القيم للجلسة النشطة. يدعم `--group` و `--phase`. |
 | `abb stop` | يوقف الجلسة النشطة وينشئ التقارير. |
 | `abb status` | يعرض ما إذا كانت الجلسة active أو stale أو absent. |
+| `abb sessions list` | يسرد الجلسات المكتملة وغير المكتملة والتالفة. |
+| `abb sessions show <id>` | يعرض ملخص الجلسة المحددة أو تقرير JSON المنظم. |
+| `abb sessions compare <from> <to>` | يقارن الملفات والمخاطر والأوامر ومراجعات HEAD بين جلستين. |
 | `abb report` | يطبع أحدث `session.json`. |
 | `abb summary` | يطبع أحدث ملخص قابل للقراءة. |
 | `abb commands` | يطبع الأوامر المسجلة في أحدث جلسة. |
@@ -1563,6 +1606,7 @@ pnpm dev -- rollback
 كل جلسة تنتج:
 
 - `session.json`: metadata منظمة، events، commands، Git snapshot، risks و possible secrets.
+- `session-metadata.json`: metadata مختصرة لعرض السجل بسرعة واختيار الجلسة بأمان.
 - `summary.md`: ملخص مختصر موجه للمراجعة.
 - `commands.md`: بيانات الأوامر المسجلة عبر `abb run`.
 - `timeline.md`: تسلسل زمني للملفات والأوامر.
@@ -1575,6 +1619,8 @@ pnpm dev -- rollback
 عند بدء الجلسة، يحفظ Agent Black Box خط أساس Git يتضمن HEAD الحالي والفرع وبصمة الفهرس والمسارات التي كانت معدلة مسبقا. تميز التقارير بين التغييرات السابقة للجلسة، والمسارات التي راقبها watcher أثناء الجلسة، والتغييرات التي اكتشفت عند الإنهاء. يركز تحليل المخاطر والأسرار المحتملة على التغييرات النهائية المرتبطة بالجلسة. يستبعد rollback التفاعلي المسارات التي كانت معدلة عند البدء لأن استعادتها إلى HEAD قد تحذف عملا سابقا.
 
 تدرج تغييرات الملفات الصافية التي تم commit لها بين HEAD البداية والنهاية حتى عندما تكون شجرة العمل النهائية نظيفة.
+
+استخدم `abb sessions list` و `abb sessions show` و `abb sessions compare` لمراجعة السجل. تقبل أوامر التقارير `--session <id>` مع `latest` أو ID كامل أو prefix فريد. تظهر الجلسات غير المكتملة والتالفة في القائمة ولكن لا يمكن تحديدها.
 
 تفاصيل التقارير: [docs/REPORTS.md](docs/REPORTS.md)
 
@@ -1630,7 +1676,7 @@ pnpm check
 تشغيل CLI محليا:
 
 ```sh
-pnpm dev -- --help
+pnpm dev --help
 ```
 
 بعد البناء:
@@ -1643,7 +1689,6 @@ node dist/cli.js --help
 
 تحسينات قريبة:
 
-- سجل الجلسات والاختيار الصريح للجلسة والمقارنة بين الجلسات.
 - تحليل CI دون watcher مع رموز خروج حسب العتبة ومخرجات SARIF.
 - نشر npm مع provenance ومصفوفة fixtures متعددة المنصات.
 - متصفح تقارير اختياري بأسلوب TUI.
@@ -1688,30 +1733,30 @@ AI coding agents могут быстро менять код. Agent Black Box д
 ```sh
 pnpm install
 pnpm build
-pnpm dev -- init
+pnpm dev init
 ```
 
 Запустить запись:
 
 ```sh
-pnpm dev -- start
+pnpm dev start
 ```
 
 В другом терминале запускайте команды через Agent Black Box, когда нужно записать metadata:
 
 ```sh
-pnpm dev -- run --group validation --phase test -- pnpm test
+pnpm dev run --group validation --phase test -- pnpm test
 ```
 
 Остановить и создать отчеты:
 
 ```sh
-pnpm dev -- stop
-pnpm dev -- summary
-pnpm dev -- timeline
-pnpm dev -- risks
-pnpm dev -- export --output abb-session.md
-pnpm dev -- rollback
+pnpm dev stop
+pnpm dev summary
+pnpm dev timeline
+pnpm dev risks
+pnpm dev export --output abb-session.md
+pnpm dev rollback
 ```
 
 Отчеты записываются в:
@@ -1732,6 +1777,9 @@ pnpm dev -- rollback
 | `abb run -- <command>` | Запускает команду и пишет redacted command metadata для active session. Поддерживает `--group` и `--phase`. |
 | `abb stop` | Останавливает active session и генерирует reports. |
 | `abb status` | Показывает, является ли session active, stale или absent. |
+| `abb sessions list` | Показывает завершенные, незавершенные и поврежденные sessions. |
+| `abb sessions show <id>` | Показывает summary или нормализованный JSON выбранной session. |
+| `abb sessions compare <from> <to>` | Сравнивает файлы, риски, команды и HEAD revisions двух sessions. |
 | `abb report` | Печатает последний `session.json`. |
 | `abb summary` | Печатает последний human-readable summary. |
 | `abb commands` | Печатает команды, записанные в последней session. |
@@ -1747,6 +1795,7 @@ pnpm dev -- rollback
 Каждая session создает:
 
 - `session.json`: structured metadata, events, commands, Git snapshot, risks и possible secrets.
+- `session-metadata.json`: компактные metadata для быстрого списка и безопасного выбора session.
 - `summary.md`: краткий review-first summary.
 - `commands.md`: command metadata, записанная через `abb run`.
 - `timeline.md`: chronological file and command timeline.
@@ -1759,6 +1808,8 @@ pnpm dev -- rollback
 При запуске сессии Agent Black Box сохраняет Git baseline с текущими HEAD, branch, отпечатком index и путями, которые уже были изменены. Отчеты разделяют ранее существовавшие изменения, пути, замеченные watcher во время сессии, и изменения, обнаруженные при завершении. Анализ рисков и возможных секретов сосредоточен на итоговых изменениях, относящихся к сессии. Интерактивный rollback исключает пути, измененные до старта, потому что восстановление до HEAD может удалить предыдущую работу.
 
 Итоговые изменения файлов, закоммиченные между начальным и конечным HEAD, включаются даже при чистом финальном worktree.
+
+Для просмотра истории используйте `abb sessions list`, `abb sessions show` и `abb sessions compare`. Report commands принимают `--session <id>` со значением `latest`, полным ID или уникальным prefix. Незавершенные и поврежденные sessions видны в catalog, но выбрать их нельзя.
 
 Детали отчетов: [docs/REPORTS.md](docs/REPORTS.md)
 
@@ -1814,7 +1865,7 @@ pnpm check
 Запустить CLI локально:
 
 ```sh
-pnpm dev -- --help
+pnpm dev --help
 ```
 
 После build:
@@ -1827,7 +1878,6 @@ node dist/cli.js --help
 
 Ближайшие улучшения:
 
-- История сессий, явный выбор сессии и сравнение сессий.
 - CI-анализ без watcher, пороговые exit codes и вывод SARIF.
 - Публикация npm с provenance и кроссплатформенной fixture matrix.
 - Опциональный TUI-style report browser.
@@ -1872,30 +1922,30 @@ AI coding agents は素早く変更を加えることがあります。Agent Bla
 ```sh
 pnpm install
 pnpm build
-pnpm dev -- init
+pnpm dev init
 ```
 
 記録セッションを開始:
 
 ```sh
-pnpm dev -- start
+pnpm dev start
 ```
 
 別の terminal で、metadata を記録したい command を Agent Black Box 経由で実行:
 
 ```sh
-pnpm dev -- run --group validation --phase test -- pnpm test
+pnpm dev run --group validation --phase test -- pnpm test
 ```
 
 停止して reports を生成:
 
 ```sh
-pnpm dev -- stop
-pnpm dev -- summary
-pnpm dev -- timeline
-pnpm dev -- risks
-pnpm dev -- export --output abb-session.md
-pnpm dev -- rollback
+pnpm dev stop
+pnpm dev summary
+pnpm dev timeline
+pnpm dev risks
+pnpm dev export --output abb-session.md
+pnpm dev rollback
 ```
 
 Reports は以下に書き込まれます:
@@ -1916,6 +1966,9 @@ Reports は以下に書き込まれます:
 | `abb run -- <command>` | command を実行し、active session の redacted command metadata を記録します。`--group` と `--phase` をサポートします。 |
 | `abb stop` | active session を停止し reports を生成します。 |
 | `abb status` | session が active、stale、absent のどれかを表示します。 |
+| `abb sessions list` | 完了、未完了、破損した sessions を一覧表示します。 |
+| `abb sessions show <id>` | 選択した session の summary または normalized JSON を表示します。 |
+| `abb sessions compare <from> <to>` | 2つの sessions の files、risks、commands、HEAD revisions を比較します。 |
 | `abb report` | 最新の `session.json` を表示します。 |
 | `abb summary` | 最新の人間向け summary を表示します。 |
 | `abb commands` | 最新 session に記録された commands を表示します。 |
@@ -1931,6 +1984,7 @@ Reports は以下に書き込まれます:
 各 session は以下を生成します:
 
 - `session.json`: structured metadata、events、commands、Git snapshot、risks、possible secrets。
+- `session-metadata.json`: 高速な履歴一覧と安全な session selection のための compact metadata。
 - `summary.md`: review-first の短い session summary。
 - `commands.md`: `abb run` で記録された command metadata。
 - `timeline.md`: file と command の chronological timeline。
@@ -1943,6 +1997,8 @@ Reports は以下に書き込まれます:
 Session 開始時に Agent Black Box は、現在の HEAD、branch、Git index fingerprint、開始前から変更されていた path を含む Git baseline を保存します。Reports は pre-existing changes、session 中に watcher が観測した path、finalization 時に検出された changes を区別します。Risk と possible-secret analysis は session に関連する最終 changes に絞られます。Interactive rollback は開始時点ですでに変更されていた path を除外し、HEAD への restore による session 前の作業消失を防ぎます。
 
 Start HEAD と end HEAD の間で commit された net file changes は、final worktree が clean でも含まれます。
+
+履歴の確認には `abb sessions list`、`abb sessions show`、`abb sessions compare` を使います。Report commands は `latest`、full ID、unique ID prefix による `--session <id>` を受け付けます。Incomplete または corrupt な sessions は一覧に残りますが選択できません。
 
 Report details: [docs/REPORTS.md](docs/REPORTS.md)
 
@@ -1998,7 +2054,7 @@ pnpm check
 CLI をローカルで実行:
 
 ```sh
-pnpm dev -- --help
+pnpm dev --help
 ```
 
 Build 後:
@@ -2011,7 +2067,6 @@ node dist/cli.js --help
 
 近い将来の改善:
 
-- Session history、明示的な session selection、session comparison。
 - Watcher 不要の CI analysis、threshold-based exit codes、SARIF output。
 - Provenance と cross-platform fixture matrix を備えた npm publish。
 - Optional TUI-style report browser。
@@ -2056,30 +2111,30 @@ AI coding agent dapat bergerak cepat. Agent Black Box memberi audit trail yang t
 ```sh
 pnpm install
 pnpm build
-pnpm dev -- init
+pnpm dev init
 ```
 
 Mulai sesi perekaman:
 
 ```sh
-pnpm dev -- start
+pnpm dev start
 ```
 
 Di terminal lain, jalankan command melalui Agent Black Box ketika ingin metadata direkam:
 
 ```sh
-pnpm dev -- run --group validation --phase test -- pnpm test
+pnpm dev run --group validation --phase test -- pnpm test
 ```
 
 Hentikan dan hasilkan laporan:
 
 ```sh
-pnpm dev -- stop
-pnpm dev -- summary
-pnpm dev -- timeline
-pnpm dev -- risks
-pnpm dev -- export --output abb-session.md
-pnpm dev -- rollback
+pnpm dev stop
+pnpm dev summary
+pnpm dev timeline
+pnpm dev risks
+pnpm dev export --output abb-session.md
+pnpm dev rollback
 ```
 
 Laporan ditulis ke:
@@ -2100,6 +2155,9 @@ Laporan ditulis ke:
 | `abb run -- <command>` | Menjalankan command dan merekam redacted command metadata untuk active session. Mendukung `--group` dan `--phase`. |
 | `abb stop` | Menghentikan active session dan menghasilkan reports. |
 | `abb status` | Menampilkan apakah session active, stale, atau absent. |
+| `abb sessions list` | Menampilkan session complete, incomplete, dan corrupt. |
+| `abb sessions show <id>` | Menampilkan summary atau normalized JSON untuk session terpilih. |
+| `abb sessions compare <from> <to>` | Membandingkan files, risks, commands, dan HEAD revisions dua session. |
 | `abb report` | Mencetak `session.json` terbaru. |
 | `abb summary` | Mencetak human-readable session summary terbaru. |
 | `abb commands` | Mencetak commands yang direkam di session terbaru. |
@@ -2115,6 +2173,7 @@ Penggunaan detail: [docs/USAGE.md](docs/USAGE.md)
 Setiap session menghasilkan:
 
 - `session.json`: structured metadata, events, commands, Git snapshot, risks, dan possible secrets.
+- `session-metadata.json`: compact history metadata untuk listing cepat dan pemilihan session yang aman.
 - `summary.md`: ringkasan singkat yang fokus pada review.
 - `commands.md`: command metadata yang direkam melalui `abb run`.
 - `timeline.md`: chronological file and command timeline.
@@ -2127,6 +2186,8 @@ Setiap session menghasilkan:
 Saat session dimulai, Agent Black Box menyimpan Git baseline yang berisi HEAD saat ini, branch, fingerprint index, dan path yang sudah berubah sebelumnya. Report membedakan perubahan pre-existing, path yang diamati watcher selama session, dan perubahan yang baru terdeteksi saat finalization. Analisis risk dan possible secret berfokus pada perubahan akhir yang relevan dengan session. Interactive rollback mengecualikan path yang sudah berubah saat session dimulai karena restore ke HEAD dapat menghapus pekerjaan sebelumnya.
 
 Perubahan file net yang di-commit antara HEAD awal dan akhir tetap disertakan meskipun worktree akhir bersih.
+
+Gunakan `abb sessions list`, `abb sessions show`, dan `abb sessions compare` untuk memeriksa history. Report commands menerima `--session <id>` dengan `latest`, ID penuh, atau prefix ID unik. Session incomplete dan corrupt tetap terlihat tetapi tidak dapat dipilih.
 
 Detail laporan: [docs/REPORTS.md](docs/REPORTS.md)
 
@@ -2182,7 +2243,7 @@ pnpm check
 Jalankan CLI secara lokal:
 
 ```sh
-pnpm dev -- --help
+pnpm dev --help
 ```
 
 Setelah build:
@@ -2195,7 +2256,6 @@ node dist/cli.js --help
 
 Peningkatan jangka dekat:
 
-- Riwayat session, pemilihan session eksplisit, dan perbandingan session.
 - Analisis CI tanpa watcher, exit code berbasis threshold, dan output SARIF.
 - npm publish dengan provenance dan fixture matrix lintas platform.
 - Browser laporan opsional bergaya TUI.

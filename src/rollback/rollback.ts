@@ -115,7 +115,18 @@ export async function applyRollbackPlan(repoRoot: string, plan: RollbackPlan): P
   }
 
   const git = simpleGit({ baseDir: repoRoot, binary: "git" });
-  await git.raw(["restore", "--source=HEAD", "--staged", "--worktree", "--", ...plan.restorableFiles.map((file) => file.path)]);
+  await git.raw([
+    "restore",
+    "--source=HEAD",
+    "--staged",
+    "--worktree",
+    "--",
+    ...plan.restorableFiles.map((file) => toLiteralGitPathspec(file.path))
+  ]);
+}
+
+export function toLiteralGitPathspec(filePath: string): string {
+  return `:(top,literal)${filePath.replace(/\\/g, "/")}`;
 }
 
 export function getConfirmationText(plan: RollbackPlan): string {

@@ -26,3 +26,4 @@ Do not include real secrets in reports. Use redacted values or clearly fake exam
 - Runtime behavior must not require telemetry or external APIs.
 - Rollback behavior must not discard work without explicit user confirmation.
 - Interactive rollback must exclude files whose pre-session state cannot be restored safely.
+- Rollback apply must use literal Git pathspecs and must never apply a historical session to the current worktree.

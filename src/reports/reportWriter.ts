@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { SessionReport } from "../types.js";
 import { ensureDir, writeJsonFile } from "../utils/files.js";
+import { buildSessionMetadata, SESSION_METADATA_FILE } from "../session/sessionCatalog.js";
 import {
   generateCommandsMarkdown,
   generateDiffSummaryMarkdown,
@@ -20,4 +21,5 @@ export async function writeReports(report: SessionReport): Promise<void> {
   await writeFile(path.join(report.sessionDir, "diff-summary.md"), generateDiffSummaryMarkdown(report), "utf8");
   await writeFile(path.join(report.sessionDir, "risks.md"), generateRisksMarkdown(report), "utf8");
   await writeFile(path.join(report.sessionDir, "rollback.md"), generateRollbackMarkdown(report), "utf8");
+  await writeJsonFile(path.join(report.sessionDir, SESSION_METADATA_FILE), buildSessionMetadata(report));
 }

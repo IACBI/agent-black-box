@@ -150,3 +150,20 @@ export interface SessionReport {
     discardedCommandEventLines: number;
   };
 }
+
+export interface SessionMetadata {
+  metadataVersion: 1;
+  id: string;
+  startedAt: string;
+  endedAt: string;
+  finalizedBy: string;
+  finalWorktreeChangeCount: number;
+  sessionRelevantChangeCount: number;
+  commandCount: number;
+  riskScore: number;
+  maxRiskSeverity: RiskSeverity | "none";
+  possibleSecretCount: number;
+  startHead?: string;
+  endHead?: string;
+  branch?: string;
+}

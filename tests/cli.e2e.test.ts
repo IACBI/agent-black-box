@@ -101,6 +101,8 @@ describe("CLI end-to-end", () => {
 
       const report = await runCli(repo, ["report"]);
       const session = JSON.parse(report.stdout) as {
+        id: string;
+        sessionDir: string;
         baseline: { capturedAt: string } | null;
         changeEvidence: {
           baselineAvailable: boolean;
@@ -122,10 +124,68 @@ describe("CLI end-to-end", () => {
       expect(session.commands[0]).toMatchObject({ group: "validation", phase: "smoke" });
       expect(session.git.changedFiles.some((file) => file.path === "notes.md")).toBe(false);
       expect(session.risks.some((risk) => risk.path === ".env")).toBe(false);
+
+      await expect(readFile(path.join(session.sessionDir, "session-metadata.json"), "utf8")).resolves.toContain(
+        `"id": "${session.id}"`
+      );
+
+      const secondWatcher = spawnCli(repo, ["start"]);
+      spawnedProcesses.push(secondWatcher);
+      await waitForOutput(secondWatcher, "Agent Black Box session started");
+      await writeFile(path.join(repo, "second.md"), "# Second session\n", "utf8");
+      const secondStop = await runCli(repo, ["stop"]);
+      expect(secondStop.stdout).toContain("Session stopped");
+      await waitForExit(secondWatcher);
+
+      const sessionsList = await runCli(repo, ["sessions", "list", "--json"]);
+      const catalog = JSON.parse(sessionsList.stdout) as Array<{ id: string; state: string; latest: boolean }>;
+      expect(catalog).toHaveLength(2);
+      expect(catalog.every((entry) => entry.state === "complete")).toBe(true);
+      const latest = catalog.find((entry) => entry.latest);
+      expect(latest?.id).not.toBe(session.id);
+
+      const firstPrefix = session.id.slice(0, -2);
+      const selectedSummary = await runCli(repo, ["summary", "--session", firstPrefix]);
+      expect(selectedSummary.stdout).toContain(`Session ID: \`${session.id}\``);
+      const selectedReport = await runCli(repo, ["report", "--session", firstPrefix]);
+      expect(JSON.parse(selectedReport.stdout)).toMatchObject({ id: session.id });
+      const selectedCommands = await runCli(repo, ["commands", "--session", firstPrefix]);
+      expect(selectedCommands.stdout).toContain("node --version");
+      const selectedTimeline = await runCli(repo, ["timeline", "--session", firstPrefix]);
+      expect(selectedTimeline.stdout).toContain("notes.md");
+      const selectedRisks = await runCli(repo, ["risks", "--session", firstPrefix, "--json"]);
+      expect(JSON.parse(selectedRisks.stdout)).toMatchObject({ riskSummary: { score: 0 }, risks: [] });
+      const selectedRollback = await runCli(repo, ["rollback", "--session", firstPrefix]);
+      expect(selectedRollback.stdout).toContain("Agent Black Box Rollback Hints");
+      const selectedExportPath = path.join(repo, "selected-session.md");
+      const selectedExport = await runCli(repo, [
+        "export",
+        "--session",
+        firstPrefix,
+        "--output",
+        selectedExportPath
+      ]);
+      expect(selectedExport.stdout).toContain("Export written");
+      expect(await readFile(selectedExportPath, "utf8")).toContain(`Session ID: \`${session.id}\``);
+      const selectedShow = await runCli(repo, ["sessions", "show", firstPrefix, "--json"]);
+      expect(JSON.parse(selectedShow.stdout)).toMatchObject({ id: session.id });
+
+      const comparisonResult = await runCli(repo, ["sessions", "compare", session.id, latest!.id, "--json"]);
+      const comparison = JSON.parse(comparisonResult.stdout) as {
+        files: { onlyInFrom: Array<{ path: string }>; onlyInTo: Array<{ path: string }> };
+        commands: { fromCount: number; toCount: number };
+      };
+      expect(comparison.files.onlyInFrom.map((file) => file.path)).toContain("notes.md");
+      expect(comparison.files.onlyInTo.map((file) => file.path)).toContain("second.md");
+      expect(comparison.commands).toMatchObject({ fromCount: 1, toCount: 0 });
+
+      const oldRollbackApply = await runCli(repo, ["rollback", "--apply", "--session", session.id]);
+      expect(oldRollbackApply.exitCode).toBe(1);
+      expect(oldRollbackApply.stderr).toContain("only supports the latest completed session");
     } finally {
       await removeTempDir(repo);
     }
-  }, 60_000);
+  }, 90_000);
 });
 
 function runCli(cwd: string, args: string[]): Promise<{ stdout: string; stderr: string; exitCode: number }> {

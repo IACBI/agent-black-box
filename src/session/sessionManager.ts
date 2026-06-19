@@ -15,8 +15,9 @@ import { detectRisks } from "../risks/riskDetector.js";
 import { detectPossibleSecrets } from "../risks/secretDetector.js";
 import { buildSessionReport } from "../reports/markdown.js";
 import { writeReports } from "../reports/reportWriter.js";
-import { ensureDir, getNewestDirectory, pathExists, readJsonFile, removeFileIfExists, writeJsonFile } from "../utils/files.js";
+import { ensureDir, pathExists, readJsonFile, removeFileIfExists, writeJsonFile } from "../utils/files.js";
 import { buildChangeEvidence, selectSessionRelevantChanges } from "./changeEvidence.js";
+import { listSessionCatalog, resolveSessionEntry } from "./sessionCatalog.js";
 
 const ACTIVE_SESSION_FILE = "active-session.json";
 const STOP_REQUEST_FILE = "stop-request.json";
@@ -226,7 +227,11 @@ export async function finalizeSession(
 }
 
 export async function getLatestSessionDir(repoRoot: string, config: AgentBlackBoxConfig): Promise<string | null> {
-  return getNewestDirectory(getSessionRoot(repoRoot, config));
+  const entries = await listSessionCatalog(repoRoot, config);
+  if (!entries.some((entry) => entry.state === "complete")) {
+    return null;
+  }
+  return resolveSessionEntry(entries, "latest").sessionDir;
 }
 
 export function isProcessRunning(pid: number): boolean {

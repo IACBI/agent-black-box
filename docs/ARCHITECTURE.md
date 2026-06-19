@@ -33,7 +33,9 @@ src/
 9. Start state, watcher observations, Git metadata, and final state are combined into cautious change evidence.
 10. Risk and possible-secret detectors analyze session-relevant final changes.
 11. JSON and Markdown reports are written to the session directory.
-12. `abb export` can bundle the latest session into Markdown or JSON.
+12. Compact session metadata is written last so history listing can avoid parsing every full report.
+13. The session catalog resolves `latest`, exact IDs, and unique ID prefixes without converting user input directly into filesystem paths.
+14. `abb export` can bundle a selected session into Markdown or JSON.
 
 ## Session Files
 
@@ -55,8 +57,11 @@ Final reports:
 - `diff-summary.md`
 - `risks.md`
 - `rollback.md`
+- `session-metadata.json`
 
 Malformed NDJSON event or command lines are skipped during finalization. Discarded counts and warnings are recorded in `session.json` and `summary.md`.
+
+Catalog listing reads compact metadata in bounded batches. Sessions from older versions fall back to validated `session.json` data. Incomplete and corrupt session directories remain visible in `abb sessions list` but cannot be selected for reporting or comparison.
 
 ## Safety Boundaries
 

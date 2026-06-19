@@ -34,6 +34,15 @@ abb risks --min-severity medium
 abb export --output abb-session.md
 ```
 
+Inspect and compare history:
+
+```sh
+abb sessions list
+abb sessions show <session-id>
+abb sessions compare <older-session> <newer-session>
+abb summary --session <session-id>
+```
+
 Rollback remains explicit:
 
 ```sh

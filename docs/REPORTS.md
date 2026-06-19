@@ -21,6 +21,10 @@ Structured session output containing:
 - Possible secret findings with redacted values.
 - Integrity metadata for malformed event or command records skipped during recovery.
 
+## `session-metadata.json`
+
+Compact, versioned history metadata containing session times, change and command counts, risk score, possible-secret count, branch, and start/end HEAD values. It is written after the full report set and allows `abb sessions list` to avoid loading large event arrays.
+
 ## `summary.md`
 
 Short review-first summary:
@@ -107,12 +111,18 @@ abb risks --json --min-severity medium
 
 ## Exports
 
-`abb export` creates a single review artifact from the latest session:
+`abb export` creates a single review artifact from the selected session, defaulting to the latest completed session:
 
 - Markdown export bundles `summary.md`, `commands.md`, `timeline.md`, `diff-summary.md`, `risks.md`, and `rollback.md`.
 - JSON export emits the structured `session.json`.
 - Risk filters can be applied to Markdown exports.
 - Existing output files are not overwritten unless `--force` is provided.
+
+All report and export commands accept `--session <id>`. The selector can be `latest`, a full session ID, or a unique session ID prefix.
+
+## Session comparison
+
+`abb sessions compare <from> <to>` compares session-relevant files, reported file metadata, risk findings and scores, command frequencies and failures, and start/end HEAD values. Use `--json` for structured automation output.
 
 ## `rollback.md`
 

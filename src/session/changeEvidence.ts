@@ -42,13 +42,17 @@ export function buildChangeEvidence(
 
 export function selectSessionRelevantChanges(
   finalGit: GitSnapshot,
-  evidence: SessionChangeEvidence
+  evidence: SessionChangeEvidence | undefined
 ): ChangedFile[] {
+  if (!evidence) {
+    return finalGit.changedFiles;
+  }
+
   const evidenceByPath = new Map(evidence.files.map((file) => [file.path, file]));
   const relevantFinalChanges = !evidence.baselineAvailable || evidence.indexChanged
     ? finalGit.changedFiles
     : finalGit.changedFiles.filter((file) => isSessionRelevant(evidenceByPath.get(file.path)));
-  const changesByPath = new Map(evidence.committedChanges.map((file) => [file.path, file]));
+  const changesByPath = new Map((evidence.committedChanges ?? []).map((file) => [file.path, file]));
   for (const file of relevantFinalChanges) {
     changesByPath.set(file.path, file);
   }

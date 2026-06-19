@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.7.0
+
+- Added compact `session-metadata.json` files for efficient history listing without reading every full report.
+- Added a backward-compatible session catalog that classifies complete, incomplete, and corrupt sessions.
+- Added safe selection by `latest`, exact session ID, or unique session ID prefix.
+- Added `abb sessions list`, `abb sessions show`, and `abb sessions compare` with human-readable and JSON output.
+- Added `--session` selection to report, summary, commands, timeline, risks, rollback, and export commands.
+- Added file, risk, command-frequency, and HEAD comparison across completed sessions.
+- Prevented interactive rollback apply from using older completed sessions.
+- Added unit and end-to-end coverage for legacy reports, corrupt metadata, ambiguous selectors, and two-session workflows.
+- Hardened rollback apply with literal Git pathspecs and blocked historical-session apply operations.
+- Corrected pnpm development command examples across all 12 README language sections.
+
 ## 0.6.0
 
 - Made the tag-driven release workflow idempotent when a GitHub Release already exists for the tag.

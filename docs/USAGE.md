@@ -22,7 +22,7 @@ pnpm build
 During development, use:
 
 ```sh
-pnpm dev -- <command>
+pnpm dev <command>
 ```
 
 After building, use:
@@ -122,11 +122,34 @@ abb export --output abb-session.md
 abb export --format json --output abb-session.json
 ```
 
+Select a specific completed session with a full ID, unique prefix, or `latest`:
+
+```sh
+abb summary --session session-2026-06-19
+abb risks --session session-2026-06-19 --min-severity high
+abb export --session session-2026-06-19 --output selected-session.md
+```
+
 Reports are stored under:
 
 ```text
 .agent-black-box/sessions/<session-id>/
 ```
+
+## Session History And Comparison
+
+```sh
+abb sessions list
+abb sessions list --json
+abb sessions show <session-id>
+abb sessions show <session-id> --json
+abb sessions compare <from-session> <to-session>
+abb sessions compare <from-session> <to-session> --json
+```
+
+The catalog lists complete, incomplete, and corrupt sessions. Only completed sessions can be shown, compared, exported, or selected by report commands. `latest` resolves to the newest completed session, so an active incomplete session does not hide the latest usable report.
+
+Interactive `abb rollback --apply` is restricted to the latest completed session. Historical rollback reports remain readable with `--session`, but they cannot be applied to the current worktree.
 
 ## Recommended Workflow
 

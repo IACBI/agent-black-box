@@ -13,15 +13,23 @@ import {
 import { renderDoctorReport, runDoctor } from "./doctor/doctor.js";
 import { parseExportFormat, parseRiskSeverity, renderSessionExport, writeSessionExport } from "./export/exporter.js";
 import { requireRepositoryRoot, getRepositoryRoot } from "./git/git.js";
-import { filterRiskFindings, generateRisksMarkdown } from "./reports/markdown.js";
+import { generateSessionComparisonMarkdown } from "./reports/comparison.js";
+import { filterRiskFindings, generateRisksMarkdown, generateSummaryMarkdown } from "./reports/markdown.js";
+import { renderSessionCatalog, toPublicSessionCatalog } from "./reports/sessionCatalog.js";
 import { applyRollbackPlan, confirmRollback, createRollbackPlan, renderRollbackPlan } from "./rollback/rollback.js";
 import {
   finalizeSession,
-  getLatestSessionDir,
   isProcessRunning,
   readActiveSession,
   writeStopRequest
 } from "./session/sessionManager.js";
+import {
+  listSessionCatalog,
+  readCatalogSessionReport,
+  resolveSession,
+  resolveSessionEntry
+} from "./session/sessionCatalog.js";
+import { buildSessionComparison } from "./session/sessionComparison.js";
 import { runWatcher } from "./watcher/watcher.js";
 import { pathExists } from "./utils/files.js";
 import type { SessionReport } from "./types.js";
@@ -31,7 +39,7 @@ const program = new Command();
 program
   .name("abb")
   .description("Record and explain observable repository changes during AI coding sessions.")
-  .version("0.6.0");
+  .version("0.7.0");
 
 program
   .command("init")
@@ -150,30 +158,34 @@ program
 
 program
   .command("report")
-  .description("Print the latest structured session JSON report.")
-  .action(async () => {
-    await printLatestReportFile("session.json");
+  .description("Print a structured session JSON report.")
+  .option("--session <id>", "select a session ID, unique prefix, or latest")
+  .action(async (options: { session?: string }) => {
+    await printSessionReportFile("session.json", options.session);
   });
 
 program
   .command("summary")
-  .description("Print the latest human-readable session summary.")
-  .action(async () => {
-    await printLatestReportFile("summary.md");
+  .description("Print a human-readable session summary.")
+  .option("--session <id>", "select a session ID, unique prefix, or latest")
+  .action(async (options: { session?: string }) => {
+    await printSessionReportFile("summary.md", options.session);
   });
 
 program
   .command("commands")
-  .description("Print commands recorded in the latest session.")
-  .action(async () => {
-    await printLatestReportFile("commands.md");
+  .description("Print commands recorded in a session.")
+  .option("--session <id>", "select a session ID, unique prefix, or latest")
+  .action(async (options: { session?: string }) => {
+    await printSessionReportFile("commands.md", options.session);
   });
 
 program
   .command("timeline")
   .description("Show a chronological timeline of file changes and recorded commands.")
-  .action(async () => {
-    await printLatestReportFile("timeline.md");
+  .option("--session <id>", "select a session ID, unique prefix, or latest")
+  .action(async (options: { session?: string }) => {
+    await printSessionReportFile("timeline.md", options.session);
   });
 
 program
@@ -182,14 +194,15 @@ program
   .option("--min-severity <severity>", "only include risks at or above low, medium, or high")
   .option("--category <category>", "only include risks from a specific category")
   .option("--json", "print filtered risk findings as JSON")
-  .action(async (options: { minSeverity?: string; category?: string; json?: boolean }) => {
+  .option("--session <id>", "select a session ID, unique prefix, or latest")
+  .action(async (options: { minSeverity?: string; category?: string; json?: boolean; session?: string }) => {
     if (!hasRiskOptions(options)) {
-      await printLatestReportFile("risks.md");
+      await printSessionReportFile("risks.md", options.session);
       return;
     }
 
     const repoRoot = await requireRepositoryRoot(process.cwd());
-    const report = await readLatestSessionReport(repoRoot);
+    const report = await readSelectedSessionReport(repoRoot, options.session);
     const riskFilter = {
       minSeverity: parseRiskSeverity(options.minSeverity),
       ...(options.category ? { category: options.category } : {})
@@ -218,14 +231,22 @@ program
   .description("Print safe rollback suggestions based on Git diffs.")
   .option("--apply", "interactively restore eligible tracked files from the latest session")
   .option("--file <path...>", "limit interactive restore to one or more repository-relative files")
-  .action(async (options: { apply?: boolean; file?: string[] }) => {
+  .option("--session <id>", "select a session ID, unique prefix, or latest")
+  .action(async (options: { apply?: boolean; file?: string[]; session?: string }) => {
     if (!options.apply) {
-      await printLatestReportFile("rollback.md");
+      await printSessionReportFile("rollback.md", options.session);
       return;
     }
 
     const repoRoot = await requireRepositoryRoot(process.cwd());
-    const report = await readLatestSessionReport(repoRoot);
+    const config = await loadConfig(repoRoot);
+    const entries = await listSessionCatalog(repoRoot, config);
+    const latest = resolveSessionEntry(entries, "latest");
+    const selected = resolveSessionEntry(entries, options.session);
+    if (selected.id !== latest.id) {
+      throw new Error("Interactive rollback apply only supports the latest completed session.");
+    }
+    const report = await readCatalogSessionReport(selected);
     const plan = createRollbackPlan(report, options.file ?? []);
     console.log(renderRollbackPlan(plan));
 
@@ -250,6 +271,7 @@ program
   .option("--force", "overwrite an existing output file")
   .option("--min-severity <severity>", "filter risks in Markdown exports by low, medium, or high")
   .option("--category <category>", "filter risks in Markdown exports by category")
+  .option("--session <id>", "select a session ID, unique prefix, or latest")
   .action(
     async (options: {
       format: string;
@@ -257,9 +279,10 @@ program
       force?: boolean;
       minSeverity?: string;
       category?: string;
+      session?: string;
     }) => {
       const repoRoot = await requireRepositoryRoot(process.cwd());
-      const report = await readLatestSessionReport(repoRoot);
+      const report = await readSelectedSessionReport(repoRoot, options.session);
       const content = renderSessionExport(report, {
         format: parseExportFormat(options.format),
         riskFilter: {
@@ -278,37 +301,62 @@ program
     }
   );
 
-async function printLatestReportFile(fileName: string): Promise<void> {
+const sessionsCommand = program.command("sessions").description("List, inspect, and compare recorded sessions.");
+
+sessionsCommand
+  .command("list")
+  .description("List complete, incomplete, and corrupt sessions.")
+  .option("--json", "print structured JSON")
+  .action(async (options: { json?: boolean }) => {
+    const repoRoot = await requireRepositoryRoot(process.cwd());
+    const config = await loadConfig(repoRoot);
+    const entries = await listSessionCatalog(repoRoot, config);
+    console.log(options.json ? JSON.stringify(toPublicSessionCatalog(entries), null, 2) : renderSessionCatalog(entries));
+  });
+
+sessionsCommand
+  .command("show")
+  .description("Show a session summary or normalized JSON report.")
+  .argument("<session>", "session ID, unique prefix, or latest")
+  .option("--json", "print the normalized session JSON report")
+  .action(async (session: string, options: { json?: boolean }) => {
+    const repoRoot = await requireRepositoryRoot(process.cwd());
+    const report = await readSelectedSessionReport(repoRoot, session);
+    console.log(options.json ? JSON.stringify(report, null, 2) : generateSummaryMarkdown(report));
+  });
+
+sessionsCommand
+  .command("compare")
+  .description("Compare files, risks, commands, and HEAD revisions across two sessions.")
+  .argument("<from>", "from session ID or unique prefix")
+  .argument("<to>", "to session ID or unique prefix")
+  .option("--json", "print structured comparison JSON")
+  .action(async (from: string, to: string, options: { json?: boolean }) => {
+    const repoRoot = await requireRepositoryRoot(process.cwd());
+    const config = await loadConfig(repoRoot);
+    const entries = await listSessionCatalog(repoRoot, config);
+    const fromReport = await readCatalogSessionReport(resolveSessionEntry(entries, from));
+    const toReport = await readCatalogSessionReport(resolveSessionEntry(entries, to));
+    const comparison = buildSessionComparison(fromReport, toReport);
+    console.log(options.json ? JSON.stringify(comparison, null, 2) : generateSessionComparisonMarkdown(comparison));
+  });
+
+async function printSessionReportFile(fileName: string, selector?: string): Promise<void> {
   const repoRoot = await requireRepositoryRoot(process.cwd());
   const config = await loadConfig(repoRoot);
-  const latestSessionDir = await getLatestSessionDir(repoRoot, config);
-
-  if (!latestSessionDir) {
-    throw new Error("No Agent Black Box sessions were found.");
-  }
-
-  const reportPath = path.join(latestSessionDir, fileName);
+  const selected = await resolveSession(repoRoot, config, selector);
+  await readCatalogSessionReport(selected);
+  const reportPath = path.join(selected.sessionDir, fileName);
   if (!(await pathExists(reportPath))) {
-    throw new Error(`Latest session does not contain ${fileName}.`);
+    throw new Error(`Session ${selected.id} does not contain ${fileName}.`);
   }
 
   console.log(await readFile(reportPath, "utf8"));
 }
 
-async function readLatestSessionReport(repoRoot: string): Promise<SessionReport> {
+async function readSelectedSessionReport(repoRoot: string, selector?: string): Promise<SessionReport> {
   const config = await loadConfig(repoRoot);
-  const latestSessionDir = await getLatestSessionDir(repoRoot, config);
-
-  if (!latestSessionDir) {
-    throw new Error("No Agent Black Box sessions were found.");
-  }
-
-  const reportPath = path.join(latestSessionDir, "session.json");
-  if (!(await pathExists(reportPath))) {
-    throw new Error("Latest session does not contain session.json.");
-  }
-
-  return JSON.parse(await readFile(reportPath, "utf8")) as SessionReport;
+  return readCatalogSessionReport(await resolveSession(repoRoot, config, selector));
 }
 
 async function waitForSessionToFinalize(repoRoot: string, config: Awaited<ReturnType<typeof loadConfig>>, sessionDir: string): Promise<boolean> {
