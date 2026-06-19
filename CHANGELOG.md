@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Made the tag-driven release workflow idempotent when a GitHub Release already exists for the tag.
+- Updated release documentation to avoid manual release creation before tag pushes.
+
 ## 0.5.3
 
 - Hardened Markdown report rendering for repository-controlled paths, command metadata, risk text, and integrity warnings.

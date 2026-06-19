@@ -45,6 +45,8 @@ git push origin vX.Y.Z
 
 The release workflow builds, tests, packs the npm tarball, and creates a GitHub Release with the artifact attached.
 
+Do not create the GitHub Release manually before pushing the tag. If a release already exists for the tag, the workflow updates its notes from `CHANGELOG.md` and replaces the generated tarball asset instead of failing.
+
 ## NPM Publishing
 
 NPM publishing is intentionally not automated yet. Before enabling it, add provenance, maintainer access policy, and a manual approval gate.
