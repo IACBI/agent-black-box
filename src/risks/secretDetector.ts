@@ -1,6 +1,6 @@
-import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import type { AgentBlackBoxConfig, ChangedFile, SecretFinding } from "../types.js";
+import { inspectTextFile } from "../utils/fileInspection.js";
 
 const SECRET_KEYWORD_PATTERN = /(api[_-]?key|secret|token|password|passwd|private[_-]?key|client[_-]?secret|access[_-]?key)/i;
 
@@ -41,30 +41,13 @@ export async function detectSecretsInFile(
   relativePath: string,
   maxFileSizeKb: number
 ): Promise<SecretFinding[]> {
-  let stats;
-  try {
-    stats = await stat(absolutePath);
-  } catch {
-    return [];
-  }
-
-  if (!stats.isFile() || stats.size > maxFileSizeKb * 1024) {
-    return [];
-  }
-
-  let content: string;
-  try {
-    content = await readFile(absolutePath, "utf8");
-  } catch {
-    return [];
-  }
-
-  if (content.includes("\u0000")) {
+  const inspection = await inspectTextFile(absolutePath, maxFileSizeKb * 1024);
+  if (inspection.kind !== "text" || inspection.text === undefined) {
     return [];
   }
 
   const findings: SecretFinding[] = [];
-  const lines = content.split(/\r?\n/);
+  const lines = inspection.text.split(/\r?\n/);
 
   lines.forEach((line, index) => {
     findings.push(...detectSecretsInLine(relativePath, line, index + 1));

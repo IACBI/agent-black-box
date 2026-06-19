@@ -4,6 +4,10 @@ export type ChangeStatus = "added" | "modified" | "deleted" | "renamed" | "unkno
 
 export type RiskSeverity = "low" | "medium" | "high";
 
+export type FileKind = "text" | "binary" | "large" | "missing" | "not-file" | "unknown";
+
+export type LineStatsSource = "git" | "estimated" | "skipped";
+
 export interface AgentBlackBoxConfig {
   $schema?: string;
   configVersion: 1;
@@ -47,6 +51,8 @@ export interface CommandEvent {
   command: string;
   cwd: string;
   label?: string;
+  group?: string;
+  phase?: string;
   exitCode: number | null;
   durationMs: number;
   error?: string;
@@ -57,6 +63,10 @@ export interface ChangedFile {
   status: ChangeStatus;
   insertions?: number;
   deletions?: number;
+  kind?: FileKind;
+  sizeBytes?: number;
+  lineStatsSource?: LineStatsSource;
+  statsNote?: string;
 }
 
 export interface GitSnapshot {

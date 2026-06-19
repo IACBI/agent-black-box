@@ -112,7 +112,7 @@ ${changedFiles || "No changed files were detected by Git."}
 }
 
 export function generateCommandsMarkdown(report: SessionReport): string {
-  const commands = report.commands.map((command) => formatCommandEvent(command)).join("\n");
+  const commands = formatGroupedCommands(report.commands);
 
   return `# Agent Black Box Commands
 
@@ -127,6 +127,8 @@ ${commands || "No wrapped commands were recorded."}
 export function generateSummaryMarkdown(report: SessionReport): string {
   const changedFileCount = report.git.changedFiles.length;
   const commandCount = report.commands.length;
+  const commandGroupCount = countCommandGroups(report.commands);
+  const commandPhaseCount = countCommandPhases(report.commands);
   const highRisks = report.risks.filter((risk) => risk.severity === "high").length;
   const mediumRisks = report.risks.filter((risk) => risk.severity === "medium").length;
   const lowRisks = report.risks.filter((risk) => risk.severity === "low").length;
@@ -152,6 +154,8 @@ export function generateSummaryMarkdown(report: SessionReport): string {
 
 - Changed files: ${changedFileCount}
 - Recorded commands: ${commandCount}
+- Command groups: ${commandGroupCount}
+- Command phases: ${commandPhaseCount}
 - File watcher events: ${report.events.length}
 - Possible secrets: ${report.possibleSecrets.length}
 - Risks: ${highRisks} high, ${mediumRisks} medium, ${lowRisks} low
@@ -185,8 +189,10 @@ ${formatIntegrity(report)}
 
 function formatCommandEvent(command: CommandEvent): string {
   const label = command.label ? ` [${command.label}]` : "";
+  const group = command.group ? ` group \`${command.group}\`` : "";
+  const phase = command.phase ? ` phase \`${command.phase}\`` : "";
   const cwd = command.cwd && command.cwd !== "." ? ` cwd \`${command.cwd}\`` : "";
-  return `- ${command.startedAt}${label} - command exit ${command.exitCode ?? "unknown"}${cwd} - \`${command.command}\``;
+  return `- ${command.startedAt}${label} - command exit ${command.exitCode ?? "unknown"}${group}${phase}${cwd} - \`${command.command}\``;
 }
 
 export function generateDiffSummaryMarkdown(report: SessionReport): string {
@@ -194,7 +200,10 @@ export function generateDiffSummaryMarkdown(report: SessionReport): string {
     .map((file) => {
       const insertions = file.insertions ?? 0;
       const deletions = file.deletions ?? 0;
-      return `| \`${file.path}\` | ${file.status} | ${insertions} | ${deletions} |`;
+      const kind = file.kind ?? "unknown";
+      const source = file.lineStatsSource ?? "unknown";
+      const note = file.statsNote ?? "";
+      return `| \`${escapeTableCell(file.path)}\` | ${file.status} | ${kind} | ${formatBytes(file.sizeBytes)} | ${insertions} | ${deletions} | ${source} | ${escapeTableCell(note)} |`;
     })
     .join("\n");
 
@@ -216,9 +225,9 @@ ${report.git.diffSummaryText}
 
 ## Changed files
 
-| File | Status | Added lines | Deleted lines |
-| --- | --- | ---: | ---: |
-${rows || "| None | clean | 0 | 0 |"}
+| File | Status | Kind | Size | Added lines | Deleted lines | Line stats | Note |
+| --- | --- | --- | ---: | ---: | ---: | --- | --- |
+${rows || "| None | clean | unknown | 0 B | 0 | 0 | skipped | |"}
 
 ## Notable file categories
 
@@ -351,6 +360,49 @@ ${suggestions || "No changed files were detected."}
 function summarizeNotableCategories(risks: RiskFinding[]): string {
   const categories = [...new Set(risks.map((risk) => risk.category))];
   return categories.map((category) => `- ${category}`).join("\n");
+}
+
+function formatGroupedCommands(commands: CommandEvent[]): string {
+  if (commands.length === 0) {
+    return "No wrapped commands were recorded.";
+  }
+
+  const groups = new Map<string, CommandEvent[]>();
+  for (const command of commands) {
+    const group = command.group ?? "ungrouped";
+    groups.set(group, [...(groups.get(group) ?? []), command]);
+  }
+
+  return [...groups.entries()]
+    .map(([group, groupCommands]) => {
+      const lines = groupCommands.map((command) => formatCommandEvent(command)).join("\n");
+      return `### ${group}\n\n${lines}`;
+    })
+    .join("\n\n");
+}
+
+function countCommandGroups(commands: CommandEvent[]): number {
+  return new Set(commands.filter((command) => command.group).map((command) => command.group)).size;
+}
+
+function countCommandPhases(commands: CommandEvent[]): number {
+  return new Set(commands.filter((command) => command.phase).map((command) => command.phase)).size;
+}
+
+function formatBytes(value: number | undefined): string {
+  if (value === undefined) {
+    return "unknown";
+  }
+
+  if (value < 1024) {
+    return `${value} B`;
+  }
+
+  return `${(value / 1024).toFixed(1)} KiB`;
+}
+
+function escapeTableCell(value: string): string {
+  return value.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
 }
 
 function buildReviewPriority(report: SessionReport): string {

@@ -11,5 +11,6 @@ export * from "./risks/riskDetector.js";
 export * from "./risks/secretDetector.js";
 export * from "./session/sessionManager.js";
 export * from "./types.js";
+export * from "./utils/fileInspection.js";
 export * from "./utils/files.js";
 export * from "./utils/paths.js";

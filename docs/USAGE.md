@@ -64,6 +64,7 @@ Command recording is opt-in:
 abb run -- pnpm test
 abb run -- git status --short
 abb run --cwd packages/app --label unit-tests -- pnpm test
+abb run --group validation --phase test -- pnpm test
 ```
 
 Only metadata is recorded:
@@ -71,6 +72,7 @@ Only metadata is recorded:
 - Redacted command line.
 - Working directory.
 - Optional label.
+- Optional group and phase.
 - Start and end time.
 - Duration.
 - Exit code.
@@ -78,6 +80,8 @@ Only metadata is recorded:
 Terminal output is not captured.
 
 Commands are executed without a shell. Pass the executable and arguments directly after `--`.
+
+Use `--group` for related command batches such as `validation`, `release`, or `database`. Use `--phase` for workflow stages such as `setup`, `test`, `build`, or `deploy`.
 
 Sensitive-looking assignments and flags are redacted before writing reports:
 

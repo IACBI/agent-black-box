@@ -37,9 +37,34 @@ describe("git helpers", () => {
       expect(file).toMatchObject({
         path: "new-file.txt",
         status: "added",
-        insertions: 3
+        insertions: 3,
+        deletions: 0,
+        kind: "text",
+        lineStatsSource: "estimated"
       });
       expect(snapshot.diffSummaryText).toContain("estimated");
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
+  it("classifies untracked binary files without estimating text lines", async () => {
+    const dir = await createTempDir();
+    try {
+      initGitRepo(dir);
+      await writeFile(`${dir}/image.bin`, Buffer.from([0, 1, 2, 3, 255, 0, 4]));
+
+      const snapshot = await collectGitSnapshot(dir);
+      const file = snapshot.changedFiles.find((entry) => entry.path === "image.bin");
+
+      expect(file).toMatchObject({
+        path: "image.bin",
+        status: "added",
+        kind: "binary",
+        lineStatsSource: "skipped"
+      });
+      expect(file?.insertions).toBeUndefined();
+      expect(snapshot.diffSummaryText).toContain("line counts were skipped");
     } finally {
       await removeTempDir(dir);
     }

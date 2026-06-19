@@ -1,7 +1,7 @@
-import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { simpleGit } from "simple-git";
 import type { ChangedFile, ChangeStatus, GitSnapshot } from "../types.js";
+import { inspectTextFile, type FileInspection } from "../utils/fileInspection.js";
 import { isPathExcluded, normalizePath } from "../utils/paths.js";
 
 const MAX_ESTIMATED_UNTRACKED_FILE_BYTES = 500 * 1024;
@@ -75,16 +75,26 @@ export async function collectGitSnapshot(repoRoot: string, excludePatterns: stri
     const normalizedPath = normalizePath(file.path);
     const summary = summaryByPath.get(normalizedPath);
     const status = mapStatus(file.index, file.working_dir);
-    const estimatedInsertions =
-      summary?.insertions === undefined && status === "added"
-        ? await estimateAddedTextFileInsertions(repoRoot, normalizedPath)
+    const inspectionResult =
+      status === "added" || status === "modified"
+        ? await inspectTextFile(path.join(repoRoot, normalizedPath), MAX_ESTIMATED_UNTRACKED_FILE_BYTES)
         : undefined;
+    const estimated =
+      summary?.insertions === undefined && status === "added"
+        ? estimateAddedTextFileStats(inspectionResult)
+        : undefined;
+    const lineStatsSource = summary?.insertions !== undefined || summary?.deletions !== undefined
+      ? "git"
+      : estimated?.lineStatsSource;
 
     return {
       path: normalizedPath,
       status,
-      insertions: summary?.insertions ?? estimatedInsertions,
-      deletions: summary?.deletions
+      insertions: summary?.insertions ?? estimated?.insertions,
+      deletions: summary?.deletions ?? estimated?.deletions,
+      ...(inspectionResult ? inspectionToChangedFileMetadata(inspectionResult) : {}),
+      ...(lineStatsSource ? { lineStatsSource } : {}),
+      ...(estimated?.statsNote ? { statsNote: estimated.statsNote } : {})
     };
   }));
 
@@ -132,24 +142,34 @@ function formatStatusFiles(files: ChangedFile[]): string {
   return files.map((file) => `${file.status.padEnd(8)} ${file.path}`).join("\n");
 }
 
-async function estimateAddedTextFileInsertions(repoRoot: string, relativePath: string): Promise<number | undefined> {
-  const absolutePath = path.join(repoRoot, relativePath);
+function inspectionToChangedFileMetadata(inspection: FileInspection): Pick<ChangedFile, "kind" | "sizeBytes"> {
+  return {
+    kind: inspection.kind,
+    ...(inspection.sizeBytes !== undefined ? { sizeBytes: inspection.sizeBytes } : {})
+  };
+}
 
-  try {
-    const stats = await stat(absolutePath);
-    if (!stats.isFile() || stats.size > MAX_ESTIMATED_UNTRACKED_FILE_BYTES) {
-      return undefined;
-    }
-
-    const content = await readFile(absolutePath, "utf8");
-    if (content.includes("\u0000")) {
-      return undefined;
-    }
-
-    return countLines(content);
-  } catch {
+function estimateAddedTextFileStats(
+  inspection: FileInspection | undefined
+): Pick<ChangedFile, "insertions" | "deletions" | "lineStatsSource" | "statsNote"> | undefined {
+  if (!inspection) {
     return undefined;
   }
+
+  if (inspection.kind !== "text" || inspection.text === undefined) {
+    return {
+      deletions: 0,
+      lineStatsSource: "skipped",
+      statsNote: inspection.reason ?? `Skipped line estimation for ${inspection.kind} file.`
+    };
+  }
+
+  return {
+    insertions: countLines(inspection.text),
+    deletions: 0,
+    lineStatsSource: "estimated",
+    statsNote: "Estimated from untracked text file contents."
+  };
 }
 
 function countLines(content: string): number {
@@ -177,8 +197,12 @@ function formatDiffSummary(unstagedStat: string, stagedStat: string, changedFile
     return sections.join("\n\n");
   }
 
-  if (changedFiles.some((file) => file.status === "added" && file.insertions !== undefined)) {
+  if (changedFiles.some((file) => file.status === "added" && file.lineStatsSource === "estimated")) {
     return "No tracked Git diff was detected. Added-line counts for untracked text files were estimated from file contents.";
+  }
+
+  if (changedFiles.some((file) => file.status === "added" && file.lineStatsSource === "skipped")) {
+    return "No tracked Git diff was detected. Some untracked files were binary, large, missing, or not regular files, so line counts were skipped.";
   }
 
   return "No tracked Git diff was detected.";

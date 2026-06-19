@@ -68,6 +68,8 @@ describe("session manager", () => {
         command: "pnpm test",
         cwd: ".",
         label: "tests",
+        group: "validation",
+        phase: "test",
         exitCode: 0,
         durationMs: 1000
       });
@@ -79,6 +81,8 @@ describe("session manager", () => {
           command: "pnpm test",
           cwd: ".",
           label: "tests",
+          group: "validation",
+          phase: "test",
           exitCode: 0,
           durationMs: 1000
         }

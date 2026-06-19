@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0
+
+- Added shared binary/text file inspection for Git snapshots and possible secret scanning.
+- Improved untracked file diff metadata with file kind, size, line-stat source, and skipped-line notes.
+- Added command grouping and phase metadata through `abb run --group` and `abb run --phase`.
+- Updated command, timeline, summary, and diff reports to show group, phase, file kind, size, and stat-source details.
+- Added coverage for binary detection, large-file classification, grouped command reporting, and updated CLI E2E behavior.
+
 ## 0.4.0
 
 - Added versioned config support with JSON Schema, validation, and migration commands.

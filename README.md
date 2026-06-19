@@ -36,7 +36,7 @@ pnpm dev -- start
 In another terminal, run commands through Agent Black Box when you want command metadata recorded:
 
 ```sh
-pnpm dev -- run -- pnpm test
+pnpm dev -- run --group validation --phase test -- pnpm test
 ```
 
 Stop and generate reports:
@@ -65,7 +65,7 @@ Reports are written to:
 | `abb config migrate` | Rewrite config using the current schema version. |
 | `abb start` | Start a foreground recording session in the current Git repository. |
 | `abb doctor` | Check local prerequisites, repository state, config, and session health. |
-| `abb run -- <command>` | Run a command and record redacted command metadata for the active session. |
+| `abb run -- <command>` | Run a command and record redacted command metadata for the active session. Supports `--group` and `--phase`. |
 | `abb stop` | Stop the active session and generate reports. |
 | `abb status` | Show whether a session is active, stale, or absent. |
 | `abb report` | Print the latest `session.json`. |
@@ -90,7 +90,7 @@ Each session produces:
 - `risks.md`: risky files, possible secrets, dependency/config changes, CI/CD changes, and review checklist.
 - `rollback.md`: manual review and rollback suggestions.
 
-`session.json` also includes a deterministic risk summary and integrity metadata for malformed session records skipped during recovery.
+`session.json` also includes deterministic risk summary, file kind and size metadata where available, line-stat source details, and integrity metadata for malformed session records skipped during recovery.
 
 Report details: [docs/REPORTS.md](docs/REPORTS.md)
 
@@ -159,10 +159,9 @@ node dist/cli.js --help
 
 Near-term improvements:
 
-- Better command grouping in reports.
-- Stronger binary file detection.
-- More precise diff stats for untracked files.
 - Optional TUI-style report browser.
+- npm publish preparation.
+- Repository fixture suite for more language ecosystems.
 
 Out of scope for the MVP:
 

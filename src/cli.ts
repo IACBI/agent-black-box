@@ -31,7 +31,7 @@ const program = new Command();
 program
   .name("abb")
   .description("Record and explain observable repository changes during AI coding sessions.")
-  .version("0.4.0");
+  .version("0.5.0");
 
 program
   .command("init")
@@ -138,10 +138,12 @@ program
   .description("Run a command during an active session and record redacted command metadata.")
   .option("--cwd <path>", "run command from a repository-relative directory")
   .option("--label <label>", "attach a short label to the recorded command")
+  .option("--group <group>", "group related recorded commands in reports")
+  .option("--phase <phase>", "mark a command phase such as setup, test, build, or release")
   .allowUnknownOption(true)
   .allowExcessArguments(true)
   .argument("<command...>", "command and arguments to run")
-  .action(async (commandParts: string[], options: { cwd?: string; label?: string }) => {
+  .action(async (commandParts: string[], options: { cwd?: string; label?: string; group?: string; phase?: string }) => {
     const exitCode = await recordAndRunCommand(commandParts, process.cwd(), options);
     process.exitCode = exitCode;
   });

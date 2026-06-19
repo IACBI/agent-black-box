@@ -17,8 +17,8 @@ abb start
 In another terminal, run commands through Agent Black Box when command metadata should be recorded:
 
 ```sh
-abb run --label tests -- pnpm test
-abb run --cwd packages/app --label app-build -- pnpm build
+abb run --label tests --group validation --phase test -- pnpm test
+abb run --cwd packages/app --label app-build --group validation --phase build -- pnpm build
 ```
 
 Stop and review:

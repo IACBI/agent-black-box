@@ -40,7 +40,20 @@ describe("CLI end-to-end", () => {
       await writeFile(path.join(repo, "notes.md"), "# Notes\n\nhello\n", "utf8");
       await mkdir(path.join(repo, "packages", "app"), { recursive: true });
 
-      const command = await runCli(repo, ["run", "--cwd", "packages/app", "--label", "node-version", "--", "node", "--version"]);
+      const command = await runCli(repo, [
+        "run",
+        "--cwd",
+        "packages/app",
+        "--label",
+        "node-version",
+        "--group",
+        "validation",
+        "--phase",
+        "smoke",
+        "--",
+        "node",
+        "--version"
+      ]);
       expect(command.exitCode).toBe(0);
       expect(command.stdout).toContain(process.version);
 
@@ -51,12 +64,15 @@ describe("CLI end-to-end", () => {
       const timeline = await runCli(repo, ["timeline"]);
       expect(timeline.stdout).toContain("node --version");
       expect(timeline.stdout).toContain("[node-version]");
+      expect(timeline.stdout).toContain("group `validation`");
+      expect(timeline.stdout).toContain("phase `smoke`");
       expect(timeline.stdout).toContain("packages/app");
       expect(timeline.stdout).toContain("notes.md");
 
       const commands = await runCli(repo, ["commands"]);
       expect(commands.stdout).toContain("Recorded commands");
       expect(commands.stdout).toContain("node --version");
+      expect(commands.stdout).toContain("### validation");
 
       const summary = await runCli(repo, ["summary"]);
       expect(summary.stdout).toContain("Agent Black Box Summary");
@@ -77,8 +93,12 @@ describe("CLI end-to-end", () => {
       expect(await readFile(exportPath, "utf8")).toContain("Agent Black Box Summary");
 
       const report = await runCli(repo, ["report"]);
-      const session = JSON.parse(report.stdout) as { commands: unknown[]; git: { changedFiles: Array<{ path: string }> } };
+      const session = JSON.parse(report.stdout) as {
+        commands: Array<{ group?: string; phase?: string }>;
+        git: { changedFiles: Array<{ path: string }> };
+      };
       expect(session.commands).toHaveLength(1);
+      expect(session.commands[0]).toMatchObject({ group: "validation", phase: "smoke" });
       expect(session.git.changedFiles.some((file) => file.path === "notes.md")).toBe(true);
     } finally {
       await removeTempDir(repo);

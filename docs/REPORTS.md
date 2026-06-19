@@ -10,6 +10,7 @@ Structured session output containing:
 - File events observed by the watcher.
 - Commands explicitly run through `abb run`.
 - Git branch, status, diff summary, and changed files.
+- File kind, size, and line-stat source where available.
 - Risk findings.
 - Risk score, maximum severity, severity counts, and possible-secret count.
 - Possible secret findings with redacted values.
@@ -38,6 +39,7 @@ Command metadata explicitly recorded through `abb run`:
 
 - Redacted command line.
 - Optional label.
+- Optional group and phase.
 - Repository-relative working directory.
 - Exit code.
 - Timestamp.
@@ -63,10 +65,11 @@ Git-focused summary:
 - Current Git status.
 - Tracked Git diff summary.
 - Changed file table with line counts where available.
+- File kind, byte size, line-stat source, and skipped-estimation notes.
 - Estimated added-line counts for small untracked text files.
 - Notable risk categories.
 
-Line counts for untracked files are best-effort estimates. Large files and binary-like files are skipped.
+Line counts for untracked files are best-effort estimates. Large files, binary-like files, missing files, and non-regular files are explicitly marked as skipped instead of being reported as zero-line text changes.
 
 ## `risks.md`
 

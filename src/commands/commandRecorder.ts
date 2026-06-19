@@ -11,6 +11,8 @@ const SENSITIVE_PATTERN = /(api[_-]?key|secret|token|password|passwd|private[_-]
 export interface RecordCommandOptions {
   cwd?: string;
   label?: string;
+  group?: string;
+  phase?: string;
 }
 
 export async function recordAndRunCommand(commandParts: string[], cwd: string, options: RecordCommandOptions = {}): Promise<number> {
@@ -45,7 +47,9 @@ export async function recordAndRunCommand(commandParts: string[], cwd: string, o
     endedAt: endedAtDate.toISOString(),
     command: redactedCommand,
     cwd: toRepoRelative(repoRoot, runCwd) || ".",
-    ...(options.label ? { label: options.label } : {}),
+    ...optionalMetadata("label", options.label),
+    ...optionalMetadata("group", options.group),
+    ...optionalMetadata("phase", options.phase),
     exitCode: result.exitCode,
     durationMs: endedAtDate.getTime() - startedAtDate.getTime(),
     ...(result.error ? { error: result.error } : {})
@@ -116,6 +120,15 @@ export function redactCommandParts(parts: string[]): string[] {
 
 export function formatCommand(parts: string[]): string {
   return parts.map(quoteCommandPart).join(" ");
+}
+
+function optionalMetadata<K extends "label" | "group" | "phase">(key: K, value: string | undefined): Partial<Record<K, string>> {
+  const normalized = value?.trim().replace(/\s+/g, " ");
+  if (!normalized) {
+    return {};
+  }
+
+  return { [key]: normalized.slice(0, 80) } as Partial<Record<K, string>>;
 }
 
 function spawnCommand(commandParts: string[], cwd: string): Promise<{ exitCode: number | null; error?: string }> {

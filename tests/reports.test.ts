@@ -27,6 +27,8 @@ const baseReport = buildSessionReport(
       command: "pnpm test",
       cwd: ".",
       label: "tests",
+      group: "validation",
+      phase: "test",
       exitCode: 0,
       durationMs: 1000
     }
@@ -58,13 +60,15 @@ describe("markdown reports", () => {
     expect(markdown).toContain("Recorded commands");
     expect(markdown).toContain("pnpm test");
     expect(markdown).toContain("[tests]");
+    expect(markdown).toContain("### validation");
+    expect(markdown).toContain("phase `test`");
   });
 
   it("generates diff summary", () => {
     const markdown = generateDiffSummaryMarkdown(baseReport);
 
     expect(markdown).toContain("Git status");
-    expect(markdown).toContain("| `src/index.ts` | modified | 2 | 0 |");
+    expect(markdown).toContain("| `src/index.ts` | modified | unknown | unknown | 2 | 0 | unknown |  |");
   });
 
   it("generates an executive summary", () => {
@@ -72,6 +76,8 @@ describe("markdown reports", () => {
 
     expect(markdown).toContain("Agent Black Box Summary");
     expect(markdown).toContain("Changed files: 1");
+    expect(markdown).toContain("Command groups: 1");
+    expect(markdown).toContain("Command phases: 1");
     expect(markdown).toContain("Possible secrets: 1");
     expect(markdown).toContain("Risk score:");
     expect(markdown).toContain("Review `risks.md` first");

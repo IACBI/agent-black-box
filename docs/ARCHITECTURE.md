@@ -69,6 +69,7 @@ Malformed NDJSON event or command lines are skipped during finalization. Discard
 
 - File watching ignores common heavy directories such as `node_modules`, `.git`, `dist`, `build`, `coverage`, `.next`, and `.agent-black-box`.
 - Secret scanning skips deleted files, binary-like files, and files larger than the configured `maxFileSizeKb`.
-- Added-line estimation for untracked files only reads small text files.
+- Shared file inspection classifies text, binary, large, missing, and non-regular files before estimating untracked line counts or scanning for possible secrets.
+- Added-line estimation for untracked files only reads small text files and records when line stats were skipped.
 - File and command events are appended as NDJSON to avoid rewriting large session state while recording.
 - Session locking uses an atomic lock file and recovers stale locks left by crashed processes.

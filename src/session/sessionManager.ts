@@ -351,6 +351,8 @@ function isCommandEvent(value: unknown): value is CommandEvent {
     typeof value.command === "string" &&
     typeof value.cwd === "string" &&
     (typeof value.label === "string" || value.label === undefined) &&
+    (typeof value.group === "string" || value.group === undefined) &&
+    (typeof value.phase === "string" || value.phase === undefined) &&
     (typeof value.exitCode === "number" || value.exitCode === null) &&
     typeof value.durationMs === "number" &&
     (typeof value.error === "string" || value.error === undefined)
