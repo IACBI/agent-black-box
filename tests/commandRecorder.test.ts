@@ -1,4 +1,4 @@
-import { mkdir, symlink } from "node:fs/promises";
+import { mkdir, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_CONFIG } from "../src/config/defaults.js";
@@ -100,6 +100,7 @@ describe("command recorder", () => {
     const dir = await createTempDir();
     try {
       initGitRepo(dir);
+      await writeFile(path.join(dir, "package.json"), '{"packageManager":"pnpm@10.30.3"}\n', "utf8");
       const session = await createSession(dir, DEFAULT_CONFIG);
 
       await expect(recordAndRunCommand(["pnpm", "--version"], dir)).resolves.toBe(0);

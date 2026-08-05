@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, realpath, writeFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { collectGitChangesBetween, collectGitSnapshot, getRepositoryRoot, isGitRepository } from "../src/git/git.js";
 import { createTempDir, initGitRepo, removeTempDir } from "./testUtils.js";
@@ -20,7 +20,7 @@ describe("git helpers", () => {
     try {
       initGitRepo(dir);
       await expect(isGitRepository(dir)).resolves.toBe(true);
-      await expect(getRepositoryRoot(dir)).resolves.toBe(dir.replace(/\\/g, "/"));
+      await expect(getRepositoryRoot(dir)).resolves.toBe((await realpath(dir)).replace(/\\/g, "/"));
     } finally {
       await removeTempDir(dir);
     }

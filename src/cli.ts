@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFile } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import { Command } from "commander";
 import {
@@ -57,7 +57,7 @@ program
   .action(async () => {
     const root = (await getRepositoryRoot(process.cwd())) ?? process.cwd();
     const configPath = await createDefaultConfig(root);
-    console.log(`Created ${path.relative(process.cwd(), configPath) || configPath}`);
+    console.log(`Created ${await displayPathFromCurrentDirectory(configPath)}`);
   });
 
 const configCommand = program.command("config").description("Validate or migrate Agent Black Box config.");
@@ -79,7 +79,7 @@ configCommand
     const root = (await getRepositoryRoot(process.cwd())) ?? process.cwd();
     const result = await migrateConfigFile(root);
     console.log(renderConfigLoadResult(result));
-    console.log(`Migrated ${path.relative(process.cwd(), result.configPath) || result.configPath}`);
+    console.log(`Migrated ${await displayPathFromCurrentDirectory(result.configPath)}`);
   });
 
 program
@@ -439,6 +439,11 @@ async function waitForSessionToFinalize(
   }
 
   return false;
+}
+
+async function displayPathFromCurrentDirectory(targetPath: string): Promise<string> {
+  const [currentDirectory, resolvedTarget] = await Promise.all([realpath(process.cwd()), realpath(targetPath)]);
+  return path.relative(currentDirectory, resolvedTarget) || path.basename(resolvedTarget);
 }
 
 function renderConfigLoadResult(result: Awaited<ReturnType<typeof loadConfigWithMeta>>): string {
