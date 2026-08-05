@@ -1,7 +1,13 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { createDefaultConfig, getConfigPath, loadConfig, loadConfigWithMeta, migrateConfigFile } from "../src/config/config.js";
+import {
+  createDefaultConfig,
+  getConfigPath,
+  loadConfig,
+  loadConfigWithMeta,
+  migrateConfigFile,
+} from "../src/config/config.js";
 import { DEFAULT_CONFIG } from "../src/config/defaults.js";
 import { createTempDir, removeTempDir } from "./testUtils.js";
 
@@ -39,7 +45,7 @@ describe("config", () => {
       await expect(loadConfig(dir)).resolves.toEqual({
         ...DEFAULT_CONFIG,
         exclude: ["tmp"],
-        maxFileSizeKb: 42
+        maxFileSizeKb: 42,
       });
     } finally {
       await removeTempDir(dir);
@@ -71,11 +77,35 @@ describe("config", () => {
   it("rejects unsupported future config versions", async () => {
     const dir = await createTempDir();
     try {
-      await writeFile(path.join(dir, ".agentblackbox.json"), JSON.stringify({ ...DEFAULT_CONFIG, configVersion: 99 }), "utf8");
+      await writeFile(
+        path.join(dir, ".agentblackbox.json"),
+        JSON.stringify({ ...DEFAULT_CONFIG, configVersion: 99 }),
+        "utf8"
+      );
 
       await expect(loadConfig(dir)).rejects.toThrow("configVersion must be 1");
     } finally {
       await removeTempDir(dir);
+    }
+  });
+
+  it("warns when an absolute session directory is outside the repository", async () => {
+    const dir = await createTempDir();
+    const externalDir = await createTempDir();
+    try {
+      await writeFile(
+        path.join(dir, ".agentblackbox.json"),
+        JSON.stringify({ ...DEFAULT_CONFIG, sessionDir: externalDir }),
+        "utf8"
+      );
+
+      const result = await loadConfigWithMeta(dir);
+
+      expect(result.config.sessionDir).toBe(externalDir);
+      expect(result.warnings.join("\n")).toContain("outside the repository");
+    } finally {
+      await removeTempDir(dir);
+      await removeTempDir(externalDir);
     }
   });
 });

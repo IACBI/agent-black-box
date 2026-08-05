@@ -9,15 +9,7 @@ export const DEFAULT_CONFIG: AgentBlackBoxConfig = {
   $schema: CONFIG_SCHEMA_URL,
   configVersion: CURRENT_CONFIG_VERSION,
   sessionDir: ".agent-black-box/sessions",
-  exclude: [
-    "node_modules",
-    ".git",
-    "dist",
-    "build",
-    "coverage",
-    ".next",
-    ".agent-black-box"
-  ],
+  exclude: ["node_modules", ".git", "dist", "build", "coverage", ".next", ".agent-black-box"],
   riskPatterns: [
     ".env",
     ".github/workflows",
@@ -34,7 +26,7 @@ export const DEFAULT_CONFIG: AgentBlackBoxConfig = {
     "migrations",
     "auth",
     "security",
-    "config"
+    "config",
   ],
-  maxFileSizeKb: 500
+  maxFileSizeKb: 500,
 };

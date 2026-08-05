@@ -43,7 +43,15 @@ describe("CLI end-to-end", () => {
       execFileSync("git", ["add", "notes.md"], { cwd: repo });
       execFileSync(
         "git",
-        ["-c", "user.name=Agent Black Box Tests", "-c", "user.email=tests@example.invalid", "commit", "-m", "add notes"],
+        [
+          "-c",
+          "user.name=Agent Black Box Tests",
+          "-c",
+          "user.email=tests@example.invalid",
+          "commit",
+          "-m",
+          "add notes",
+        ],
         { cwd: repo }
       );
 
@@ -59,7 +67,7 @@ describe("CLI end-to-end", () => {
         "smoke",
         "--",
         "node",
-        "--version"
+        "--version",
       ]);
       expect(command.exitCode).toBe(0);
       expect(command.stdout).toContain(process.version);
@@ -158,13 +166,7 @@ describe("CLI end-to-end", () => {
       const selectedRollback = await runCli(repo, ["rollback", "--session", firstPrefix]);
       expect(selectedRollback.stdout).toContain("Agent Black Box Rollback Hints");
       const selectedExportPath = path.join(repo, "selected-session.md");
-      const selectedExport = await runCli(repo, [
-        "export",
-        "--session",
-        firstPrefix,
-        "--output",
-        selectedExportPath
-      ]);
+      const selectedExport = await runCli(repo, ["export", "--session", firstPrefix, "--output", selectedExportPath]);
       expect(selectedExport.stdout).toContain("Export written");
       expect(await readFile(selectedExportPath, "utf8")).toContain(`Session ID: \`${session.id}\``);
       const selectedShow = await runCli(repo, ["sessions", "show", firstPrefix, "--json"]);
@@ -194,7 +196,7 @@ function runCli(cwd: string, args: string[]): Promise<{ stdout: string; stderr: 
       resolve({
         stdout,
         stderr,
-        exitCode: typeof error?.code === "number" ? error.code : 0
+        exitCode: typeof error?.code === "number" ? error.code : 0,
       });
     });
   });
@@ -203,7 +205,7 @@ function runCli(cwd: string, args: string[]): Promise<{ stdout: string; stderr: 
 function spawnCli(cwd: string, args: string[]): ChildProcessWithoutNullStreams {
   return spawn(process.execPath, ["--import", tsxLoader, cliPath, ...args], {
     cwd,
-    stdio: "pipe"
+    stdio: "pipe",
   });
 }
 

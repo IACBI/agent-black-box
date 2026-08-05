@@ -17,5 +17,6 @@ export * from "./session/sessionCatalog.js";
 export * from "./session/sessionComparison.js";
 export * from "./types.js";
 export * from "./utils/fileInspection.js";
+export * from "./utils/concurrency.js";
 export * from "./utils/files.js";
 export * from "./utils/paths.js";

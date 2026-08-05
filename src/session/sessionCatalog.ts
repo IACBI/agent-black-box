@@ -8,7 +8,7 @@ import type {
   RiskFinding,
   SecretFinding,
   SessionMetadata,
-  SessionReport
+  SessionReport,
 } from "../types.js";
 import { summarizeRisks } from "../risks/riskDetector.js";
 import { pathExists } from "../utils/files.js";
@@ -56,7 +56,7 @@ export function buildSessionMetadata(report: SessionReport): SessionMetadata {
     possibleSecretCount: report.possibleSecrets.length,
     ...(report.baseline?.git.head ? { startHead: report.baseline.git.head } : {}),
     ...(report.git.head ? { endHead: report.git.head } : {}),
-    ...(report.git.branch ? { branch: report.git.branch } : {})
+    ...(report.git.branch ? { branch: report.git.branch } : {}),
   };
 }
 
@@ -75,16 +75,15 @@ export async function listSessionCatalog(
   const entries: SessionCatalogEntry[] = [];
 
   for (let offset = 0; offset < directories.length; offset += CATALOG_BATCH_SIZE) {
-    entries.push(...(await Promise.all(directories.slice(offset, offset + CATALOG_BATCH_SIZE).map(inspectSessionDirectory))));
+    entries.push(
+      ...(await Promise.all(directories.slice(offset, offset + CATALOG_BATCH_SIZE).map(inspectSessionDirectory)))
+    );
   }
 
   return entries.sort(compareCatalogEntries);
 }
 
-export function resolveSessionEntry(
-  entries: SessionCatalogEntry[],
-  selector: string | undefined
-): SessionCatalogEntry {
+export function resolveSessionEntry(entries: SessionCatalogEntry[], selector: string | undefined): SessionCatalogEntry {
   if (entries.length === 0) {
     throw new Error("No Agent Black Box sessions were found.");
   }
@@ -163,7 +162,7 @@ async function inspectSessionDirectory(directory: { id: string; sessionDir: stri
     if (report && report.id === directory.id) {
       return {
         ...metadataToCatalogEntry(directory.sessionDir, buildSessionMetadata(report)),
-        ...(await pathExists(metadataPath) ? { warning: "Invalid metadata; derived from session.json." } : {})
+        ...((await pathExists(metadataPath)) ? { warning: "Invalid metadata; derived from session.json." } : {}),
       };
     }
     return corruptEntry(directory, reportResult.error ?? "session.json has an unexpected shape");
@@ -176,7 +175,7 @@ async function inspectSessionDirectory(directory: { id: string; sessionDir: stri
         id: directory.id,
         sessionDir: directory.sessionDir,
         state: "incomplete",
-        startedAt: startResult.value.startedAt
+        startedAt: startResult.value.startedAt,
       };
     }
     return corruptEntry(directory, startResult.error ?? "session-start.json has an unexpected shape");
@@ -201,19 +200,16 @@ function metadataToCatalogEntry(sessionDir: string, metadata: SessionMetadata): 
     possibleSecretCount: metadata.possibleSecretCount,
     ...(metadata.startHead ? { startHead: metadata.startHead } : {}),
     ...(metadata.endHead ? { endHead: metadata.endHead } : {}),
-    ...(metadata.branch ? { branch: metadata.branch } : {})
+    ...(metadata.branch ? { branch: metadata.branch } : {}),
   };
 }
 
-function corruptEntry(
-  directory: { id: string; sessionDir: string },
-  warning: string
-): SessionCatalogEntry {
+function corruptEntry(directory: { id: string; sessionDir: string }, warning: string): SessionCatalogEntry {
   return {
     id: directory.id,
     sessionDir: directory.sessionDir,
     state: "corrupt",
-    warning: sanitizeSingleLine(warning)
+    warning: sanitizeSingleLine(warning),
   };
 }
 
@@ -245,7 +241,9 @@ function isSessionMetadata(value: unknown): value is SessionMetadata {
     isNonNegativeInteger(value.finalWorktreeChangeCount) &&
     isNonNegativeInteger(value.sessionRelevantChangeCount) &&
     isNonNegativeInteger(value.commandCount) &&
-    typeof value.riskScore === "number" && value.riskScore >= 0 && value.riskScore <= 100 &&
+    typeof value.riskScore === "number" &&
+    value.riskScore >= 0 &&
+    value.riskScore <= 100 &&
     ["none", "low", "medium", "high"].includes(String(value.maxRiskSeverity)) &&
     isNonNegativeInteger(value.possibleSecretCount) &&
     (typeof value.startHead === "string" || value.startHead === undefined) &&
@@ -274,12 +272,21 @@ export function parseSessionReport(value: unknown): SessionReport | null {
     return null;
   }
 
-  const events = value.events === undefined ? [] : Array.isArray(value.events) && value.events.every(isFileEvent) ? value.events : null;
-  const commands = value.commands === undefined ? [] : Array.isArray(value.commands) && value.commands.every(isCommandEvent) ? value.commands : null;
+  const events =
+    value.events === undefined
+      ? []
+      : Array.isArray(value.events) && value.events.every(isFileEvent)
+        ? value.events
+        : null;
+  const commands =
+    value.commands === undefined
+      ? []
+      : Array.isArray(value.commands) && value.commands.every(isCommandEvent)
+        ? value.commands
+        : null;
   const risks = Array.isArray(value.risks) ? normalizeRiskFindings(value.risks) : null;
-  const possibleSecrets = Array.isArray(value.possibleSecrets) && value.possibleSecrets.every(isSecretFinding)
-    ? value.possibleSecrets
-    : [];
+  const possibleSecrets =
+    Array.isArray(value.possibleSecrets) && value.possibleSecrets.every(isSecretFinding) ? value.possibleSecrets : [];
   if (!events || !commands || !risks) {
     return null;
   }
@@ -289,9 +296,7 @@ export function parseSessionReport(value: unknown): SessionReport | null {
   const changeEvidence = isSessionChangeEvidence(value.changeEvidence)
     ? value.changeEvidence
     : buildChangeEvidence(null, events, git);
-  const riskSummary = isRiskSummary(value.riskSummary)
-    ? value.riskSummary as unknown as SessionReport["riskSummary"]
-    : summarizeRisks(risks, possibleSecrets);
+  const riskSummary = isRiskSummary(value.riskSummary) ? value.riskSummary : summarizeRisks(risks, possibleSecrets);
   const integrity = isSessionIntegrity(value.integrity)
     ? value.integrity
     : { warnings: [], discardedFileEventLines: 0, discardedCommandEventLines: 0 };
@@ -300,7 +305,7 @@ export function parseSessionReport(value: unknown): SessionReport | null {
     : {
         implemented: commands.length > 0,
         mode: "wrapper-only" as const,
-        note: "Legacy session report normalized by a newer Agent Black Box version."
+        note: "Legacy session report normalized by a newer Agent Black Box version.",
       };
 
   return {
@@ -319,7 +324,7 @@ export function parseSessionReport(value: unknown): SessionReport | null {
     risks,
     riskSummary,
     possibleSecrets,
-    integrity
+    integrity,
   };
 }
 
@@ -330,7 +335,8 @@ function isChangedFile(value: unknown): value is ChangedFile {
     ["added", "modified", "deleted", "renamed", "unknown"].includes(String(value.status)) &&
     isOptionalNonNegativeNumber(value.insertions) &&
     isOptionalNonNegativeNumber(value.deletions) &&
-    (value.kind === undefined || ["text", "binary", "large", "missing", "not-file", "unknown"].includes(String(value.kind))) &&
+    (value.kind === undefined ||
+      ["text", "binary", "large", "missing", "not-file", "unknown"].includes(String(value.kind))) &&
     isOptionalNonNegativeNumber(value.sizeBytes) &&
     (value.lineStatsSource === undefined || ["git", "estimated", "skipped"].includes(String(value.lineStatsSource))) &&
     (typeof value.statsNote === "string" || value.statsNote === undefined)
@@ -407,7 +413,8 @@ function isCommandEvent(value: unknown): value is CommandEvent {
     (typeof value.group === "string" || value.group === undefined) &&
     (typeof value.phase === "string" || value.phase === undefined) &&
     (Number.isInteger(value.exitCode) || value.exitCode === null) &&
-    isOptionalNonNegativeNumber(value.durationMs) && value.durationMs !== undefined &&
+    isOptionalNonNegativeNumber(value.durationMs) &&
+    value.durationMs !== undefined &&
     (typeof value.error === "string" || value.error === undefined)
   );
 }
@@ -429,10 +436,15 @@ function normalizeRiskFindings(values: unknown[]): RiskFinding[] | null {
       path: value.path,
       category: value.category,
       severity,
-      score: typeof value.score === "number" && value.score >= 0 && value.score <= 100
-        ? value.score
-        : severity === "high" ? 90 : severity === "medium" ? 60 : 30,
-      reason: value.reason
+      score:
+        typeof value.score === "number" && value.score >= 0 && value.score <= 100
+          ? value.score
+          : severity === "high"
+            ? 90
+            : severity === "medium"
+              ? 60
+              : 30,
+      reason: value.reason,
     });
   }
   return findings;

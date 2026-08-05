@@ -2,36 +2,46 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { Command } from "commander";
+import {
+  analyzeChangedFiles,
+  type AnalysisFinding,
+  type AnalysisInputFile,
+  type WatcherlessAnalysisResult,
+} from "./analyze/analyzer.js";
 import { recordAndRunCommand } from "./commands/commandRecorder.js";
 import {
   createDefaultConfig,
   formatConfigProblems,
   loadConfig,
   loadConfigWithMeta,
-  migrateConfigFile
+  migrateConfigFile,
 } from "./config/config.js";
 import { renderDoctorReport, runDoctor } from "./doctor/doctor.js";
 import { parseExportFormat, parseRiskSeverity, renderSessionExport, writeSessionExport } from "./export/exporter.js";
-import { requireRepositoryRoot, getRepositoryRoot } from "./git/git.js";
+import { collectGitSnapshot, requireRepositoryRoot, getRepositoryRoot } from "./git/git.js";
 import { generateSessionComparisonMarkdown } from "./reports/comparison.js";
 import { filterRiskFindings, generateRisksMarkdown, generateSummaryMarkdown } from "./reports/markdown.js";
 import { renderSessionCatalog, toPublicSessionCatalog } from "./reports/sessionCatalog.js";
 import { applyRollbackPlan, confirmRollback, createRollbackPlan, renderRollbackPlan } from "./rollback/rollback.js";
 import {
-  finalizeSession,
+  inspectSessionRecoveryState,
   isProcessRunning,
   readActiveSession,
-  writeStopRequest
+  recoverActiveSession,
+  writeStopRequest,
 } from "./session/sessionManager.js";
 import {
   listSessionCatalog,
   readCatalogSessionReport,
   resolveSession,
-  resolveSessionEntry
+  resolveSessionEntry,
 } from "./session/sessionCatalog.js";
 import { buildSessionComparison } from "./session/sessionComparison.js";
 import { runWatcher } from "./watcher/watcher.js";
 import { pathExists } from "./utils/files.js";
+import { inspectTextFile } from "./utils/fileInspection.js";
+import { mapWithConcurrency } from "./utils/concurrency.js";
+import { resolveRepoPath } from "./utils/paths.js";
 import type { SessionReport } from "./types.js";
 
 const program = new Command();
@@ -107,9 +117,29 @@ program
       return;
     }
 
-    console.log(`Active session ${active.id} appears stale. Finalizing from current Git state.`);
-    const report = await finalizeSession(active, config, "stale-stop");
-    console.log(`Reports written to ${report.sessionDir}`);
+    const recovery = await recoverActiveSession(repoRoot, config);
+    if (recovery.report) {
+      console.log(`Recovered session. Reports written to ${recovery.report.sessionDir}`);
+    } else {
+      console.log("Completed session state cleanup.");
+    }
+  });
+
+program
+  .command("recover")
+  .description("Safely finalize a stale session or clean its completed state files.")
+  .action(async () => {
+    const repoRoot = await requireRepositoryRoot(process.cwd());
+    const config = await loadConfig(repoRoot);
+    const recovery = await recoverActiveSession(repoRoot, config);
+
+    if (recovery.state === "no-active-session") {
+      console.log("No session recovery is needed.");
+    } else if (recovery.report) {
+      console.log(`Recovered session. Reports written to ${recovery.report.sessionDir}`);
+    } else {
+      console.log("Completed session state cleanup.");
+    }
   });
 
 program
@@ -118,27 +148,60 @@ program
   .action(async () => {
     const repoRoot = await requireRepositoryRoot(process.cwd());
     const config = await loadConfig(repoRoot);
-    const active = await readActiveSession(repoRoot, config);
-
-    if (!active) {
-      console.log("No active Agent Black Box session.");
+    const recovery = await inspectSessionRecoveryState(repoRoot, config);
+    if (!recovery.active) {
+      console.log(`State: ${recovery.status}`);
+      console.log(recovery.message);
       return;
     }
 
-    const state = isProcessRunning(active.pid) ? "active" : "stale";
-    console.log(`Session: ${active.id}`);
-    console.log(`State: ${state}`);
-    console.log(`Started: ${active.startedAt}`);
-    console.log(`Reports directory: ${active.sessionDir}`);
+    console.log(`Session: ${recovery.active.id}`);
+    console.log(`State: ${recovery.status}`);
+    console.log(`Started: ${recovery.active.startedAt}`);
+    console.log(`Reports directory: ${recovery.active.sessionDir}`);
+    console.log(recovery.message);
   });
 
 program
   .command("doctor")
   .description("Check local prerequisites, repository state, config, and session health.")
-  .action(async () => {
+  .option("--repair", "recover a stale session only when ownership is safely verified")
+  .action(async (options: { repair?: boolean }) => {
+    if (options.repair) {
+      const repoRoot = await requireRepositoryRoot(process.cwd());
+      const config = await loadConfig(repoRoot);
+      const recovery = await recoverActiveSession(repoRoot, config);
+      console.log(
+        recovery.report
+          ? `Recovered session. Reports written to ${recovery.report.sessionDir}`
+          : recovery.state === "no-active-session"
+            ? "No session recovery is needed."
+            : "Completed session state cleanup."
+      );
+    }
     const report = await runDoctor(process.cwd());
     console.log(renderDoctorReport(report));
     process.exitCode = report.ok ? 0 : 1;
+  });
+
+program
+  .command("analyze")
+  .description("Analyze current working-tree changes without starting a watcher.")
+  .option("--format <format>", "output format: text, json, or sarif", "text")
+  .option("--fail-on <severity>", "exit with code 1 at or above low, medium, or high")
+  .action(async (options: { format: string; failOn?: string }) => {
+    const repoRoot = await requireRepositoryRoot(process.cwd());
+    const config = await loadConfig(repoRoot);
+    const format = parseAnalyzeFormat(options.format);
+    const failOn = parseRiskSeverity(options.failOn);
+    const snapshot = await collectGitSnapshot(repoRoot, config.exclude);
+    const files = await collectAnalysisInputFiles(repoRoot, snapshot.changedFiles, config.maxFileSizeKb * 1024);
+    const result = analyzeChangedFiles(files);
+
+    console.log(renderAnalysis(result, format));
+    if (failOn && meetsSeverityThreshold(result.summary.maxSeverity, failOn)) {
+      process.exitCode = 1;
+    }
   });
 
 program
@@ -205,7 +268,7 @@ program
     const report = await readSelectedSessionReport(repoRoot, options.session);
     const riskFilter = {
       minSeverity: parseRiskSeverity(options.minSeverity),
-      ...(options.category ? { category: options.category } : {})
+      ...(options.category ? { category: options.category } : {}),
     };
 
     if (options.json) {
@@ -214,7 +277,7 @@ program
           {
             riskSummary: report.riskSummary,
             risks: filterRiskFindings(report.risks, riskFilter),
-            possibleSecrets: report.possibleSecrets
+            possibleSecrets: report.possibleSecrets,
           },
           null,
           2
@@ -287,8 +350,8 @@ program
         format: parseExportFormat(options.format),
         riskFilter: {
           minSeverity: parseRiskSeverity(options.minSeverity),
-          ...(options.category ? { category: options.category } : {})
-        }
+          ...(options.category ? { category: options.category } : {}),
+        },
       });
 
       if (!options.output) {
@@ -311,7 +374,9 @@ sessionsCommand
     const repoRoot = await requireRepositoryRoot(process.cwd());
     const config = await loadConfig(repoRoot);
     const entries = await listSessionCatalog(repoRoot, config);
-    console.log(options.json ? JSON.stringify(toPublicSessionCatalog(entries), null, 2) : renderSessionCatalog(entries));
+    console.log(
+      options.json ? JSON.stringify(toPublicSessionCatalog(entries), null, 2) : renderSessionCatalog(entries)
+    );
   });
 
 sessionsCommand
@@ -359,7 +424,11 @@ async function readSelectedSessionReport(repoRoot: string, selector?: string): P
   return readCatalogSessionReport(await resolveSession(repoRoot, config, selector));
 }
 
-async function waitForSessionToFinalize(repoRoot: string, config: Awaited<ReturnType<typeof loadConfig>>, sessionDir: string): Promise<boolean> {
+async function waitForSessionToFinalize(
+  repoRoot: string,
+  config: Awaited<ReturnType<typeof loadConfig>>,
+  sessionDir: string
+): Promise<boolean> {
   const sessionPath = path.join(sessionDir, "session.json");
   for (let attempt = 0; attempt < 40; attempt += 1) {
     const active = await readActiveSession(repoRoot, config);
@@ -405,6 +474,102 @@ function renderConfigLoadResult(result: Awaited<ReturnType<typeof loadConfigWith
 
 function hasRiskOptions(options: { minSeverity?: string; category?: string; json?: boolean }): boolean {
   return Boolean(options.minSeverity || options.category || options.json);
+}
+
+type AnalyzeFormat = "text" | "json" | "sarif";
+
+function parseAnalyzeFormat(value: string): AnalyzeFormat {
+  if (value === "text" || value === "json" || value === "sarif") {
+    return value;
+  }
+  throw new Error("--format must be one of: text, json, sarif.");
+}
+
+async function collectAnalysisInputFiles(
+  repoRoot: string,
+  changedFiles: ReadonlyArray<SessionReport["git"]["changedFiles"][number]>,
+  maxFileSizeBytes: number
+): Promise<AnalysisInputFile[]> {
+  const safeMaxFileSizeBytes = Math.min(maxFileSizeBytes, 256 * 1024);
+  return mapWithConcurrency(changedFiles, 4, async (file) => {
+    if (file.status === "deleted") {
+      return file;
+    }
+
+    const absolutePath = resolveRepoPath(repoRoot, file.path);
+    if (!absolutePath) {
+      return file;
+    }
+
+    const inspection = await inspectTextFile(absolutePath, safeMaxFileSizeBytes, safeMaxFileSizeBytes);
+    return {
+      ...file,
+      kind: inspection.kind,
+      ...(inspection.text === undefined ? {} : { content: inspection.text }),
+    };
+  });
+}
+
+function renderAnalysis(result: WatcherlessAnalysisResult, format: AnalyzeFormat): string {
+  if (format === "json") {
+    return JSON.stringify(result, null, 2);
+  }
+  if (format === "sarif") {
+    return JSON.stringify(toSarif(result), null, 2);
+  }
+
+  const lines = ["Agent Black Box Analysis", "", `Findings: ${result.summary.findingCount}`];
+  lines.push(`Maximum severity: ${result.summary.maxSeverity}`);
+  lines.push(`Score: ${result.summary.score}`);
+  if (result.findings.length > 0) {
+    lines.push("");
+    lines.push(...result.findings.map(renderAnalysisFinding));
+  }
+  return lines.join("\n");
+}
+
+function renderAnalysisFinding(finding: AnalysisFinding): string {
+  const line = finding.line === undefined ? "" : `:${finding.line}`;
+  return `[${finding.severity}] ${finding.path}${line} — ${finding.category}: ${finding.reason}`;
+}
+
+function toSarif(result: WatcherlessAnalysisResult): Record<string, unknown> {
+  return {
+    version: "2.1.0",
+    $schema: "https://json.schemastore.org/sarif-2.1.0.json",
+    runs: [
+      {
+        tool: {
+          driver: {
+            name: "Agent Black Box",
+            informationUri: "https://github.com/IACBI/agent-black-box",
+            rules: result.findings.map((finding) => ({ id: `${finding.kind}:${finding.category}` })),
+          },
+        },
+        results: result.findings.map((finding) => ({
+          ruleId: `${finding.kind}:${finding.category}`,
+          level: finding.severity === "high" ? "error" : finding.severity === "medium" ? "warning" : "note",
+          message: { text: finding.reason },
+          locations: [
+            {
+              physicalLocation: {
+                artifactLocation: { uri: finding.path },
+                ...(finding.line === undefined ? {} : { region: { startLine: finding.line } }),
+              },
+            },
+          ],
+        })),
+      },
+    ],
+  };
+}
+
+function meetsSeverityThreshold(
+  actual: WatcherlessAnalysisResult["summary"]["maxSeverity"],
+  threshold: string
+): boolean {
+  const severityOrder = { none: 0, low: 1, medium: 2, high: 3 };
+  return severityOrder[actual] >= severityOrder[threshold as keyof typeof severityOrder];
 }
 
 program.parseAsync(process.argv).catch((error: unknown) => {

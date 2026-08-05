@@ -36,6 +36,7 @@ src/
 12. Compact session metadata is written last so history listing can avoid parsing every full report.
 13. The session catalog resolves `latest`, exact IDs, and unique ID prefixes without converting user input directly into filesystem paths.
 14. `abb export` can bundle a selected session into Markdown or JSON.
+15. `abb analyze` performs bounded, watcherless analysis of current included working-tree changes and can emit text, JSON, or SARIF findings.
 
 ## Session Files
 
@@ -73,7 +74,10 @@ Catalog listing reads compact metadata in bounded batches. Sessions from older v
 - Interactive rollback apply only restores eligible tracked files after typed confirmation.
 - Files already changed at session start are never eligible for interactive rollback apply.
 - Direct AI-agent private APIs are not used.
-- Config and session state are validated before use.
+- Config and session state are validated before use with bounded string, date, process, and record constraints.
+- Repository file inspection does not follow symbolic links, and command working directories cannot escape through links.
+- JSON state and finalized reports use same-directory temporary files followed by atomic rename.
+- Active state and lock files share a random owner token; recovery fails closed when their repository, session directory, or ownership does not match.
 - Existing export files are not overwritten unless requested.
 
 ## Performance Notes
@@ -83,5 +87,7 @@ Catalog listing reads compact metadata in bounded batches. Sessions from older v
 - Shared file inspection classifies text, binary, large, missing, and non-regular files before estimating untracked line counts or scanning for possible secrets.
 - Added-line estimation for untracked files only reads small text files and records when line stats were skipped.
 - File and command events are appended as NDJSON to avoid rewriting large session state while recording.
-- Session locking uses an atomic lock file and recovers stale locks left by crashed processes.
+- NDJSON finalization is streamed line by line, rejects lines larger than 1 MiB, caps accepted records at 1,000,000, and bounds integrity warnings.
+- Git file inspection and possible-secret scanning use deterministic concurrency capped at eight workers and available CPU parallelism.
+- Session locking uses an atomic lock file and random owner token. `abb recover` or `abb doctor --repair` handles only safely verified stale sessions; ambiguous state is not removed automatically.
 - Staged Git metadata and blob identifiers relative to `HEAD` are represented by a SHA-256 fingerprint; report generation does not store staged file contents.

@@ -41,7 +41,7 @@ describe("git helpers", () => {
         insertions: 3,
         deletions: 0,
         kind: "text",
-        lineStatsSource: "estimated"
+        lineStatsSource: "estimated",
       });
       expect(snapshot.diffSummaryText).toContain("estimated");
     } finally {
@@ -62,7 +62,7 @@ describe("git helpers", () => {
         path: "image.bin",
         status: "added",
         kind: "binary",
-        lineStatsSource: "skipped"
+        lineStatsSource: "skipped",
       });
       expect(file?.insertions).toBeUndefined();
       expect(snapshot.diffSummaryText).toContain("line counts were skipped");
@@ -83,7 +83,7 @@ describe("git helpers", () => {
       execFileSync("git", ["commit", "-m", "initial"], { cwd: dir });
       const startHead = (await collectGitSnapshot(dir)).head;
       await expect(collectGitChangesBetween(dir, undefined, startHead, ["dist"])).resolves.toEqual([
-        { path: "src/index.ts", status: "added" }
+        { path: "src/index.ts", status: "added" },
       ]);
 
       await writeFile(`${dir}/src/index.ts`, "export const value = 2;\n", "utf8");
@@ -94,12 +94,12 @@ describe("git helpers", () => {
       const endHead = (await collectGitSnapshot(dir)).head;
 
       await expect(collectGitChangesBetween(dir, startHead, endHead, ["dist"])).resolves.toEqual([
-        { path: "src/index.ts", status: "modified" }
+        { path: "src/index.ts", status: "modified" },
       ]);
     } finally {
       await removeTempDir(dir);
     }
-  });
+  }, 20_000);
 
   it("rejects untrusted revision strings before invoking Git", async () => {
     const dir = await createTempDir();

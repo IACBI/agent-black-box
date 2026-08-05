@@ -1,4 +1,4 @@
-import { open, stat } from "node:fs/promises";
+import { lstat, open } from "node:fs/promises";
 import type { FileKind } from "../types.js";
 
 const DEFAULT_SAMPLE_BYTES = 64 * 1024;
@@ -17,12 +17,12 @@ export async function inspectTextFile(
 ): Promise<FileInspection> {
   let stats;
   try {
-    stats = await stat(absolutePath);
+    stats = await lstat(absolutePath);
   } catch {
     return { kind: "missing", reason: "File does not exist." };
   }
 
-  if (!stats.isFile()) {
+  if (stats.isSymbolicLink() || !stats.isFile()) {
     return { kind: "not-file", sizeBytes: stats.size, reason: "Path is not a regular file." };
   }
 
@@ -31,7 +31,7 @@ export async function inspectTextFile(
     return {
       kind: isLikelyBinary(sample) ? "binary" : "large",
       sizeBytes: stats.size,
-      reason: `File is larger than ${maxTextBytes} bytes.`
+      reason: `File is larger than ${maxTextBytes} bytes.`,
     };
   }
 
@@ -43,7 +43,7 @@ export async function inspectTextFile(
   return {
     kind: "text",
     sizeBytes: stats.size,
-    text: buffer.toString("utf8")
+    text: buffer.toString("utf8"),
   };
 }
 
@@ -58,7 +58,8 @@ export function isLikelyBinary(buffer: Buffer): boolean {
 
   let suspiciousBytes = 0;
   for (const byte of buffer) {
-    const isAllowedControl = byte === 7 || byte === 8 || byte === 9 || byte === 10 || byte === 12 || byte === 13 || byte === 27;
+    const isAllowedControl =
+      byte === 7 || byte === 8 || byte === 9 || byte === 10 || byte === 12 || byte === 13 || byte === 27;
     if (byte < 32 && !isAllowedControl) {
       suspiciousBytes += 1;
     }

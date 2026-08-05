@@ -13,7 +13,7 @@ const LANGUAGE_ANCHORS = [
   "arabic",
   "russkiy",
   "nihongo",
-  "bahasa-indonesia"
+  "bahasa-indonesia",
 ];
 
 const REQUIRED_COMMANDS = [
@@ -34,7 +34,7 @@ const REQUIRED_COMMANDS = [
   "abb timeline",
   "abb risks",
   "abb export",
-  "abb rollback"
+  "abb rollback",
 ];
 
 const REQUIRED_REPORTS = [
@@ -45,7 +45,7 @@ const REQUIRED_REPORTS = [
   "timeline.md",
   "diff-summary.md",
   "risks.md",
-  "rollback.md"
+  "rollback.md",
 ];
 
 describe("multilingual README", () => {
@@ -78,5 +78,27 @@ describe("multilingual README", () => {
       expect(section).toContain("docs/REPORTS.md");
       expect(section).toContain("docs/ARCHITECTURE.md");
     }
+  });
+
+  it("keeps runtime, quality, and CI documentation aligned with executable configuration", async () => {
+    const [packageRaw, usage, contributing, security, workflow] = await Promise.all([
+      readFile("package.json", "utf8"),
+      readFile("docs/USAGE.md", "utf8"),
+      readFile("CONTRIBUTING.md", "utf8"),
+      readFile("SECURITY.md", "utf8"),
+      readFile(".github/workflows/ci.yml", "utf8"),
+    ]);
+    const packageJson = JSON.parse(packageRaw) as {
+      engines?: { node?: string };
+      scripts?: Record<string, string>;
+    };
+
+    expect(packageJson.engines?.node).toBe(">=22");
+    expect(packageJson.scripts).toMatchObject({ deadcode: expect.any(String), perf: expect.any(String) });
+    expect(usage).toContain("Node.js 22 or newer");
+    expect(contributing).toContain("pnpm perf");
+    expect(security).toContain("security_best_practices_report.md");
+    expect(workflow).toContain("os: [ubuntu-latest, windows-latest, macos-latest]");
+    expect(workflow).toContain("node: [22, 24]");
   });
 });

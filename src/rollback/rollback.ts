@@ -20,25 +20,27 @@ export function createRollbackPlan(report: SessionReport, requestedFiles: string
       ? report.git.changedFiles.filter((file) => requested.has(file.path))
       : report.git.changedFiles;
   const evidenceByPath = indexFileChangeEvidence(report.changeEvidence);
-  const missingFiles = requestedFiles.filter((file) => !report.git.changedFiles.some((changed) => changed.path === file));
+  const missingFiles = requestedFiles.filter(
+    (file) => !report.git.changedFiles.some((changed) => changed.path === file)
+  );
   const restorableFiles = candidateFiles.filter((file) => isSafelyRestorable(file, evidenceByPath.get(file.path)));
   const skippedFiles = [
     ...candidateFiles
       .filter((file) => !isSafelyRestorable(file, evidenceByPath.get(file.path)))
       .map((file) => ({
         path: file.path,
-        reason: getSkipReason(file, evidenceByPath.get(file.path))
+        reason: getSkipReason(file, evidenceByPath.get(file.path)),
       })),
     ...missingFiles.map((file) => ({
       path: file,
-      reason: "File was not present in the latest Agent Black Box session report."
-    }))
+      reason: "File was not present in the latest Agent Black Box session report.",
+    })),
   ];
 
   return {
     requestedFiles,
     restorableFiles,
-    skippedFiles
+    skippedFiles,
   };
 }
 
@@ -77,7 +79,9 @@ export function renderRollbackPlan(plan: RollbackPlan): string {
     lines.push("");
     lines.push("Command preview:");
     lines.push("```sh");
-    lines.push(`git restore --source=HEAD --staged --worktree -- ${plan.restorableFiles.map((file) => shellQuotePath(file.path)).join(" ")}`);
+    lines.push(
+      `git restore --source=HEAD --staged --worktree -- ${plan.restorableFiles.map((file) => shellQuotePath(file.path)).join(" ")}`
+    );
     lines.push("```");
   } else {
     lines.push("No files are eligible for automatic restore.");
@@ -121,7 +125,7 @@ export async function applyRollbackPlan(repoRoot: string, plan: RollbackPlan): P
     "--staged",
     "--worktree",
     "--",
-    ...plan.restorableFiles.map((file) => toLiteralGitPathspec(file.path))
+    ...plan.restorableFiles.map((file) => toLiteralGitPathspec(file.path)),
   ]);
 }
 

@@ -8,11 +8,21 @@ import type {
   RiskFinding,
   SecretFinding,
   SessionBaseline,
-  SessionReport
+  SessionReport,
 } from "../types.js";
 import { summarizeRisks } from "../risks/riskDetector.js";
-import { buildChangeEvidence, indexFileChangeEvidence, selectSessionRelevantChanges } from "../session/changeEvidence.js";
-import { escapeMarkdownTableCell, escapeMarkdownText, markdownInlineCode, markdownTableCode } from "../utils/markdown.js";
+import {
+  buildChangeEvidence,
+  indexFileChangeEvidence,
+  selectSessionRelevantChanges,
+} from "../session/changeEvidence.js";
+import {
+  escapeMarkdownTableCell,
+  escapeMarkdownText,
+  markdownCodeBlock,
+  markdownInlineCode,
+  markdownTableCode,
+} from "../utils/markdown.js";
 import { shellQuotePath } from "../utils/paths.js";
 
 const COMMAND_CAPTURE_NOTE =
@@ -35,7 +45,7 @@ export function buildSessionReport(
   integrity: SessionReport["integrity"] = {
     warnings: [],
     discardedFileEventLines: 0,
-    discardedCommandEventLines: 0
+    discardedCommandEventLines: 0,
   },
   baseline: SessionBaseline | null = null,
   committedChanges: ChangedFile[] = []
@@ -52,7 +62,7 @@ export function buildSessionReport(
     commandCapture: {
       implemented: true,
       mode: "wrapper-only",
-      note: COMMAND_CAPTURE_NOTE
+      note: COMMAND_CAPTURE_NOTE,
     },
     events,
     commands,
@@ -62,7 +72,7 @@ export function buildSessionReport(
     risks,
     riskSummary: summarizeRisks(risks, possibleSecrets),
     possibleSecrets,
-    integrity
+    integrity,
   };
 }
 
@@ -74,26 +84,27 @@ export interface RiskReportFilter {
 export function generateTimelineMarkdown(report: SessionReport): string {
   const evidenceByPath = indexFileChangeEvidence(report.changeEvidence);
   const changedFiles = report.git.changedFiles
-    .map((file) => `- ${file.status}: ${markdownInlineCode(file.path)} (${formatEvidenceLabel(evidenceByPath.get(file.path))})`)
+    .map(
+      (file) =>
+        `- ${file.status}: ${markdownInlineCode(file.path)} (${formatEvidenceLabel(evidenceByPath.get(file.path))})`
+    )
     .join("\n");
   const committedChanges = (report.changeEvidence?.committedChanges ?? [])
     .map((file) => `- ${file.status}: ${markdownInlineCode(file.path)}`)
     .join("\n");
   const fileEvents = report.events
-    .map((event) => `- ${event.timestamp} - ${event.eventType} - ${markdownInlineCode(event.path)}`)
+    .map((event) => `- ${escapeMarkdownText(event.timestamp)} - ${event.eventType} - ${markdownInlineCode(event.path)}`)
     .join("\n");
-  const commandEvents = report.commands
-    .map((command) => formatCommandEvent(command))
-    .join("\n");
+  const commandEvents = report.commands.map((command) => formatCommandEvent(command)).join("\n");
   const timeline = [
     ...report.events.map((event) => ({
       timestamp: event.timestamp,
-      line: `- ${event.timestamp} - file ${event.eventType} - ${markdownInlineCode(event.path)}`
+      line: `- ${escapeMarkdownText(event.timestamp)} - file ${event.eventType} - ${markdownInlineCode(event.path)}`,
     })),
     ...report.commands.map((command) => ({
       timestamp: command.startedAt,
-      line: formatCommandEvent(command)
-    }))
+      line: formatCommandEvent(command),
+    })),
   ]
     .sort((a, b) => a.timestamp.localeCompare(b.timestamp))
     .map((entry) => entry.line)
@@ -105,8 +116,8 @@ export function generateTimelineMarkdown(report: SessionReport): string {
 
 - Session ID: ${markdownInlineCode(report.id)}
 - Repository: ${markdownInlineCode(report.repoRoot)}
-- Started: ${report.startedAt}
-- Ended: ${report.endedAt}
+- Started: ${escapeMarkdownText(report.startedAt)}
+- Ended: ${escapeMarkdownText(report.endedAt)}
 
 ${formatChangeEvidenceSummary(report)}
 
@@ -167,7 +178,10 @@ export function generateSummaryMarkdown(report: SessionReport): string {
     .join("\n");
   const topRisks = report.risks
     .slice(0, 8)
-    .map((risk) => `- ${risk.severity.toUpperCase()} - ${markdownInlineCode(risk.path)} - ${escapeMarkdownText(risk.category)}`)
+    .map(
+      (risk) =>
+        `- ${risk.severity.toUpperCase()} - ${markdownInlineCode(risk.path)} - ${escapeMarkdownText(risk.category)}`
+    )
     .join("\n");
 
   return `# Agent Black Box Summary
@@ -175,9 +189,9 @@ export function generateSummaryMarkdown(report: SessionReport): string {
 ## Session
 
 - Session ID: ${markdownInlineCode(report.id)}
-- Started: ${report.startedAt}
-- Ended: ${report.endedAt}
-- Finalized by: ${report.finalizedBy}
+- Started: ${escapeMarkdownText(report.startedAt)}
+- Ended: ${escapeMarkdownText(report.endedAt)}
+- Finalized by: ${escapeMarkdownText(report.finalizedBy)}
 
 ## At a glance
 
@@ -227,7 +241,7 @@ function formatCommandEvent(command: CommandEvent): string {
   const group = command.group ? ` group ${markdownInlineCode(command.group)}` : "";
   const phase = command.phase ? ` phase ${markdownInlineCode(command.phase)}` : "";
   const cwd = command.cwd && command.cwd !== "." ? ` cwd ${markdownInlineCode(command.cwd)}` : "";
-  return `- ${command.startedAt}${label} - command exit ${command.exitCode ?? "unknown"}${group}${phase}${cwd} - ${markdownInlineCode(command.command)}`;
+  return `- ${escapeMarkdownText(command.startedAt)}${label} - command exit ${command.exitCode ?? "unknown"}${group}${phase}${cwd} - ${markdownInlineCode(command.command)}`;
 }
 
 export function generateDiffSummaryMarkdown(report: SessionReport): string {
@@ -253,15 +267,11 @@ export function generateDiffSummaryMarkdown(report: SessionReport): string {
 
 ## Git status
 
-\`\`\`text
-${report.git.statusText}
-\`\`\`
+${markdownCodeBlock(report.git.statusText, "text")}
 
 ## Git diff summary
 
-\`\`\`text
-${report.git.diffSummaryText}
-\`\`\`
+${markdownCodeBlock(report.git.diffSummaryText, "text")}
 
 ${formatChangeEvidenceSummary(report)}
 
@@ -383,9 +393,10 @@ git diff -- ${quotedPath}
       }
 
       if (evidence?.atStart !== false) {
-        const reason = evidence?.atStart === true
-          ? "This path already had changes when the session started. Restore commands are omitted because they could discard pre-session work."
-          : "No reliable start baseline is available for this path. Restore commands are omitted.";
+        const reason =
+          evidence?.atStart === true
+            ? "This path already had changes when the session started. Restore commands are omitted because they could discard pre-session work."
+            : "No reliable start baseline is available for this path. Restore commands are omitted.";
         return `### ${markdownInlineCode(file.path)}
 
 ${reason}
@@ -413,9 +424,7 @@ ${formatChangeEvidenceSummary(report)}
 
 ## Current Git status
 
-\`\`\`text
-${report.git.statusText}
-\`\`\`
+${markdownCodeBlock(report.git.statusText, "text")}
 
 ## Manual review commands
 
@@ -443,7 +452,12 @@ function formatGroupedCommands(commands: CommandEvent[]): string {
   const groups = new Map<string, CommandEvent[]>();
   for (const command of commands) {
     const group = command.group ?? "ungrouped";
-    groups.set(group, [...(groups.get(group) ?? []), command]);
+    const groupCommands = groups.get(group);
+    if (groupCommands) {
+      groupCommands.push(command);
+    } else {
+      groups.set(group, [command]);
+    }
   }
 
   return [...groups.entries()]
@@ -499,20 +513,22 @@ function buildReviewPriority(report: SessionReport): string {
 }
 
 function getChangeEvidence(report: SessionReport): SessionReport["changeEvidence"] {
-  return report.changeEvidence ?? {
-    baselineAvailable: false,
-    headChanged: null,
-    indexChanged: null,
-    branchChanged: null,
-    committedChanges: [],
-    files: report.git.changedFiles.map((file) => ({
-      path: file.path,
-      atStart: null,
-      observedDuringSession: false,
-      atEnd: true,
-      gitMetadataChanged: null
-    }))
-  };
+  return (
+    report.changeEvidence ?? {
+      baselineAvailable: false,
+      headChanged: null,
+      indexChanged: null,
+      branchChanged: null,
+      committedChanges: [],
+      files: report.git.changedFiles.map((file) => ({
+        path: file.path,
+        atStart: null,
+        observedDuringSession: false,
+        atEnd: true,
+        gitMetadataChanged: null,
+      })),
+    }
+  );
 }
 
 function formatChangeEvidenceSummary(report: SessionReport): string {
@@ -598,6 +614,6 @@ function formatIntegrity(report: SessionReport): string {
   return [
     `- Discarded file event lines: ${report.integrity.discardedFileEventLines}`,
     `- Discarded command event lines: ${report.integrity.discardedCommandEventLines}`,
-    ...report.integrity.warnings.slice(0, 8).map((warning) => `- ${escapeMarkdownText(warning)}`)
+    ...report.integrity.warnings.slice(0, 8).map((warning) => `- ${escapeMarkdownText(warning)}`),
   ].join("\n");
 }

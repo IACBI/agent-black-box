@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Raised the supported runtime baseline to Node.js 22 and added a Node.js 22/24 Linux, Windows, and macOS CI matrix.
+- Added atomic state/report writes, physical repository containment for command working directories, and no-follow file inspection.
+- Expanded command metadata redaction for nested assignments, headers, URL credentials, and sensitive query parameters.
+- Streamed NDJSON finalization with bounded records, line sizes, and diagnostics.
+- Added deterministic bounded concurrency for Git file inspection and possible-secret scanning.
+- Added large-session performance budgets, release version checks, production dependency audits, and release checksums.
+
 ## 0.7.0
 
 - Added compact `session-metadata.json` files for efficient history listing without reading every full report.
@@ -12,6 +21,9 @@
 - Added unit and end-to-end coverage for legacy reports, corrupt metadata, ambiguous selectors, and two-session workflows.
 - Hardened rollback apply with literal Git pathspecs and blocked historical-session apply operations.
 - Corrected pnpm development command examples across all 12 README language sections.
+- Fixed foreground watcher shutdown so completed sessions release signal listeners and exit cleanly.
+- Hardened Markdown code blocks and session stop-state parsing against repository-controlled or malformed input.
+- Supported bare Windows `.cmd` and `.bat` command shims while keeping command execution shell-disabled.
 
 ## 0.6.0
 

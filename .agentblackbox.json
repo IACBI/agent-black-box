@@ -2,15 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/IACBI/agent-black-box/main/schema/agentblackbox.schema.json",
   "configVersion": 1,
   "sessionDir": ".agent-black-box/sessions",
-  "exclude": [
-    "node_modules",
-    ".git",
-    "dist",
-    "build",
-    "coverage",
-    ".next",
-    ".agent-black-box"
-  ],
+  "exclude": ["node_modules", ".git", "dist", "build", "coverage", ".next", ".agent-black-box"],
   "riskPatterns": [
     ".env",
     ".github/workflows",

@@ -2,9 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   escapeMarkdownTableCell,
   escapeMarkdownText,
+  markdownCodeBlock,
   markdownInlineCode,
   markdownTableCode,
-  normalizeMarkdownText
+  normalizeMarkdownText,
 } from "../src/utils/markdown.js";
 
 describe("markdown utilities", () => {
@@ -18,6 +19,10 @@ describe("markdown utilities", () => {
 
   it("renders inline code with enough backticks for embedded ticks", () => {
     expect(markdownInlineCode("src/`file`.ts")).toBe("`` src/`file`.ts ``");
+  });
+
+  it("keeps Git-controlled backtick runs inside fenced code blocks", () => {
+    expect(markdownCodeBlock("status\n```\nnext", "text")).toBe("````text\nstatus\n```\nnext\n````");
   });
 
   it("renders table code without creating extra columns", () => {

@@ -79,7 +79,7 @@ function formatChangedFiles(files: SessionComparison["files"]["changed"]): strin
     ...files.map(
       (file) =>
         `| ${markdownTableCode(file.path)} | ${file.from.status} | ${file.to.status} | ${formatLineStats(file.from)} | ${formatLineStats(file.to)} |`
-    )
+    ),
   ].join("\n");
 }
 
@@ -105,7 +105,7 @@ function formatCommandCounts(commands: ComparedCommandCount[]): string {
     ...commands.map(
       (command) =>
         `| ${markdownTableCode(command.command)} | ${markdownTableCode(command.cwd)} | ${formatCommandContext(command)} | ${command.exitCode ?? "unknown"} | ${command.fromCount} | ${command.toCount} |`
-    )
+    ),
   ].join("\n");
 }
 
@@ -122,6 +122,8 @@ function formatLineStats(file: ChangedFile): string {
 }
 
 function formatCommandContext(command: ComparedCommandCount): string {
-  const parts = [command.label, command.group, command.phase].filter(Boolean).map((value) => escapeMarkdownText(value!));
+  const parts = [command.label, command.group, command.phase]
+    .filter(Boolean)
+    .map((value) => escapeMarkdownText(value!));
   return parts.length > 0 ? parts.join(" / ") : "none";
 }

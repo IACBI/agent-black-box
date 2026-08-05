@@ -10,7 +10,9 @@ pnpm check
 pnpm release:check
 ```
 
-`pnpm check` runs typecheck, build, and tests.
+`pnpm check` runs typecheck, dead-code/dependency reachability analysis, build, and tests.
+
+`pnpm perf` validates the large-session NDJSON time and memory budgets. CI runs the functional suite on Node.js 22 and 24 across Linux, Windows, and macOS.
 
 ## Development Workflow
 
@@ -33,6 +35,7 @@ pnpm release:check
 ## Pull Request Checklist
 
 - `pnpm check` passes locally.
+- `pnpm perf` passes for changes that affect session parsing, file inspection, or report generation.
 - New behavior has focused tests.
 - README or `docs/` pages are updated when needed.
 - Security-sensitive behavior has been reviewed for secret exposure.

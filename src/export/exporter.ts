@@ -9,7 +9,7 @@ import {
   generateRollbackMarkdown,
   generateSummaryMarkdown,
   generateTimelineMarkdown,
-  type RiskReportFilter
+  type RiskReportFilter,
 } from "../reports/markdown.js";
 
 export type ExportFormat = "json" | "markdown";
@@ -54,20 +54,43 @@ export function renderSessionExport(report: SessionReport, options: SessionExpor
     generateTimelineMarkdown(report),
     generateDiffSummaryMarkdown(report),
     generateRisksMarkdown(report, options.riskFilter),
-    generateRollbackMarkdown(report)
+    generateRollbackMarkdown(report),
   ]
     .map((section) => section.trimEnd())
     .join("\n\n---\n\n")
     .concat("\n");
 }
 
-export async function writeSessionExport(outputPath: string, content: string, options: WriteExportOptions = {}): Promise<string> {
+export async function writeSessionExport(
+  outputPath: string,
+  content: string,
+  options: WriteExportOptions = {}
+): Promise<string> {
   const resolvedPath = path.resolve(outputPath);
   if (!options.force && (await pathExists(resolvedPath))) {
     throw new Error(`Refusing to overwrite existing export file: ${resolvedPath}. Re-run with --force to replace it.`);
   }
 
   await ensureDir(path.dirname(resolvedPath));
-  await writeFile(resolvedPath, content, "utf8");
+  try {
+    await writeFile(resolvedPath, content, {
+      encoding: "utf8",
+      flag: options.force ? "w" : "wx",
+    });
+  } catch (error) {
+    if (!options.force && isFileExistsError(error)) {
+      throw new Error(
+        `Refusing to overwrite existing export file: ${resolvedPath}. Re-run with --force to replace it.`,
+        { cause: error }
+      );
+    }
+
+    throw error;
+  }
+
   return resolvedPath;
+}
+
+function isFileExistsError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST";
 }

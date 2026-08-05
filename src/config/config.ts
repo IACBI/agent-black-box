@@ -1,7 +1,8 @@
-import { access, readFile, writeFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import type { AgentBlackBoxConfig, ConfigLoadResult } from "../types.js";
 import { CONFIG_FILE_NAME, CONFIG_SCHEMA_URL, CURRENT_CONFIG_VERSION, DEFAULT_CONFIG } from "./defaults.js";
+import { writeTextFileAtomic } from "../utils/files.js";
 
 export function getConfigPath(repoRoot: string): string {
   return path.join(repoRoot, CONFIG_FILE_NAME);
@@ -22,7 +23,7 @@ export async function createDefaultConfig(repoRoot: string): Promise<string> {
     throw new Error(`${CONFIG_FILE_NAME} already exists.`);
   }
 
-  await writeFile(configPath, `${JSON.stringify(DEFAULT_CONFIG, null, 2)}\n`, "utf8");
+  await writeTextFileAtomic(configPath, `${JSON.stringify(DEFAULT_CONFIG, null, 2)}\n`);
   return configPath;
 }
 
@@ -44,7 +45,7 @@ export async function loadConfigWithMeta(repoRoot: string): Promise<ConfigLoadRe
       exists: false,
       migrated: false,
       errors: [],
-      warnings: []
+      warnings: [],
     };
   }
 
@@ -54,15 +55,25 @@ export async function loadConfigWithMeta(repoRoot: string): Promise<ConfigLoadRe
   try {
     parsed = JSON.parse(raw);
   } catch (error) {
-    throw new Error(`Failed to parse ${CONFIG_FILE_NAME}: ${(error as Error).message}`);
+    throw new Error(`Failed to parse ${CONFIG_FILE_NAME}: ${(error as Error).message}`, { cause: error });
   }
 
   const result = normalizeConfig(parsed);
+  if (path.isAbsolute(result.config.sessionDir) && !isPathInside(repoRoot, result.config.sessionDir)) {
+    result.warnings.push(
+      "sessionDir points outside the repository. Session evidence will be written to that external location."
+    );
+  }
   return {
     ...result,
     configPath,
-    exists: true
+    exists: true,
   };
+}
+
+function isPathInside(parentPath: string, candidatePath: string): boolean {
+  const relative = path.relative(parentPath, candidatePath);
+  return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
 }
 
 export async function migrateConfigFile(repoRoot: string): Promise<ConfigLoadResult> {
@@ -75,7 +86,7 @@ export async function migrateConfigFile(repoRoot: string): Promise<ConfigLoadRes
     throw new Error(formatConfigProblems("Cannot migrate invalid Agent Black Box config", result.errors));
   }
 
-  await writeFile(result.configPath, `${JSON.stringify(result.config, null, 2)}\n`, "utf8");
+  await writeTextFileAtomic(result.configPath, `${JSON.stringify(result.config, null, 2)}\n`);
   return result;
 }
 
@@ -92,7 +103,7 @@ function normalizeConfig(parsed: unknown): Omit<ConfigLoadResult, "configPath" |
       config: cloneDefaultConfig(),
       migrated: false,
       errors: [`${CONFIG_FILE_NAME} must contain a JSON object.`],
-      warnings
+      warnings,
     };
   }
 
@@ -119,14 +130,14 @@ function normalizeConfig(parsed: unknown): Omit<ConfigLoadResult, "configPath" |
     sessionDir: stringOrDefault(parsed.sessionDir, DEFAULT_CONFIG.sessionDir, "sessionDir", warnings),
     exclude: stringArrayOrDefault(parsed.exclude, DEFAULT_CONFIG.exclude, "exclude", warnings),
     riskPatterns: stringArrayOrDefault(parsed.riskPatterns, DEFAULT_CONFIG.riskPatterns, "riskPatterns", warnings),
-    maxFileSizeKb: maxFileSizeOrDefault(parsed.maxFileSizeKb, warnings)
+    maxFileSizeKb: maxFileSizeOrDefault(parsed.maxFileSizeKb, warnings),
   };
 
   return {
     config,
     migrated,
     errors,
-    warnings
+    warnings,
   };
 }
 
@@ -134,7 +145,7 @@ function cloneDefaultConfig(): AgentBlackBoxConfig {
   return {
     ...DEFAULT_CONFIG,
     exclude: [...DEFAULT_CONFIG.exclude],
-    riskPatterns: [...DEFAULT_CONFIG.riskPatterns]
+    riskPatterns: [...DEFAULT_CONFIG.riskPatterns],
   };
 }
 

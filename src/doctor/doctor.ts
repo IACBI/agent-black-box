@@ -4,7 +4,7 @@ import type { AgentBlackBoxConfig } from "../types.js";
 import { CONFIG_FILE_NAME, DEFAULT_CONFIG } from "../config/defaults.js";
 import { configExists, loadConfigWithMeta } from "../config/config.js";
 import { getRepositoryRoot } from "../git/git.js";
-import { getSessionLockPath, getSessionRoot, isProcessRunning, readActiveSessionState, readSessionLock } from "../session/sessionManager.js";
+import { getSessionRoot, inspectSessionRecoveryState } from "../session/sessionManager.js";
 import { pathExists } from "../utils/files.js";
 
 export type DoctorStatus = "pass" | "warn" | "fail";
@@ -42,7 +42,7 @@ export async function runDoctor(cwd: string): Promise<DoctorReport> {
     return {
       ok: false,
       repoRoot,
-      checks
+      checks,
     };
   }
 
@@ -57,13 +57,12 @@ export async function runDoctor(cwd: string): Promise<DoctorReport> {
 
   checks.push(await checkWritable(repoRoot, "Repository write access"));
   checks.push(await checkSessionDirectory(repoRoot, config));
-  checks.push(await checkSessionState(repoRoot, config));
-  checks.push(await checkSessionLock(repoRoot, config));
+  checks.push(await checkSessionRecovery(repoRoot, config));
 
   return {
     ok: checks.every((check) => check.status !== "fail"),
     repoRoot,
-    checks
+    checks,
   };
 }
 
@@ -83,14 +82,17 @@ export function renderDoctorReport(report: DoctorReport): string {
 function checkNodeVersion(version: string): DoctorCheck {
   const major = Number.parseInt(version.split(".")[0] ?? "0", 10);
 
-  if (major >= 20) {
+  if (major >= 22) {
     return pass("Node.js", `Detected ${version}.`);
   }
 
-  return fail("Node.js", `Detected ${version}. Node.js 20 or newer is required.`);
+  return fail("Node.js", `Detected ${version}. Node.js 22 or newer is required.`);
 }
 
-async function checkConfig(repoRoot: string, configResult: Awaited<ReturnType<typeof loadConfigWithMeta>>): Promise<DoctorCheck> {
+async function checkConfig(
+  repoRoot: string,
+  configResult: Awaited<ReturnType<typeof loadConfigWithMeta>>
+): Promise<DoctorCheck> {
   if (configResult.errors.length > 0) {
     return fail("Config", configResult.errors.join(" "));
   }
@@ -117,40 +119,15 @@ async function checkSessionDirectory(repoRoot: string, config: AgentBlackBoxConf
   return checkWritable(existingPath, "Session directory");
 }
 
-async function checkSessionState(repoRoot: string, config: AgentBlackBoxConfig): Promise<DoctorCheck> {
-  const state = await readActiveSessionState(repoRoot, config);
-
-  if (state.corrupted) {
-    return warn("Session state", `Active session state is unreadable: ${state.error ?? "unknown error"}. Run \`abb start\` to recover or \`abb stop\` if a watcher is still running.`);
+async function checkSessionRecovery(repoRoot: string, config: AgentBlackBoxConfig): Promise<DoctorCheck> {
+  const state = await inspectSessionRecoveryState(repoRoot, config);
+  if (state.status === "no-active-session" || state.status === "active") {
+    return pass("Session state", state.message);
   }
-
-  if (!state.value) {
-    return pass("Session state", "No active session.");
+  if (state.status === "recoverable" || state.status === "already-complete") {
+    return warn("Session state", `${state.message} Run \`abb recover\` or \`abb doctor --repair\`.`);
   }
-
-  if (isProcessRunning(state.value.pid)) {
-    return pass("Session state", `Session ${state.value.id} is active.`);
-  }
-
-  return warn("Session state", `Session ${state.value.id} appears stale. Run \`abb stop\` to finalize it.`);
-}
-
-async function checkSessionLock(repoRoot: string, config: AgentBlackBoxConfig): Promise<DoctorCheck> {
-  const lockPath = getSessionLockPath(repoRoot, config);
-  if (!(await pathExists(lockPath))) {
-    return pass("Session lock", "No active lock.");
-  }
-
-  const lock = await readSessionLock(repoRoot, config);
-  if (!lock) {
-    return warn("Session lock", `Lock file is unreadable: ${lockPath}.`);
-  }
-
-  if (isProcessRunning(lock.pid)) {
-    return pass("Session lock", `Lock is active for ${lock.sessionId}.`);
-  }
-
-  return warn("Session lock", `Lock for ${lock.sessionId} appears stale and will be recovered by \`abb start\`.`);
+  return fail("Session state", `${state.message} Inspect the state files before taking manual action.`);
 }
 
 async function checkWritable(targetPath: string, name: string): Promise<DoctorCheck> {

@@ -1,8 +1,13 @@
-import path from "node:path";
+import { availableParallelism } from "node:os";
 import type { AgentBlackBoxConfig, ChangedFile, SecretFinding } from "../types.js";
+import { mapWithConcurrency } from "../utils/concurrency.js";
 import { inspectTextFile } from "../utils/fileInspection.js";
+import { resolveRepoPath } from "../utils/paths.js";
 
-const SECRET_KEYWORD_PATTERN = /(api[_-]?key|secret|token|password|passwd|private[_-]?key|client[_-]?secret|access[_-]?key)/i;
+const FILE_SCAN_CONCURRENCY = Math.min(8, availableParallelism());
+
+const SECRET_KEYWORD_PATTERN =
+  /(api[_-]?key|secret|token|password|passwd|private[_-]?key|client[_-]?secret|access[_-]?key)/i;
 
 const SECRET_PATTERNS: Array<{ name: string; pattern: RegExp }> = [
   { name: "AWS access key-like value", pattern: /AKIA[0-9A-Z]{16}/g },
@@ -12,8 +17,8 @@ const SECRET_PATTERNS: Array<{ name: string; pattern: RegExp }> = [
   {
     name: "Secret assignment-like value",
     pattern:
-      /\b(?:api[_-]?key|secret|token|password|passwd|private[_-]?key|client[_-]?secret|access[_-]?key)\b\s*[:=]\s*["']?([A-Za-z0-9_./+=:-]{12,})["']?/gi
-  }
+      /\b(?:api[_-]?key|secret|token|password|passwd|private[_-]?key|client[_-]?secret|access[_-]?key)\b\s*[:=]\s*["']?([A-Za-z0-9_./+=:-]{12,})["']?/gi,
+  },
 ];
 
 export async function detectPossibleSecrets(
@@ -21,17 +26,16 @@ export async function detectPossibleSecrets(
   changedFiles: ChangedFile[],
   config: AgentBlackBoxConfig
 ): Promise<SecretFinding[]> {
-  const findings: SecretFinding[] = [];
-
-  for (const file of changedFiles) {
-    if (file.status === "deleted") {
-      continue;
-    }
-
-    const absolutePath = path.join(repoRoot, file.path);
-    const fileFindings = await detectSecretsInFile(absolutePath, file.path, config.maxFileSizeKb);
-    findings.push(...fileFindings);
-  }
+  const scannableFiles = changedFiles.filter((file) => file.status !== "deleted");
+  const findings = (
+    await mapWithConcurrency(scannableFiles, FILE_SCAN_CONCURRENCY, async (file) => {
+      const absolutePath = resolveRepoPath(repoRoot, file.path);
+      if (!absolutePath) {
+        return [];
+      }
+      return detectSecretsInFile(absolutePath, file.path, config.maxFileSizeKb);
+    })
+  ).flat();
 
   return dedupeSecretFindings(findings);
 }
@@ -66,7 +70,7 @@ export function detectSecretsInLine(relativePath: string, line: string, lineNumb
         path: relativePath,
         line: lineNumber,
         reason: `Possible ${name} detected.`,
-        redacted: "<redacted>"
+        redacted: "<redacted>",
       });
     }
   }
@@ -83,7 +87,7 @@ export function detectSecretsInLine(relativePath: string, line: string, lineNumb
           path: relativePath,
           line: lineNumber,
           reason: "Possible high-entropy secret-like value near a sensitive keyword.",
-          redacted: "<redacted>"
+          redacted: "<redacted>",
         });
         break;
       }

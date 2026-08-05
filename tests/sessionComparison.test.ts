@@ -11,7 +11,7 @@ describe("session comparison", () => {
       "2026-01-01T00:00:00.000Z",
       [
         { path: "src/from.ts", status: "modified" },
-        { path: "src/shared|unsafe.ts", status: "modified" }
+        { path: "src/shared|unsafe.ts", status: "modified" },
       ],
       [{ path: "config/app.yml", category: "Config file", severity: "medium", score: 60, reason: "Config changed." }],
       [command("pnpm test", 0)],
@@ -23,7 +23,7 @@ describe("session comparison", () => {
       "2026-01-02T00:00:00.000Z",
       [
         { path: "src/to.ts", status: "added" },
-        { path: "src/shared|unsafe.ts", status: "deleted" }
+        { path: "src/shared|unsafe.ts", status: "deleted" },
       ],
       [{ path: ".env", category: "Environment file", severity: "high", score: 93, reason: "Possible secret\nreview." }],
       [command("pnpm test", 0), command("pnpm test", 0), command("pnpm build | tee out", 1)],
@@ -39,15 +39,15 @@ describe("session comparison", () => {
       {
         path: "src/shared|unsafe.ts",
         from: { path: "src/shared|unsafe.ts", status: "modified" },
-        to: { path: "src/shared|unsafe.ts", status: "deleted" }
-      }
+        to: { path: "src/shared|unsafe.ts", status: "deleted" },
+      },
     ]);
     expect(comparison.risks.scoreDelta).toBe(33);
     expect(comparison.commands).toMatchObject({ fromCount: 1, toCount: 3, countDelta: 2, toFailedCount: 1 });
     expect(comparison.commands.changedCounts).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ command: "pnpm test", fromCount: 1, toCount: 2 }),
-        expect.objectContaining({ command: "pnpm build | tee out", fromCount: 0, toCount: 1 })
+        expect.objectContaining({ command: "pnpm build | tee out", fromCount: 0, toCount: 1 }),
       ])
     );
     expect(comparison.heads).toMatchObject({ fromEnd: "b".repeat(40), toStart: "b".repeat(40), sameEndHead: false });
@@ -87,7 +87,7 @@ function makeReport(
       branch: "main",
       statusText: "test",
       diffSummaryText: "test",
-      changedFiles
+      changedFiles,
     },
     risks,
     [],
@@ -100,8 +100,8 @@ function makeReport(
         branch: "main",
         statusText: "Working tree clean for included paths.",
         diffSummaryText: "No tracked Git diff was detected.",
-        changedFiles: []
-      }
+        changedFiles: [],
+      },
     }
   );
 }
@@ -113,6 +113,6 @@ function command(commandText: string, exitCode: number): CommandEvent {
     command: commandText,
     cwd: ".",
     exitCode,
-    durationMs: 1000
+    durationMs: 1000,
   };
 }

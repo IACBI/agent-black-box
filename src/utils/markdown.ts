@@ -72,6 +72,14 @@ export function markdownTableCode(value: string): string {
   return `<code>${escapeHtmlForTable(normalizeMarkdownText(value))}</code>`;
 }
 
+export function markdownCodeBlock(value: string, language = ""): string {
+  // eslint-disable-next-line no-control-regex -- Repository text must not inject terminal control characters into reports.
+  const normalized = value.replace(/\r\n?/g, "\n").replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, " ");
+  const fence = "`".repeat(Math.max(3, longestBacktickRun(normalized) + 1));
+
+  return `${fence}${language}\n${normalized}\n${fence}`;
+}
+
 export function escapeMarkdownTableCell(value: string): string {
   let result = "";
 

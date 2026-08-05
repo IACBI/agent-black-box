@@ -36,11 +36,7 @@ describe("secret detector", () => {
       const fakeSecretValue = ["aZ9qL2xP", "8vN4mR7s", "T1uY6wE3", "bC5dF0hJ"].join("");
       await writeFile(path.join(dir, "settings.env"), `client_secret=${fakeSecretValue}\n`, "utf8");
 
-      const findings = await detectPossibleSecrets(
-        dir,
-        [{ path: "settings.env", status: "added" }],
-        DEFAULT_CONFIG
-      );
+      const findings = await detectPossibleSecrets(dir, [{ path: "settings.env", status: "added" }], DEFAULT_CONFIG);
 
       expect(findings.length).toBeGreaterThan(0);
       expect(JSON.stringify(findings)).not.toContain(fakeSecretValue);

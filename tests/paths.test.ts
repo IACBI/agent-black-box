@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { isPathExcluded, normalizePath, pathMatchesPattern, shellQuotePath } from "../src/utils/paths.js";
+import {
+  isPathExcluded,
+  normalizePath,
+  pathMatchesPattern,
+  resolveRepoPath,
+  shellQuotePath,
+} from "../src/utils/paths.js";
 
 describe("path utilities", () => {
   it("normalizes Windows-style paths", () => {
@@ -23,5 +29,11 @@ describe("path utilities", () => {
 
     expect(quoted).toBe("'src/weird'\\''$(touch owned)\\nfile.ts'");
     expect(quoted).not.toContain("\n");
+  });
+
+  it("resolves only repository-contained relative paths", () => {
+    expect(resolveRepoPath("/repo", "src/index.ts")).toBeDefined();
+    expect(resolveRepoPath("/repo", "../outside.txt")).toBeNull();
+    expect(resolveRepoPath("/repo", "/outside.txt")).toBeNull();
   });
 });

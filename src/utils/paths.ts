@@ -9,6 +9,20 @@ export function toRepoRelative(repoRoot: string, filePath: string): string {
   return normalizePath(relative);
 }
 
+export function resolveRepoPath(repoRoot: string, relativePath: string): string | null {
+  if (path.isAbsolute(relativePath)) {
+    return null;
+  }
+
+  const resolved = path.resolve(repoRoot, relativePath);
+  const relative = path.relative(repoRoot, resolved);
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    return null;
+  }
+
+  return resolved;
+}
+
 export function isPathExcluded(relativePath: string, excludePatterns: string[]): boolean {
   const normalized = normalizePath(relativePath);
 

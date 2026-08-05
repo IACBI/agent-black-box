@@ -1,13 +1,17 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, symlink } from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { DEFAULT_CONFIG } from "../src/config/defaults.js";
 import {
   buildWindowsCommandLine,
   formatCommand,
   normalizeCommandParts,
+  recordAndRunCommand,
   redactCommandParts,
-  resolveRunCwd
+  resolveRunCwd,
 } from "../src/commands/commandRecorder.js";
-import { createTempDir, removeTempDir } from "./testUtils.js";
+import { createSession, readCommandEvents } from "../src/session/sessionManager.js";
+import { createTempDir, initGitRepo, removeTempDir } from "./testUtils.js";
 
 describe("command recorder", () => {
   it("redacts sensitive assignments and flags", () => {
@@ -21,7 +25,7 @@ describe("command recorder", () => {
       passwordFlag,
       passwordValue,
       clientSecretFlag,
-      "safe"
+      "safe",
     ]);
 
     expect(parts).toEqual([
@@ -30,10 +34,24 @@ describe("command recorder", () => {
       "--password",
       "<redacted>",
       "--client-secret=<redacted>",
-      "safe"
+      "safe",
     ]);
     expect(parts.join(" ")).not.toContain(passwordValue);
     expect(parts.join(" ")).not.toContain("another-secret");
+  });
+
+  it("redacts nested assignments, headers, URL credentials, and query parameters", () => {
+    const rawValue = ["do", "-not", "-store"].join("");
+    const parts = redactCommandParts([
+      `--env=API_TOKEN=${rawValue}`,
+      `Authorization:Bearer ${rawValue}`,
+      `https://user:${rawValue}@example.test/deploy?api_key=${rawValue}&mode=safe`,
+    ]);
+
+    expect(parts.join(" ")).not.toContain(rawValue);
+    expect(parts[0]).toBe("--env=API_TOKEN=<redacted>");
+    expect(parts[1]).toBe("Authorization:<redacted>");
+    expect(parts[2]).toContain("mode=safe");
   });
 
   it("quotes command parts for readable reports", () => {
@@ -49,6 +67,7 @@ describe("command recorder", () => {
     expect(buildWindowsCommandLine(["pnpm.cmd", "run", "name with spaces", "a&b"])).toBe(
       'pnpm.cmd run "name with spaces" a^&b'
     );
+    expect(buildWindowsCommandLine(["pnpm.cmd", "a!b"])).toBe("pnpm.cmd a^!b");
   });
 
   it("resolves command working directories inside the repository", async () => {
@@ -62,4 +81,33 @@ describe("command recorder", () => {
       await removeTempDir(dir);
     }
   });
+
+  it("rejects working directories that escape through a symbolic link", async () => {
+    const repoDir = await createTempDir();
+    const outsideDir = await createTempDir();
+    try {
+      const linkPath = path.join(repoDir, "outside-link");
+      await symlink(outsideDir, linkPath, process.platform === "win32" ? "junction" : "dir");
+
+      await expect(resolveRunCwd(repoDir, "outside-link")).rejects.toThrow("symbolic links");
+    } finally {
+      await removeTempDir(repoDir);
+      await removeTempDir(outsideDir);
+    }
+  });
+
+  it("runs bare package-manager commands on Windows without enabling shell mode", async () => {
+    const dir = await createTempDir();
+    try {
+      initGitRepo(dir);
+      const session = await createSession(dir, DEFAULT_CONFIG);
+
+      await expect(recordAndRunCommand(["pnpm", "--version"], dir)).resolves.toBe(0);
+      await expect(readCommandEvents(session.sessionDir)).resolves.toContainEqual(
+        expect.objectContaining({ command: "pnpm --version", exitCode: 0 })
+      );
+    } finally {
+      await removeTempDir(dir);
+    }
+  }, 15_000);
 });

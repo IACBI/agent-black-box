@@ -1,5 +1,9 @@
 name: Release
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 on:
   push:
     tags:
@@ -12,36 +16,42 @@ jobs:
   release:
     name: Build release artifact
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Enable Corepack
         run: corepack enable
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
         with:
-          node-version: 20
+          node-version: 24
           cache: pnpm
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Typecheck
-        run: pnpm typecheck
+      - name: Run quality gates
+        run: pnpm check
 
-      - name: Build
-        run: pnpm build
+      - name: Audit production dependencies
+        run: pnpm audit --prod --audit-level high
 
-      - name: Test
-        run: pnpm test
+      - name: Verify tag and package versions
+        shell: bash
+        run: |
+          package_version="$(node -p "require('./package.json').version")"
+          test "${GITHUB_REF_NAME}" = "v${package_version}"
+          grep -Fqx "## ${package_version}" CHANGELOG.md
 
       - name: Pack
         run: |
           mkdir -p artifacts
           pnpm pack --pack-destination artifacts
+          sha256sum artifacts/*.tgz > artifacts/SHA256SUMS
 
       - name: Prepare release notes
         run: |
@@ -61,12 +71,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            gh release upload "${GITHUB_REF_NAME}" artifacts/*.tgz --clobber
+            gh release upload "${GITHUB_REF_NAME}" artifacts/* --clobber
             gh release edit "${GITHUB_REF_NAME}" \
               --title "${GITHUB_REF_NAME}" \
               --notes-file release-notes.md
           else
-            gh release create "${GITHUB_REF_NAME}" artifacts/*.tgz \
+            gh release create "${GITHUB_REF_NAME}" artifacts/* \
               --title "${GITHUB_REF_NAME}" \
               --notes-file release-notes.md
           fi

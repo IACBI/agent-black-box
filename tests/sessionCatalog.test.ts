@@ -8,7 +8,7 @@ import {
   listSessionCatalog,
   readCatalogSessionReport,
   resolveSessionEntry,
-  SESSION_METADATA_FILE
+  SESSION_METADATA_FILE,
 } from "../src/session/sessionCatalog.js";
 import { writeJsonFile } from "../src/utils/files.js";
 import { createTempDir, removeTempDir } from "./testUtils.js";
@@ -43,7 +43,7 @@ describe("session catalog", () => {
       await mkdir(incompleteDir, { recursive: true });
       await writeJsonFile(path.join(incompleteDir, "session-start.json"), {
         id: incompleteId,
-        startedAt: "2026-01-04T00:00:00.000Z"
+        startedAt: "2026-01-04T00:00:00.000Z",
       });
 
       const corruptDir = path.join(sessionRoot, corruptId);
@@ -56,7 +56,7 @@ describe("session catalog", () => {
         [incompleteId, "incomplete"],
         [newerId, "complete"],
         [olderId, "complete"],
-        [corruptId, "corrupt"]
+        [corruptId, "corrupt"],
       ]);
       expect(resolveSessionEntry(entries, "latest").id).toBe(newerId);
       expect(resolveSessionEntry(entries, "session-2026-01-03").id).toBe(newerId);
@@ -107,7 +107,7 @@ function makeReport(repoRoot: string, sessionDir: string, id: string, startedAt:
       branch: "main",
       statusText: "Working tree clean for included paths.",
       diffSummaryText: "No tracked Git diff was detected.",
-      changedFiles: []
+      changedFiles: [],
     },
     [],
     []

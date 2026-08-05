@@ -75,7 +75,7 @@ export function buildSessionComparison(fromReport: SessionReport, toReport: Sess
     .map((filePath) => ({
       path: filePath,
       from: fromFilesByPath.get(filePath)!,
-      to: toFilesByPath.get(filePath)!
+      to: toFilesByPath.get(filePath)!,
     }))
     .sort((left, right) => left.path.localeCompare(right.path));
 
@@ -91,20 +91,20 @@ export function buildSessionComparison(fromReport: SessionReport, toReport: Sess
       ...(fromReport.git.head ? { fromEnd: fromReport.git.head } : {}),
       ...(toReport.baseline?.git.head ? { toStart: toReport.baseline.git.head } : {}),
       ...(toReport.git.head ? { toEnd: toReport.git.head } : {}),
-      sameEndHead: fromReport.git.head === toReport.git.head
+      sameEndHead: fromReport.git.head === toReport.git.head,
     },
     files: {
       onlyInFrom: fromFiles.filter((file) => !toFilesByPath.has(file.path)).sort(compareChangedFiles),
       onlyInTo: toFiles.filter((file) => !fromFilesByPath.has(file.path)).sort(compareChangedFiles),
       changed,
-      sharedEquivalentCount: sharedPaths.length - changed.length
+      sharedEquivalentCount: sharedPaths.length - changed.length,
     },
     risks: {
       fromScore: fromReport.riskSummary.score,
       toScore: toReport.riskSummary.score,
       scoreDelta: toReport.riskSummary.score - fromReport.riskSummary.score,
       onlyInFrom: fromReport.risks.filter((risk) => !toRisksByKey.has(riskKey(risk))).sort(compareRisks),
-      onlyInTo: toReport.risks.filter((risk) => !fromRisksByKey.has(riskKey(risk))).sort(compareRisks)
+      onlyInTo: toReport.risks.filter((risk) => !fromRisksByKey.has(riskKey(risk))).sort(compareRisks),
     },
     commands: {
       fromCount: fromReport.commands.length,
@@ -112,8 +112,8 @@ export function buildSessionComparison(fromReport: SessionReport, toReport: Sess
       countDelta: toReport.commands.length - fromReport.commands.length,
       fromFailedCount: countFailedCommands(fromReport.commands),
       toFailedCount: countFailedCommands(toReport.commands),
-      changedCounts: changedCommandCounts
-    }
+      changedCounts: changedCommandCounts,
+    },
   };
 }
 
@@ -124,7 +124,7 @@ function summarizeSession(report: SessionReport, sessionRelevantChangeCount: num
     endedAt: report.endedAt,
     sessionRelevantChangeCount,
     commandCount: report.commands.length,
-    riskScore: report.riskSummary.score
+    riskScore: report.riskSummary.score,
   };
 }
 
@@ -146,7 +146,7 @@ function compareCommandCounts(fromCommands: CommandEvent[], toCommands: CommandE
         ...(command.phase ? { phase: command.phase } : {}),
         exitCode: command.exitCode,
         fromCount: from?.count ?? 0,
-        toCount: to?.count ?? 0
+        toCount: to?.count ?? 0,
       };
     })
     .filter((command) => command.fromCount !== command.toCount)
@@ -162,7 +162,7 @@ function countCommands(commands: CommandEvent[]): Map<string, { command: Command
       command.label ?? "",
       command.group ?? "",
       command.phase ?? "",
-      command.exitCode
+      command.exitCode,
     ]);
     const current = counts.get(key);
     counts.set(key, { command, count: (current?.count ?? 0) + 1 });

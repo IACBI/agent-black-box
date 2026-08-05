@@ -1,4 +1,4 @@
-import { writeFile } from "node:fs/promises";
+import { symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { inspectTextFile, isLikelyBinary } from "../src/utils/fileInspection.js";
@@ -19,7 +19,7 @@ describe("file inspection", () => {
       await expect(inspectTextFile(filePath, 1024)).resolves.toMatchObject({
         kind: "text",
         sizeBytes: 6,
-        text: "hello\n"
+        text: "hello\n",
       });
     } finally {
       await removeTempDir(dir);
@@ -34,8 +34,22 @@ describe("file inspection", () => {
 
       await expect(inspectTextFile(filePath, 16)).resolves.toMatchObject({
         kind: "large",
-        sizeBytes: 128
+        sizeBytes: 128,
       });
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("does not follow symbolic links", async () => {
+    const dir = await createTempDir();
+    try {
+      const targetPath = path.join(dir, "target.txt");
+      const linkPath = path.join(dir, "link.txt");
+      await writeFile(targetPath, "outside contents", "utf8");
+      await symlink(targetPath, linkPath, "file");
+
+      await expect(inspectTextFile(linkPath, 1024)).resolves.toMatchObject({ kind: "not-file" });
     } finally {
       await removeTempDir(dir);
     }

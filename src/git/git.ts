@@ -1,11 +1,13 @@
-import path from "node:path";
 import { createHash } from "node:crypto";
+import { availableParallelism } from "node:os";
 import { simpleGit } from "simple-git";
 import type { ChangedFile, ChangeStatus, GitSnapshot } from "../types.js";
 import { inspectTextFile, type FileInspection } from "../utils/fileInspection.js";
-import { isPathExcluded, normalizePath } from "../utils/paths.js";
+import { mapWithConcurrency } from "../utils/concurrency.js";
+import { isPathExcluded, normalizePath, resolveRepoPath } from "../utils/paths.js";
 
 const MAX_ESTIMATED_UNTRACKED_FILE_BYTES = 500 * 1024;
+const FILE_INSPECTION_CONCURRENCY = Math.min(8, availableParallelism());
 
 export async function getRepositoryRoot(cwd: string): Promise<string | null> {
   try {
@@ -18,7 +20,7 @@ export async function getRepositoryRoot(cwd: string): Promise<string | null> {
       return null;
     }
 
-    throw new Error(`Git repository detection failed: ${message}`);
+    throw new Error(`Git repository detection failed: ${message}`, { cause: error });
   }
 }
 
@@ -60,7 +62,9 @@ export async function collectGitSnapshot(repoRoot: string, excludePatterns: stri
     getIndexFingerprint(git, diffPathspecs),
     git.diffSummary(),
     git.raw(diffPathspecs.length > 0 ? ["diff", "--stat", "--", ...diffPathspecs] : ["diff", "--stat"]),
-    git.raw(diffPathspecs.length > 0 ? ["diff", "--cached", "--stat", "--", ...diffPathspecs] : ["diff", "--cached", "--stat"])
+    git.raw(
+      diffPathspecs.length > 0 ? ["diff", "--cached", "--stat", "--", ...diffPathspecs] : ["diff", "--cached", "--stat"]
+    ),
   ]);
 
   const summaryByPath = new Map(
@@ -68,27 +72,27 @@ export async function collectGitSnapshot(repoRoot: string, excludePatterns: stri
       normalizePath(file.file),
       {
         insertions: "insertions" in file ? file.insertions : undefined,
-        deletions: "deletions" in file ? file.deletions : undefined
-      }
+        deletions: "deletions" in file ? file.deletions : undefined,
+      },
     ])
   );
 
   const visibleStatusFiles = status.files.filter((file) => !isPathExcluded(file.path, excludePatterns));
-  const changedFiles = await Promise.all(visibleStatusFiles.map(async (file) => {
+  const changedFiles = await mapWithConcurrency(visibleStatusFiles, FILE_INSPECTION_CONCURRENCY, async (file) => {
     const normalizedPath = normalizePath(file.path);
     const summary = summaryByPath.get(normalizedPath);
     const status = mapStatus(file.index, file.working_dir);
+    const inspectionPath = resolveRepoPath(repoRoot, normalizedPath);
     const inspectionResult =
-      status === "added" || status === "modified"
-        ? await inspectTextFile(path.join(repoRoot, normalizedPath), MAX_ESTIMATED_UNTRACKED_FILE_BYTES)
+      (status === "added" || status === "modified") && inspectionPath
+        ? await inspectTextFile(inspectionPath, MAX_ESTIMATED_UNTRACKED_FILE_BYTES)
         : undefined;
     const estimated =
       summary?.insertions === undefined && status === "added"
         ? estimateAddedTextFileStats(inspectionResult)
         : undefined;
-    const lineStatsSource = summary?.insertions !== undefined || summary?.deletions !== undefined
-      ? "git"
-      : estimated?.lineStatsSource;
+    const lineStatsSource =
+      summary?.insertions !== undefined || summary?.deletions !== undefined ? "git" : estimated?.lineStatsSource;
 
     return {
       path: normalizedPath,
@@ -97,9 +101,9 @@ export async function collectGitSnapshot(repoRoot: string, excludePatterns: stri
       deletions: summary?.deletions ?? estimated?.deletions,
       ...(inspectionResult ? inspectionToChangedFileMetadata(inspectionResult) : {}),
       ...(lineStatsSource ? { lineStatsSource } : {}),
-      ...(estimated?.statsNote ? { statsNote: estimated.statsNote } : {})
+      ...(estimated?.statsNote ? { statsNote: estimated.statsNote } : {}),
     };
-  }));
+  });
 
   return {
     repoRoot,
@@ -108,7 +112,7 @@ export async function collectGitSnapshot(repoRoot: string, excludePatterns: stri
     branch: status.current || undefined,
     statusText: changedFiles.length === 0 ? "Working tree clean for included paths." : formatStatusFiles(changedFiles),
     diffSummaryText: formatDiffSummary(unstagedStat, stagedStat, changedFiles),
-    changedFiles
+    changedFiles,
   };
 }
 
@@ -144,7 +148,7 @@ export async function collectGitChangesBetween(
     "--find-renames",
     fromHead,
     toHead,
-    ...(pathspecs.length > 0 ? ["--", ...pathspecs] : [])
+    ...(pathspecs.length > 0 ? ["--", ...pathspecs] : []),
   ]);
 
   return parseNameStatus(output).filter((file) => !isPathExcluded(file.path, excludePatterns));
@@ -154,13 +158,11 @@ function isGitObjectId(value: string): boolean {
   return /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(value);
 }
 
-async function getIndexFingerprint(
-  git: ReturnType<typeof simpleGit>,
-  pathspecs: string[]
-): Promise<string> {
-  const args = pathspecs.length > 0
-    ? ["diff", "--cached", "--raw", "-z", "--", ...pathspecs]
-    : ["diff", "--cached", "--raw", "-z"];
+async function getIndexFingerprint(git: ReturnType<typeof simpleGit>, pathspecs: string[]): Promise<string> {
+  const args =
+    pathspecs.length > 0
+      ? ["diff", "--cached", "--raw", "-z", "--", ...pathspecs]
+      : ["diff", "--cached", "--raw", "-z"];
   const stagedState = await git.raw(args);
   return createHash("sha256").update(stagedState).digest("hex");
 }
@@ -184,8 +186,8 @@ function buildDiffPathspecs(excludePatterns: string[]): string[] {
     ...normalized.flatMap((pattern) => [
       `:(top,exclude)${pattern}`,
       `:(top,glob,exclude)**/${pattern}`,
-      `:(top,glob,exclude)**/${pattern}/**`
-    ])
+      `:(top,glob,exclude)**/${pattern}/**`,
+    ]),
   ];
 }
 
@@ -262,7 +264,7 @@ function formatStatusFiles(files: ChangedFile[]): string {
 function inspectionToChangedFileMetadata(inspection: FileInspection): Pick<ChangedFile, "kind" | "sizeBytes"> {
   return {
     kind: inspection.kind,
-    ...(inspection.sizeBytes !== undefined ? { sizeBytes: inspection.sizeBytes } : {})
+    ...(inspection.sizeBytes !== undefined ? { sizeBytes: inspection.sizeBytes } : {}),
   };
 }
 
@@ -277,7 +279,7 @@ function estimateAddedTextFileStats(
     return {
       deletions: 0,
       lineStatsSource: "skipped",
-      statsNote: inspection.reason ?? `Skipped line estimation for ${inspection.kind} file.`
+      statsNote: inspection.reason ?? `Skipped line estimation for ${inspection.kind} file.`,
     };
   }
 
@@ -285,7 +287,7 @@ function estimateAddedTextFileStats(
     insertions: countLines(inspection.text),
     deletions: 0,
     lineStatsSource: "estimated",
-    statsNote: "Estimated from untracked text file contents."
+    statsNote: "Estimated from untracked text file contents.",
   };
 }
 

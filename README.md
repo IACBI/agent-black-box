@@ -64,26 +64,29 @@ Reports are written to:
 
 ## CLI Commands
 
-| Command | Purpose |
-| --- | --- |
-| `abb init` | Create `.agentblackbox.json`. |
-| `abb config validate` | Validate config schema, version, and normalized values. |
-| `abb config migrate` | Rewrite config using the current schema version. |
-| `abb start` | Start a foreground recording session in the current Git repository. |
-| `abb doctor` | Check local prerequisites, repository state, config, and session health. |
-| `abb run -- <command>` | Run a command and record redacted command metadata for the active session. Supports `--group` and `--phase`. |
-| `abb stop` | Stop the active session and generate reports. |
-| `abb status` | Show whether a session is active, stale, or absent. |
-| `abb sessions list` | List complete, incomplete, and corrupt sessions. |
-| `abb sessions show <id>` | Show a selected session summary or normalized JSON report. |
-| `abb sessions compare <from> <to>` | Compare files, risks, commands, and HEAD revisions across two sessions. |
-| `abb report` | Print the latest `session.json`. |
-| `abb summary` | Print the latest human-readable session summary. |
-| `abb commands` | Print commands recorded in the latest session. |
-| `abb timeline` | Print the latest chronological timeline. |
-| `abb risks` | Print risky changes and possible secret findings, with optional filters. |
-| `abb export` | Export the latest session as bundled Markdown or structured JSON. |
-| `abb rollback` | Print safe manual rollback suggestions. |
+| Command                            | Purpose                                                                                                      |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `abb init`                         | Create `.agentblackbox.json`.                                                                                |
+| `abb config validate`              | Validate config schema, version, and normalized values.                                                      |
+| `abb config migrate`               | Rewrite config using the current schema version.                                                             |
+| `abb start`                        | Start a foreground recording session in the current Git repository.                                          |
+| `abb doctor`                       | Check local prerequisites, repository state, config, and session health.                                     |
+| `abb doctor --repair`              | Safely recover only a verified stale session state.                                                          |
+| `abb run -- <command>`             | Run a command and record redacted command metadata for the active session. Supports `--group` and `--phase`. |
+| `abb stop`                         | Stop the active session and generate reports.                                                                |
+| `abb recover`                      | Finalize a verified stale session or clean its completed state files.                                        |
+| `abb status`                       | Show whether a session is active, stale, or absent.                                                          |
+| `abb analyze`                      | Analyze current working-tree changes without a watcher; supports JSON, SARIF, and severity exit thresholds.  |
+| `abb sessions list`                | List complete, incomplete, and corrupt sessions.                                                             |
+| `abb sessions show <id>`           | Show a selected session summary or normalized JSON report.                                                   |
+| `abb sessions compare <from> <to>` | Compare files, risks, commands, and HEAD revisions across two sessions.                                      |
+| `abb report`                       | Print the latest `session.json`.                                                                             |
+| `abb summary`                      | Print the latest human-readable session summary.                                                             |
+| `abb commands`                     | Print commands recorded in the latest session.                                                               |
+| `abb timeline`                     | Print the latest chronological timeline.                                                                     |
+| `abb risks`                        | Print risky changes and possible secret findings, with optional filters.                                     |
+| `abb export`                       | Export the latest session as bundled Markdown or structured JSON.                                            |
+| `abb rollback`                     | Print safe manual rollback suggestions.                                                                      |
 
 Detailed usage: [docs/USAGE.md](docs/USAGE.md)
 
@@ -140,8 +143,9 @@ Reports intentionally use cautious language such as "possible", "likely", and "d
 ## Project Quality
 
 - TypeScript strict mode.
-- Vitest test coverage for core behavior.
-- GitHub Actions CI for typecheck, build, and tests.
+- Vitest tests for core behavior.
+- Node.js 22 or newer, tested on Node.js 22 and 24 across Linux, Windows, and macOS.
+- GitHub Actions CI for cross-platform build/test, formatting, lint, coverage, dead-code, package, and performance checks.
 - CodeQL analysis.
 - Dependabot for patch/minor maintenance.
 - Tag-driven release workflow.
@@ -175,7 +179,6 @@ node dist/cli.js --help
 
 Near-term improvements:
 
-- Watcherless CI analysis with threshold-based exit codes and SARIF output.
 - npm publishing with provenance and a cross-platform fixture matrix.
 - Optional TUI-style report browser.
 
@@ -199,6 +202,7 @@ MIT. See [LICENSE](LICENSE).
 ## Full Documentation In Other Languages
 
 <a id="turkce"></a>
+
 ### Türkçe
 
 Agent Black Box, yapay zeka destekli kodlama oturumları sırasında depoda gözlemlenebilir değişiklikleri kaydeden ve açıklayan yerel öncelikli bir CLI aracıdır.
@@ -255,26 +259,29 @@ Raporlar şu dizine yazılır:
 
 #### CLI Komutları
 
-| Komut | Amaç |
-| --- | --- |
-| `abb init` | `.agentblackbox.json` oluşturur. |
-| `abb config validate` | Config schema, version ve normalize edilmiş değerleri doğrular. |
-| `abb config migrate` | Config dosyasını mevcut schema version ile yeniden yazar. |
-| `abb start` | Mevcut Git deposunda foreground kayıt oturumu başlatır. |
-| `abb doctor` | Yerel gereksinimleri, repo durumunu, config'i ve session sağlığını kontrol eder. |
-| `abb run -- <command>` | Komutu çalıştırır ve aktif oturum için redakte edilmiş komut metadata'sı kaydeder. `--group` ve `--phase` destekler. |
-| `abb stop` | Aktif oturumu durdurur ve raporları üretir. |
-| `abb status` | Oturumun active, stale veya absent olup olmadığını gösterir. |
-| `abb sessions list` | Tamamlanmış, eksik ve bozuk oturumları listeler. |
-| `abb sessions show <id>` | Seçilen oturumun özetini veya normalize JSON raporunu gösterir. |
-| `abb sessions compare <from> <to>` | İki oturumun dosya, risk, komut ve HEAD farklarını karşılaştırır. |
-| `abb report` | En son `session.json` çıktısını yazdırır. |
-| `abb summary` | En son insan okunabilir oturum özetini yazdırır. |
-| `abb commands` | En son oturumda kaydedilen komutları yazdırır. |
-| `abb timeline` | En son kronolojik timeline raporunu yazdırır. |
-| `abb risks` | Riskli değişiklikleri ve olası secret bulgularını, isteğe bağlı filtrelerle yazdırır. |
-| `abb export` | En son oturumu birleşik Markdown veya yapılandırılmış JSON olarak dışa aktarır. |
-| `abb rollback` | Güvenli manuel rollback önerilerini yazdırır. |
+| Komut                              | Amaç                                                                                                                 |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `abb init`                         | `.agentblackbox.json` oluşturur.                                                                                     |
+| `abb config validate`              | Config schema, version ve normalize edilmiş değerleri doğrular.                                                      |
+| `abb config migrate`               | Config dosyasını mevcut schema version ile yeniden yazar.                                                            |
+| `abb start`                        | Mevcut Git deposunda foreground kayıt oturumu başlatır.                                                              |
+| `abb doctor`                       | Yerel gereksinimleri, repo durumunu, config'i ve session sağlığını kontrol eder.                                     |
+| `abb doctor --repair`              | Yalnızca doğrulanmış bayat oturum durumunu güvenli şekilde kurtarır.                                                 |
+| `abb run -- <command>`             | Komutu çalıştırır ve aktif oturum için redakte edilmiş komut metadata'sı kaydeder. `--group` ve `--phase` destekler. |
+| `abb stop`                         | Aktif oturumu durdurur ve raporları üretir.                                                                          |
+| `abb recover`                      | Doğrulanmış bayat oturumu sonlandırır veya tamamlanmış durum dosyalarını temizler.                                   |
+| `abb status`                       | Oturumun active, stale veya absent olup olmadığını gösterir.                                                         |
+| `abb analyze`                      | Watcher olmadan değişiklikleri analiz eder; JSON, SARIF ve önem eşiği çıkış kodu desteği sağlar.                     |
+| `abb sessions list`                | Tamamlanmış, eksik ve bozuk oturumları listeler.                                                                     |
+| `abb sessions show <id>`           | Seçilen oturumun özetini veya normalize JSON raporunu gösterir.                                                      |
+| `abb sessions compare <from> <to>` | İki oturumun dosya, risk, komut ve HEAD farklarını karşılaştırır.                                                    |
+| `abb report`                       | En son `session.json` çıktısını yazdırır.                                                                            |
+| `abb summary`                      | En son insan okunabilir oturum özetini yazdırır.                                                                     |
+| `abb commands`                     | En son oturumda kaydedilen komutları yazdırır.                                                                       |
+| `abb timeline`                     | En son kronolojik timeline raporunu yazdırır.                                                                        |
+| `abb risks`                        | Riskli değişiklikleri ve olası secret bulgularını, isteğe bağlı filtrelerle yazdırır.                                |
+| `abb export`                       | En son oturumu birleşik Markdown veya yapılandırılmış JSON olarak dışa aktarır.                                      |
+| `abb rollback`                     | Güvenli manuel rollback önerilerini yazdırır.                                                                        |
 
 Ayrıntılı kullanım: [docs/USAGE.md](docs/USAGE.md)
 
@@ -331,7 +338,7 @@ Raporlar özellikle "possible", "likely" ve "detected from repository changes" g
 #### Proje Kalitesi
 
 - TypeScript strict mode.
-- Core behavior için Vitest test coverage.
+- Temel davranış için Vitest testleri.
 - Typecheck, build ve testler için GitHub Actions CI.
 - CodeQL analizi.
 - Patch/minor bakım için Dependabot.
@@ -388,6 +395,7 @@ MVP kapsamı dışında:
 MIT. Bkz. [LICENSE](LICENSE).
 
 <a id="espanol"></a>
+
 ### Español
 
 Agent Black Box es una CLI local-first para registrar y explicar cambios observables del repositorio durante sesiones de programación asistidas por IA.
@@ -444,26 +452,26 @@ Los reportes se escriben en:
 
 #### Comandos CLI
 
-| Comando | Propósito |
-| --- | --- |
-| `abb init` | Crea `.agentblackbox.json`. |
-| `abb config validate` | Valida schema, version y valores normalizados de configuración. |
-| `abb config migrate` | Reescribe la configuración con la versión actual del schema. |
-| `abb start` | Inicia una sesión foreground en el repositorio Git actual. |
-| `abb doctor` | Revisa requisitos locales, estado del repo, config y salud de sesión. |
-| `abb run -- <command>` | Ejecuta un comando y registra metadata redactada para la sesión activa. Soporta `--group` y `--phase`. |
-| `abb stop` | Detiene la sesión activa y genera reportes. |
-| `abb status` | Muestra si la sesión está active, stale o absent. |
-| `abb sessions list` | Lista sesiones completas, incompletas y corruptas. |
-| `abb sessions show <id>` | Muestra el resumen o JSON normalizado de una sesión seleccionada. |
-| `abb sessions compare <from> <to>` | Compara archivos, riesgos, comandos y revisiones HEAD entre dos sesiones. |
-| `abb report` | Imprime el último `session.json`. |
-| `abb summary` | Imprime el resumen humano más reciente. |
-| `abb commands` | Imprime comandos registrados en la última sesión. |
-| `abb timeline` | Imprime la última línea temporal cronológica. |
-| `abb risks` | Imprime cambios riesgosos y posibles secretos con filtros opcionales. |
-| `abb export` | Exporta la última sesión como Markdown combinado o JSON estructurado. |
-| `abb rollback` | Imprime sugerencias seguras de rollback manual. |
+| Comando                            | Propósito                                                                                              |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `abb init`                         | Crea `.agentblackbox.json`.                                                                            |
+| `abb config validate`              | Valida schema, version y valores normalizados de configuración.                                        |
+| `abb config migrate`               | Reescribe la configuración con la versión actual del schema.                                           |
+| `abb start`                        | Inicia una sesión foreground en el repositorio Git actual.                                             |
+| `abb doctor`                       | Revisa requisitos locales, estado del repo, config y salud de sesión.                                  |
+| `abb run -- <command>`             | Ejecuta un comando y registra metadata redactada para la sesión activa. Soporta `--group` y `--phase`. |
+| `abb stop`                         | Detiene la sesión activa y genera reportes.                                                            |
+| `abb status`                       | Muestra si la sesión está active, stale o absent.                                                      |
+| `abb sessions list`                | Lista sesiones completas, incompletas y corruptas.                                                     |
+| `abb sessions show <id>`           | Muestra el resumen o JSON normalizado de una sesión seleccionada.                                      |
+| `abb sessions compare <from> <to>` | Compara archivos, riesgos, comandos y revisiones HEAD entre dos sesiones.                              |
+| `abb report`                       | Imprime el último `session.json`.                                                                      |
+| `abb summary`                      | Imprime el resumen humano más reciente.                                                                |
+| `abb commands`                     | Imprime comandos registrados en la última sesión.                                                      |
+| `abb timeline`                     | Imprime la última línea temporal cronológica.                                                          |
+| `abb risks`                        | Imprime cambios riesgosos y posibles secretos con filtros opcionales.                                  |
+| `abb export`                       | Exporta la última sesión como Markdown combinado o JSON estructurado.                                  |
+| `abb rollback`                     | Imprime sugerencias seguras de rollback manual.                                                        |
 
 Uso detallado: [docs/USAGE.md](docs/USAGE.md)
 
@@ -520,7 +528,7 @@ Los reportes usan lenguaje prudente como "possible", "likely" y "detected from r
 #### Calidad Del Proyecto
 
 - TypeScript strict mode.
-- Cobertura Vitest para comportamiento central.
+- Pruebas Vitest para el comportamiento central.
 - GitHub Actions CI para typecheck, build y tests.
 - Análisis CodeQL.
 - Dependabot para mantenimiento patch/minor.
@@ -577,6 +585,7 @@ Fuera del alcance del MVP:
 MIT. Ver [LICENSE](LICENSE).
 
 <a id="deutsch"></a>
+
 ### Deutsch
 
 Agent Black Box ist ein local-first CLI zum Aufzeichnen und Erklären beobachtbarer Repository-Änderungen während KI-gestützter Coding-Sitzungen.
@@ -633,26 +642,26 @@ Reports werden hier geschrieben:
 
 #### CLI-Befehle
 
-| Befehl | Zweck |
-| --- | --- |
-| `abb init` | Erstellt `.agentblackbox.json`. |
-| `abb config validate` | Prüft Config-Schema, Version und normalisierte Werte. |
-| `abb config migrate` | Schreibt die Config mit der aktuellen Schema-Version neu. |
-| `abb start` | Startet eine Foreground-Aufzeichnung im aktuellen Git-Repository. |
-| `abb doctor` | Prüft lokale Voraussetzungen, Repository-Status, Config und Session-Gesundheit. |
-| `abb run -- <command>` | Führt einen Befehl aus und speichert redigierte Metadaten für die aktive Session. Unterstützt `--group` und `--phase`. |
-| `abb stop` | Stoppt die aktive Session und erzeugt Reports. |
-| `abb status` | Zeigt, ob eine Session active, stale oder absent ist. |
-| `abb sessions list` | Listet vollständige, unvollständige und beschädigte Sessions. |
-| `abb sessions show <id>` | Zeigt Summary oder normalisiertes JSON einer gewählten Session. |
-| `abb sessions compare <from> <to>` | Vergleicht Dateien, Risiken, Befehle und HEAD-Stände zweier Sessions. |
-| `abb report` | Gibt das neueste `session.json` aus. |
-| `abb summary` | Gibt die neueste menschenlesbare Session-Zusammenfassung aus. |
-| `abb commands` | Gibt die in der letzten Session aufgezeichneten Befehle aus. |
-| `abb timeline` | Gibt die neueste chronologische Timeline aus. |
-| `abb risks` | Gibt riskante Änderungen und mögliche Secret-Funde mit optionalen Filtern aus. |
-| `abb export` | Exportiert die letzte Session als gebündeltes Markdown oder strukturiertes JSON. |
-| `abb rollback` | Gibt sichere manuelle Rollback-Hinweise aus. |
+| Befehl                             | Zweck                                                                                                                  |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `abb init`                         | Erstellt `.agentblackbox.json`.                                                                                        |
+| `abb config validate`              | Prüft Config-Schema, Version und normalisierte Werte.                                                                  |
+| `abb config migrate`               | Schreibt die Config mit der aktuellen Schema-Version neu.                                                              |
+| `abb start`                        | Startet eine Foreground-Aufzeichnung im aktuellen Git-Repository.                                                      |
+| `abb doctor`                       | Prüft lokale Voraussetzungen, Repository-Status, Config und Session-Gesundheit.                                        |
+| `abb run -- <command>`             | Führt einen Befehl aus und speichert redigierte Metadaten für die aktive Session. Unterstützt `--group` und `--phase`. |
+| `abb stop`                         | Stoppt die aktive Session und erzeugt Reports.                                                                         |
+| `abb status`                       | Zeigt, ob eine Session active, stale oder absent ist.                                                                  |
+| `abb sessions list`                | Listet vollständige, unvollständige und beschädigte Sessions.                                                          |
+| `abb sessions show <id>`           | Zeigt Summary oder normalisiertes JSON einer gewählten Session.                                                        |
+| `abb sessions compare <from> <to>` | Vergleicht Dateien, Risiken, Befehle und HEAD-Stände zweier Sessions.                                                  |
+| `abb report`                       | Gibt das neueste `session.json` aus.                                                                                   |
+| `abb summary`                      | Gibt die neueste menschenlesbare Session-Zusammenfassung aus.                                                          |
+| `abb commands`                     | Gibt die in der letzten Session aufgezeichneten Befehle aus.                                                           |
+| `abb timeline`                     | Gibt die neueste chronologische Timeline aus.                                                                          |
+| `abb risks`                        | Gibt riskante Änderungen und mögliche Secret-Funde mit optionalen Filtern aus.                                         |
+| `abb export`                       | Exportiert die letzte Session als gebündeltes Markdown oder strukturiertes JSON.                                       |
+| `abb rollback`                     | Gibt sichere manuelle Rollback-Hinweise aus.                                                                           |
 
 Detaillierte Nutzung: [docs/USAGE.md](docs/USAGE.md)
 
@@ -709,7 +718,7 @@ Reports verwenden absichtlich vorsichtige Sprache wie "possible", "likely" und "
 #### Projektqualität
 
 - TypeScript strict mode.
-- Vitest-Coverage für Kernverhalten.
+- Vitest-Tests für das Kernverhalten.
 - GitHub Actions CI für Typecheck, Build und Tests.
 - CodeQL-Analyse.
 - Dependabot für Patch/Minor-Wartung.
@@ -766,6 +775,7 @@ Außerhalb des MVP-Scopes:
 MIT. Siehe [LICENSE](LICENSE).
 
 <a id="francais"></a>
+
 ### Français
 
 Agent Black Box est une CLI local-first pour enregistrer et expliquer les changements observables du dépôt pendant les sessions de développement assistées par IA.
@@ -822,26 +832,26 @@ Les rapports sont écrits dans :
 
 #### Commandes CLI
 
-| Commande | Objectif |
-| --- | --- |
-| `abb init` | Crée `.agentblackbox.json`. |
-| `abb config validate` | Valide le schema, la version et les valeurs normalisées. |
-| `abb config migrate` | Réécrit la configuration avec la version actuelle du schema. |
-| `abb start` | Démarre une session foreground dans le dépôt Git courant. |
-| `abb doctor` | Vérifie les prérequis locaux, l'état du dépôt, la config et la santé de session. |
-| `abb run -- <command>` | Exécute une commande et enregistre des métadonnées masquées pour la session active. Supporte `--group` et `--phase`. |
-| `abb stop` | Arrête la session active et génère les rapports. |
-| `abb status` | Indique si une session est active, stale ou absent. |
-| `abb sessions list` | Liste les sessions terminées, incomplètes et corrompues. |
-| `abb sessions show <id>` | Affiche le résumé ou le JSON normalisé d'une session choisie. |
-| `abb sessions compare <from> <to>` | Compare fichiers, risques, commandes et révisions HEAD de deux sessions. |
-| `abb report` | Affiche le dernier `session.json`. |
-| `abb summary` | Affiche le dernier résumé lisible. |
-| `abb commands` | Affiche les commandes enregistrées dans la dernière session. |
-| `abb timeline` | Affiche la dernière timeline chronologique. |
-| `abb risks` | Affiche les changements risqués et secrets possibles avec filtres optionnels. |
-| `abb export` | Exporte la dernière session en Markdown groupé ou JSON structuré. |
-| `abb rollback` | Affiche des suggestions sûres de rollback manuel. |
+| Commande                           | Objectif                                                                                                             |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `abb init`                         | Crée `.agentblackbox.json`.                                                                                          |
+| `abb config validate`              | Valide le schema, la version et les valeurs normalisées.                                                             |
+| `abb config migrate`               | Réécrit la configuration avec la version actuelle du schema.                                                         |
+| `abb start`                        | Démarre une session foreground dans le dépôt Git courant.                                                            |
+| `abb doctor`                       | Vérifie les prérequis locaux, l'état du dépôt, la config et la santé de session.                                     |
+| `abb run -- <command>`             | Exécute une commande et enregistre des métadonnées masquées pour la session active. Supporte `--group` et `--phase`. |
+| `abb stop`                         | Arrête la session active et génère les rapports.                                                                     |
+| `abb status`                       | Indique si une session est active, stale ou absent.                                                                  |
+| `abb sessions list`                | Liste les sessions terminées, incomplètes et corrompues.                                                             |
+| `abb sessions show <id>`           | Affiche le résumé ou le JSON normalisé d'une session choisie.                                                        |
+| `abb sessions compare <from> <to>` | Compare fichiers, risques, commandes et révisions HEAD de deux sessions.                                             |
+| `abb report`                       | Affiche le dernier `session.json`.                                                                                   |
+| `abb summary`                      | Affiche le dernier résumé lisible.                                                                                   |
+| `abb commands`                     | Affiche les commandes enregistrées dans la dernière session.                                                         |
+| `abb timeline`                     | Affiche la dernière timeline chronologique.                                                                          |
+| `abb risks`                        | Affiche les changements risqués et secrets possibles avec filtres optionnels.                                        |
+| `abb export`                       | Exporte la dernière session en Markdown groupé ou JSON structuré.                                                    |
+| `abb rollback`                     | Affiche des suggestions sûres de rollback manuel.                                                                    |
 
 Utilisation détaillée : [docs/USAGE.md](docs/USAGE.md)
 
@@ -898,7 +908,7 @@ Les rapports utilisent volontairement un langage prudent comme "possible", "like
 #### Qualité Du Projet
 
 - TypeScript strict mode.
-- Couverture Vitest pour le comportement central.
+- Tests Vitest pour le comportement central.
 - CI GitHub Actions pour typecheck, build et tests.
 - Analyse CodeQL.
 - Dependabot pour la maintenance patch/minor.
@@ -955,6 +965,7 @@ Hors périmètre du MVP :
 MIT. Voir [LICENSE](LICENSE).
 
 <a id="portugues"></a>
+
 ### Português
 
 Agent Black Box é uma CLI local-first para registrar e explicar mudanças observáveis no repositório durante sessões de programação assistidas por IA.
@@ -1011,26 +1022,26 @@ Os relatórios são gravados em:
 
 #### Comandos CLI
 
-| Comando | Finalidade |
-| --- | --- |
-| `abb init` | Cria `.agentblackbox.json`. |
-| `abb config validate` | Valida schema, versão e valores normalizados. |
-| `abb config migrate` | Reescreve a configuração usando a versão atual do schema. |
-| `abb start` | Inicia uma sessão foreground no repositório Git atual. |
-| `abb doctor` | Verifica pré-requisitos locais, estado do repositório, config e saúde da sessão. |
-| `abb run -- <command>` | Executa um comando e registra metadados mascarados para a sessão ativa. Suporta `--group` e `--phase`. |
-| `abb stop` | Para a sessão ativa e gera relatórios. |
-| `abb status` | Mostra se a sessão está active, stale ou absent. |
-| `abb sessions list` | Lista sessões completas, incompletas e corrompidas. |
-| `abb sessions show <id>` | Mostra o resumo ou JSON normalizado de uma sessão selecionada. |
-| `abb sessions compare <from> <to>` | Compara arquivos, riscos, comandos e revisões HEAD entre duas sessões. |
-| `abb report` | Imprime o último `session.json`. |
-| `abb summary` | Imprime o último resumo legível. |
-| `abb commands` | Imprime comandos registrados na última sessão. |
-| `abb timeline` | Imprime a última timeline cronológica. |
-| `abb risks` | Imprime mudanças arriscadas e possíveis segredos com filtros opcionais. |
-| `abb export` | Exporta a última sessão como Markdown agrupado ou JSON estruturado. |
-| `abb rollback` | Imprime sugestões seguras de rollback manual. |
+| Comando                            | Finalidade                                                                                             |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `abb init`                         | Cria `.agentblackbox.json`.                                                                            |
+| `abb config validate`              | Valida schema, versão e valores normalizados.                                                          |
+| `abb config migrate`               | Reescreve a configuração usando a versão atual do schema.                                              |
+| `abb start`                        | Inicia uma sessão foreground no repositório Git atual.                                                 |
+| `abb doctor`                       | Verifica pré-requisitos locais, estado do repositório, config e saúde da sessão.                       |
+| `abb run -- <command>`             | Executa um comando e registra metadados mascarados para a sessão ativa. Suporta `--group` e `--phase`. |
+| `abb stop`                         | Para a sessão ativa e gera relatórios.                                                                 |
+| `abb status`                       | Mostra se a sessão está active, stale ou absent.                                                       |
+| `abb sessions list`                | Lista sessões completas, incompletas e corrompidas.                                                    |
+| `abb sessions show <id>`           | Mostra o resumo ou JSON normalizado de uma sessão selecionada.                                         |
+| `abb sessions compare <from> <to>` | Compara arquivos, riscos, comandos e revisões HEAD entre duas sessões.                                 |
+| `abb report`                       | Imprime o último `session.json`.                                                                       |
+| `abb summary`                      | Imprime o último resumo legível.                                                                       |
+| `abb commands`                     | Imprime comandos registrados na última sessão.                                                         |
+| `abb timeline`                     | Imprime a última timeline cronológica.                                                                 |
+| `abb risks`                        | Imprime mudanças arriscadas e possíveis segredos com filtros opcionais.                                |
+| `abb export`                       | Exporta a última sessão como Markdown agrupado ou JSON estruturado.                                    |
+| `abb rollback`                     | Imprime sugestões seguras de rollback manual.                                                          |
 
 Uso detalhado: [docs/USAGE.md](docs/USAGE.md)
 
@@ -1087,7 +1098,7 @@ Os relatórios usam linguagem cautelosa como "possible", "likely" e "detected fr
 #### Qualidade Do Projeto
 
 - TypeScript strict mode.
-- Cobertura Vitest para comportamento central.
+- Testes Vitest para o comportamento central.
 - GitHub Actions CI para typecheck, build e testes.
 - Análise CodeQL.
 - Dependabot para manutenção patch/minor.
@@ -1144,6 +1155,7 @@ Fora do escopo do MVP:
 MIT. Consulte [LICENSE](LICENSE).
 
 <a id="zhongwen"></a>
+
 ### 中文
 
 Agent Black Box 是一个本地优先的 CLI，用于在 AI 辅助编码会话中记录并解释仓库层面可观察到的变更。
@@ -1200,26 +1212,26 @@ pnpm dev rollback
 
 #### CLI 命令
 
-| 命令 | 用途 |
-| --- | --- |
-| `abb init` | 创建 `.agentblackbox.json`。 |
-| `abb config validate` | 验证配置 schema、版本和规范化值。 |
-| `abb config migrate` | 使用当前 schema 版本重写配置。 |
-| `abb start` | 在当前 Git 仓库启动前台记录会话。 |
-| `abb doctor` | 检查本地前置条件、仓库状态、配置和会话健康。 |
-| `abb run -- <command>` | 运行命令，并为活动会话记录已脱敏的命令元数据。支持 `--group` 和 `--phase`。 |
-| `abb stop` | 停止活动会话并生成报告。 |
-| `abb status` | 显示会话是 active、stale 还是 absent。 |
-| `abb sessions list` | 列出已完成、不完整和损坏的会话。 |
-| `abb sessions show <id>` | 显示所选会话的摘要或规范化 JSON 报告。 |
-| `abb sessions compare <from> <to>` | 比较两个会话的文件、风险、命令和 HEAD 修订。 |
-| `abb report` | 打印最新的 `session.json`。 |
-| `abb summary` | 打印最新的人类可读会话摘要。 |
-| `abb commands` | 打印最新会话中记录的命令。 |
-| `abb timeline` | 打印最新的时间线报告。 |
-| `abb risks` | 打印风险变更和可能的 secret 发现，支持可选过滤。 |
-| `abb export` | 将最新会话导出为合并 Markdown 或结构化 JSON。 |
-| `abb rollback` | 打印安全的手动 rollback 建议。 |
+| 命令                               | 用途                                                                        |
+| ---------------------------------- | --------------------------------------------------------------------------- |
+| `abb init`                         | 创建 `.agentblackbox.json`。                                                |
+| `abb config validate`              | 验证配置 schema、版本和规范化值。                                           |
+| `abb config migrate`               | 使用当前 schema 版本重写配置。                                              |
+| `abb start`                        | 在当前 Git 仓库启动前台记录会话。                                           |
+| `abb doctor`                       | 检查本地前置条件、仓库状态、配置和会话健康。                                |
+| `abb run -- <command>`             | 运行命令，并为活动会话记录已脱敏的命令元数据。支持 `--group` 和 `--phase`。 |
+| `abb stop`                         | 停止活动会话并生成报告。                                                    |
+| `abb status`                       | 显示会话是 active、stale 还是 absent。                                      |
+| `abb sessions list`                | 列出已完成、不完整和损坏的会话。                                            |
+| `abb sessions show <id>`           | 显示所选会话的摘要或规范化 JSON 报告。                                      |
+| `abb sessions compare <from> <to>` | 比较两个会话的文件、风险、命令和 HEAD 修订。                                |
+| `abb report`                       | 打印最新的 `session.json`。                                                 |
+| `abb summary`                      | 打印最新的人类可读会话摘要。                                                |
+| `abb commands`                     | 打印最新会话中记录的命令。                                                  |
+| `abb timeline`                     | 打印最新的时间线报告。                                                      |
+| `abb risks`                        | 打印风险变更和可能的 secret 发现，支持可选过滤。                            |
+| `abb export`                       | 将最新会话导出为合并 Markdown 或结构化 JSON。                               |
+| `abb rollback`                     | 打印安全的手动 rollback 建议。                                              |
 
 详细用法：[docs/USAGE.md](docs/USAGE.md)
 
@@ -1276,7 +1288,7 @@ Agent Black Box 只报告可观察证据。它不能看到：
 #### 项目质量
 
 - TypeScript strict mode。
-- 核心行为的 Vitest 测试覆盖。
+- 核心行为的 Vitest 测试。
 - GitHub Actions CI 运行 typecheck、build 和 tests。
 - CodeQL 分析。
 - Dependabot 用于 patch/minor 维护。
@@ -1333,6 +1345,7 @@ MVP 范围之外：
 MIT。参见 [LICENSE](LICENSE)。
 
 <a id="hindi"></a>
+
 ### हिन्दी
 
 Agent Black Box एक local-first CLI है जो AI-assisted coding sessions के दौरान repository में observable changes को record और explain करता है।
@@ -1389,26 +1402,26 @@ Reports यहां लिखे जाते हैं:
 
 #### CLI Commands
 
-| Command | Purpose |
-| --- | --- |
-| `abb init` | `.agentblackbox.json` बनाता है। |
-| `abb config validate` | config schema, version और normalized values validate करता है। |
-| `abb config migrate` | config को current schema version से rewrite करता है। |
-| `abb start` | current Git repository में foreground recording session start करता है। |
-| `abb doctor` | local prerequisites, repository state, config और session health check करता है। |
-| `abb run -- <command>` | command चलाता है और active session के लिए redacted command metadata record करता है। `--group` और `--phase` support करता है। |
-| `abb stop` | active session stop करता है और reports generate करता है। |
-| `abb status` | session active, stale या absent है यह दिखाता है। |
-| `abb sessions list` | complete, incomplete और corrupt sessions list करता है। |
-| `abb sessions show <id>` | selected session का summary या normalized JSON report दिखाता है। |
-| `abb sessions compare <from> <to>` | दो sessions के files, risks, commands और HEAD revisions compare करता है। |
-| `abb report` | latest `session.json` print करता है। |
-| `abb summary` | latest human-readable session summary print करता है। |
-| `abb commands` | latest session में recorded commands print करता है। |
-| `abb timeline` | latest chronological timeline print करता है। |
-| `abb risks` | risky changes और possible secret findings optional filters के साथ print करता है। |
-| `abb export` | latest session को bundled Markdown या structured JSON में export करता है। |
-| `abb rollback` | safe manual rollback suggestions print करता है। |
+| Command                            | Purpose                                                                                                                     |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `abb init`                         | `.agentblackbox.json` बनाता है।                                                                                             |
+| `abb config validate`              | config schema, version और normalized values validate करता है।                                                               |
+| `abb config migrate`               | config को current schema version से rewrite करता है।                                                                        |
+| `abb start`                        | current Git repository में foreground recording session start करता है।                                                      |
+| `abb doctor`                       | local prerequisites, repository state, config और session health check करता है।                                              |
+| `abb run -- <command>`             | command चलाता है और active session के लिए redacted command metadata record करता है। `--group` और `--phase` support करता है। |
+| `abb stop`                         | active session stop करता है और reports generate करता है।                                                                    |
+| `abb status`                       | session active, stale या absent है यह दिखाता है।                                                                            |
+| `abb sessions list`                | complete, incomplete और corrupt sessions list करता है।                                                                      |
+| `abb sessions show <id>`           | selected session का summary या normalized JSON report दिखाता है।                                                            |
+| `abb sessions compare <from> <to>` | दो sessions के files, risks, commands और HEAD revisions compare करता है।                                                    |
+| `abb report`                       | latest `session.json` print करता है।                                                                                        |
+| `abb summary`                      | latest human-readable session summary print करता है।                                                                        |
+| `abb commands`                     | latest session में recorded commands print करता है।                                                                         |
+| `abb timeline`                     | latest chronological timeline print करता है।                                                                                |
+| `abb risks`                        | risky changes और possible secret findings optional filters के साथ print करता है।                                            |
+| `abb export`                       | latest session को bundled Markdown या structured JSON में export करता है।                                                   |
+| `abb rollback`                     | safe manual rollback suggestions print करता है।                                                                             |
 
 Detailed usage: [docs/USAGE.md](docs/USAGE.md)
 
@@ -1465,7 +1478,7 @@ Reports जानबूझकर cautious language जैसे "possible", "lik
 #### Project Quality
 
 - TypeScript strict mode।
-- Core behavior के लिए Vitest test coverage।
+- मुख्य व्यवहार के लिए Vitest परीक्षण।
 - typecheck, build और tests के लिए GitHub Actions CI।
 - CodeQL analysis।
 - patch/minor maintenance के लिए Dependabot।
@@ -1522,6 +1535,7 @@ MVP scope से बाहर:
 MIT. [LICENSE](LICENSE) देखें।
 
 <a id="arabic"></a>
+
 ### العربية
 
 Agent Black Box هو أداة CLI محلية أولا لتسجيل وشرح تغييرات المستودع القابلة للملاحظة أثناء جلسات البرمجة بمساعدة الذكاء الاصطناعي.
@@ -1578,26 +1592,26 @@ pnpm dev rollback
 
 #### أوامر CLI
 
-| الأمر | الغرض |
-| --- | --- |
-| `abb init` | ينشئ `.agentblackbox.json`. |
-| `abb config validate` | يتحقق من schema والإصدار والقيم المعيارية. |
-| `abb config migrate` | يعيد كتابة config باستخدام الإصدار الحالي من schema. |
-| `abb start` | يبدأ جلسة تسجيل foreground في مستودع Git الحالي. |
-| `abb doctor` | يفحص المتطلبات المحلية وحالة المستودع و config وصحة الجلسة. |
-| `abb run -- <command>` | يشغل الأمر ويسجل بيانات أوامر مخفية القيم للجلسة النشطة. يدعم `--group` و `--phase`. |
-| `abb stop` | يوقف الجلسة النشطة وينشئ التقارير. |
-| `abb status` | يعرض ما إذا كانت الجلسة active أو stale أو absent. |
-| `abb sessions list` | يسرد الجلسات المكتملة وغير المكتملة والتالفة. |
-| `abb sessions show <id>` | يعرض ملخص الجلسة المحددة أو تقرير JSON المنظم. |
-| `abb sessions compare <from> <to>` | يقارن الملفات والمخاطر والأوامر ومراجعات HEAD بين جلستين. |
-| `abb report` | يطبع أحدث `session.json`. |
-| `abb summary` | يطبع أحدث ملخص قابل للقراءة. |
-| `abb commands` | يطبع الأوامر المسجلة في أحدث جلسة. |
-| `abb timeline` | يطبع أحدث timeline زمني. |
-| `abb risks` | يطبع التغييرات الخطرة والأسرار المحتملة مع فلاتر اختيارية. |
-| `abb export` | يصدر أحدث جلسة كـ Markdown مجمع أو JSON منظم. |
-| `abb rollback` | يطبع اقتراحات rollback يدوية آمنة. |
+| الأمر                              | الغرض                                                                                |
+| ---------------------------------- | ------------------------------------------------------------------------------------ |
+| `abb init`                         | ينشئ `.agentblackbox.json`.                                                          |
+| `abb config validate`              | يتحقق من schema والإصدار والقيم المعيارية.                                           |
+| `abb config migrate`               | يعيد كتابة config باستخدام الإصدار الحالي من schema.                                 |
+| `abb start`                        | يبدأ جلسة تسجيل foreground في مستودع Git الحالي.                                     |
+| `abb doctor`                       | يفحص المتطلبات المحلية وحالة المستودع و config وصحة الجلسة.                          |
+| `abb run -- <command>`             | يشغل الأمر ويسجل بيانات أوامر مخفية القيم للجلسة النشطة. يدعم `--group` و `--phase`. |
+| `abb stop`                         | يوقف الجلسة النشطة وينشئ التقارير.                                                   |
+| `abb status`                       | يعرض ما إذا كانت الجلسة active أو stale أو absent.                                   |
+| `abb sessions list`                | يسرد الجلسات المكتملة وغير المكتملة والتالفة.                                        |
+| `abb sessions show <id>`           | يعرض ملخص الجلسة المحددة أو تقرير JSON المنظم.                                       |
+| `abb sessions compare <from> <to>` | يقارن الملفات والمخاطر والأوامر ومراجعات HEAD بين جلستين.                            |
+| `abb report`                       | يطبع أحدث `session.json`.                                                            |
+| `abb summary`                      | يطبع أحدث ملخص قابل للقراءة.                                                         |
+| `abb commands`                     | يطبع الأوامر المسجلة في أحدث جلسة.                                                   |
+| `abb timeline`                     | يطبع أحدث timeline زمني.                                                             |
+| `abb risks`                        | يطبع التغييرات الخطرة والأسرار المحتملة مع فلاتر اختيارية.                           |
+| `abb export`                       | يصدر أحدث جلسة كـ Markdown مجمع أو JSON منظم.                                        |
+| `abb rollback`                     | يطبع اقتراحات rollback يدوية آمنة.                                                   |
 
 الاستخدام التفصيلي: [docs/USAGE.md](docs/USAGE.md)
 
@@ -1654,7 +1668,7 @@ Agent Black Box يبلغ فقط عن الأدلة القابلة للملاحظ�
 #### جودة المشروع
 
 - TypeScript strict mode.
-- تغطية Vitest للسلوك الأساسي.
+- اختبارات Vitest للسلوك الأساسي.
 - GitHub Actions CI من أجل typecheck و build و tests.
 - تحليل CodeQL.
 - Dependabot لصيانة patch/minor.
@@ -1711,6 +1725,7 @@ node dist/cli.js --help
 MIT. راجع [LICENSE](LICENSE).
 
 <a id="russkiy"></a>
+
 ### Русский
 
 Agent Black Box — local-first CLI для записи и объяснения наблюдаемых изменений репозитория во время сессий разработки с ИИ.
@@ -1767,26 +1782,26 @@ pnpm dev rollback
 
 #### CLI Команды
 
-| Команда | Назначение |
-| --- | --- |
-| `abb init` | Создает `.agentblackbox.json`. |
-| `abb config validate` | Проверяет schema, version и normalized values. |
-| `abb config migrate` | Перезаписывает config текущей версией schema. |
-| `abb start` | Запускает foreground recording session в текущем Git repository. |
-| `abb doctor` | Проверяет local prerequisites, repository state, config и session health. |
-| `abb run -- <command>` | Запускает команду и пишет redacted command metadata для active session. Поддерживает `--group` и `--phase`. |
-| `abb stop` | Останавливает active session и генерирует reports. |
-| `abb status` | Показывает, является ли session active, stale или absent. |
-| `abb sessions list` | Показывает завершенные, незавершенные и поврежденные sessions. |
-| `abb sessions show <id>` | Показывает summary или нормализованный JSON выбранной session. |
-| `abb sessions compare <from> <to>` | Сравнивает файлы, риски, команды и HEAD revisions двух sessions. |
-| `abb report` | Печатает последний `session.json`. |
-| `abb summary` | Печатает последний human-readable summary. |
-| `abb commands` | Печатает команды, записанные в последней session. |
-| `abb timeline` | Печатает последнюю chronological timeline. |
-| `abb risks` | Печатает risky changes и possible secret findings с optional filters. |
-| `abb export` | Экспортирует последнюю session как bundled Markdown или structured JSON. |
-| `abb rollback` | Печатает safe manual rollback suggestions. |
+| Команда                            | Назначение                                                                                                  |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `abb init`                         | Создает `.agentblackbox.json`.                                                                              |
+| `abb config validate`              | Проверяет schema, version и normalized values.                                                              |
+| `abb config migrate`               | Перезаписывает config текущей версией schema.                                                               |
+| `abb start`                        | Запускает foreground recording session в текущем Git repository.                                            |
+| `abb doctor`                       | Проверяет local prerequisites, repository state, config и session health.                                   |
+| `abb run -- <command>`             | Запускает команду и пишет redacted command metadata для active session. Поддерживает `--group` и `--phase`. |
+| `abb stop`                         | Останавливает active session и генерирует reports.                                                          |
+| `abb status`                       | Показывает, является ли session active, stale или absent.                                                   |
+| `abb sessions list`                | Показывает завершенные, незавершенные и поврежденные sessions.                                              |
+| `abb sessions show <id>`           | Показывает summary или нормализованный JSON выбранной session.                                              |
+| `abb sessions compare <from> <to>` | Сравнивает файлы, риски, команды и HEAD revisions двух sessions.                                            |
+| `abb report`                       | Печатает последний `session.json`.                                                                          |
+| `abb summary`                      | Печатает последний human-readable summary.                                                                  |
+| `abb commands`                     | Печатает команды, записанные в последней session.                                                           |
+| `abb timeline`                     | Печатает последнюю chronological timeline.                                                                  |
+| `abb risks`                        | Печатает risky changes и possible secret findings с optional filters.                                       |
+| `abb export`                       | Экспортирует последнюю session как bundled Markdown или structured JSON.                                    |
+| `abb rollback`                     | Печатает safe manual rollback suggestions.                                                                  |
 
 Подробное использование: [docs/USAGE.md](docs/USAGE.md)
 
@@ -1843,7 +1858,7 @@ Reports намеренно используют осторожные форму�
 #### Качество Проекта
 
 - TypeScript strict mode.
-- Vitest coverage для core behavior.
+- Тесты Vitest для основного поведения.
 - GitHub Actions CI для typecheck, build и tests.
 - CodeQL analysis.
 - Dependabot для patch/minor maintenance.
@@ -1900,6 +1915,7 @@ node dist/cli.js --help
 MIT. См. [LICENSE](LICENSE).
 
 <a id="nihongo"></a>
+
 ### 日本語
 
 Agent Black Box は、AI 支援コーディング中にリポジトリで観測できる変更を記録し説明する local-first CLI です。
@@ -1956,26 +1972,26 @@ Reports は以下に書き込まれます:
 
 #### CLI コマンド
 
-| コマンド | 目的 |
-| --- | --- |
-| `abb init` | `.agentblackbox.json` を作成します。 |
-| `abb config validate` | config schema、version、normalized values を検証します。 |
-| `abb config migrate` | config を現在の schema version で書き直します。 |
-| `abb start` | 現在の Git repository で foreground recording session を開始します。 |
-| `abb doctor` | local prerequisites、repository state、config、session health を確認します。 |
-| `abb run -- <command>` | command を実行し、active session の redacted command metadata を記録します。`--group` と `--phase` をサポートします。 |
-| `abb stop` | active session を停止し reports を生成します。 |
-| `abb status` | session が active、stale、absent のどれかを表示します。 |
-| `abb sessions list` | 完了、未完了、破損した sessions を一覧表示します。 |
-| `abb sessions show <id>` | 選択した session の summary または normalized JSON を表示します。 |
-| `abb sessions compare <from> <to>` | 2つの sessions の files、risks、commands、HEAD revisions を比較します。 |
-| `abb report` | 最新の `session.json` を表示します。 |
-| `abb summary` | 最新の人間向け summary を表示します。 |
-| `abb commands` | 最新 session に記録された commands を表示します。 |
-| `abb timeline` | 最新の chronological timeline を表示します。 |
-| `abb risks` | risky changes と possible secret findings を optional filters 付きで表示します。 |
-| `abb export` | 最新 session を bundled Markdown または structured JSON として export します。 |
-| `abb rollback` | safe manual rollback suggestions を表示します。 |
+| コマンド                           | 目的                                                                                                                  |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `abb init`                         | `.agentblackbox.json` を作成します。                                                                                  |
+| `abb config validate`              | config schema、version、normalized values を検証します。                                                              |
+| `abb config migrate`               | config を現在の schema version で書き直します。                                                                       |
+| `abb start`                        | 現在の Git repository で foreground recording session を開始します。                                                  |
+| `abb doctor`                       | local prerequisites、repository state、config、session health を確認します。                                          |
+| `abb run -- <command>`             | command を実行し、active session の redacted command metadata を記録します。`--group` と `--phase` をサポートします。 |
+| `abb stop`                         | active session を停止し reports を生成します。                                                                        |
+| `abb status`                       | session が active、stale、absent のどれかを表示します。                                                               |
+| `abb sessions list`                | 完了、未完了、破損した sessions を一覧表示します。                                                                    |
+| `abb sessions show <id>`           | 選択した session の summary または normalized JSON を表示します。                                                     |
+| `abb sessions compare <from> <to>` | 2つの sessions の files、risks、commands、HEAD revisions を比較します。                                               |
+| `abb report`                       | 最新の `session.json` を表示します。                                                                                  |
+| `abb summary`                      | 最新の人間向け summary を表示します。                                                                                 |
+| `abb commands`                     | 最新 session に記録された commands を表示します。                                                                     |
+| `abb timeline`                     | 最新の chronological timeline を表示します。                                                                          |
+| `abb risks`                        | risky changes と possible secret findings を optional filters 付きで表示します。                                      |
+| `abb export`                       | 最新 session を bundled Markdown または structured JSON として export します。                                        |
+| `abb rollback`                     | safe manual rollback suggestions を表示します。                                                                       |
 
 詳細な使い方: [docs/USAGE.md](docs/USAGE.md)
 
@@ -2032,7 +2048,7 @@ Reports は意図的に "possible"、"likely"、"detected from repository change
 #### プロジェクト品質
 
 - TypeScript strict mode。
-- Core behavior の Vitest test coverage。
+- コア動作の Vitest テスト。
 - typecheck、build、tests の GitHub Actions CI。
 - CodeQL analysis。
 - patch/minor maintenance の Dependabot。
@@ -2089,6 +2105,7 @@ MVP の範囲外:
 MIT。 [LICENSE](LICENSE) を参照してください。
 
 <a id="bahasa-indonesia"></a>
+
 ### Bahasa Indonesia
 
 Agent Black Box adalah CLI local-first untuk merekam dan menjelaskan perubahan repositori yang dapat diamati selama sesi coding berbantuan AI.
@@ -2145,26 +2162,26 @@ Laporan ditulis ke:
 
 #### Perintah CLI
 
-| Perintah | Tujuan |
-| --- | --- |
-| `abb init` | Membuat `.agentblackbox.json`. |
-| `abb config validate` | Memvalidasi config schema, version, dan normalized values. |
-| `abb config migrate` | Menulis ulang config dengan schema version saat ini. |
-| `abb start` | Memulai foreground recording session di Git repository saat ini. |
-| `abb doctor` | Memeriksa local prerequisites, repository state, config, dan session health. |
-| `abb run -- <command>` | Menjalankan command dan merekam redacted command metadata untuk active session. Mendukung `--group` dan `--phase`. |
-| `abb stop` | Menghentikan active session dan menghasilkan reports. |
-| `abb status` | Menampilkan apakah session active, stale, atau absent. |
-| `abb sessions list` | Menampilkan session complete, incomplete, dan corrupt. |
-| `abb sessions show <id>` | Menampilkan summary atau normalized JSON untuk session terpilih. |
-| `abb sessions compare <from> <to>` | Membandingkan files, risks, commands, dan HEAD revisions dua session. |
-| `abb report` | Mencetak `session.json` terbaru. |
-| `abb summary` | Mencetak human-readable session summary terbaru. |
-| `abb commands` | Mencetak commands yang direkam di session terbaru. |
-| `abb timeline` | Mencetak chronological timeline terbaru. |
-| `abb risks` | Mencetak risky changes dan possible secret findings dengan filter opsional. |
-| `abb export` | Mengekspor session terbaru sebagai bundled Markdown atau structured JSON. |
-| `abb rollback` | Mencetak safe manual rollback suggestions. |
+| Perintah                           | Tujuan                                                                                                             |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `abb init`                         | Membuat `.agentblackbox.json`.                                                                                     |
+| `abb config validate`              | Memvalidasi config schema, version, dan normalized values.                                                         |
+| `abb config migrate`               | Menulis ulang config dengan schema version saat ini.                                                               |
+| `abb start`                        | Memulai foreground recording session di Git repository saat ini.                                                   |
+| `abb doctor`                       | Memeriksa local prerequisites, repository state, config, dan session health.                                       |
+| `abb run -- <command>`             | Menjalankan command dan merekam redacted command metadata untuk active session. Mendukung `--group` dan `--phase`. |
+| `abb stop`                         | Menghentikan active session dan menghasilkan reports.                                                              |
+| `abb status`                       | Menampilkan apakah session active, stale, atau absent.                                                             |
+| `abb sessions list`                | Menampilkan session complete, incomplete, dan corrupt.                                                             |
+| `abb sessions show <id>`           | Menampilkan summary atau normalized JSON untuk session terpilih.                                                   |
+| `abb sessions compare <from> <to>` | Membandingkan files, risks, commands, dan HEAD revisions dua session.                                              |
+| `abb report`                       | Mencetak `session.json` terbaru.                                                                                   |
+| `abb summary`                      | Mencetak human-readable session summary terbaru.                                                                   |
+| `abb commands`                     | Mencetak commands yang direkam di session terbaru.                                                                 |
+| `abb timeline`                     | Mencetak chronological timeline terbaru.                                                                           |
+| `abb risks`                        | Mencetak risky changes dan possible secret findings dengan filter opsional.                                        |
+| `abb export`                       | Mengekspor session terbaru sebagai bundled Markdown atau structured JSON.                                          |
+| `abb rollback`                     | Mencetak safe manual rollback suggestions.                                                                         |
 
 Penggunaan detail: [docs/USAGE.md](docs/USAGE.md)
 
@@ -2221,7 +2238,7 @@ Reports sengaja memakai bahasa hati-hati seperti "possible", "likely", dan "dete
 #### Kualitas Proyek
 
 - TypeScript strict mode.
-- Vitest test coverage untuk core behavior.
+- Pengujian Vitest untuk perilaku inti.
 - GitHub Actions CI untuk typecheck, build, dan tests.
 - CodeQL analysis.
 - Dependabot untuk patch/minor maintenance.

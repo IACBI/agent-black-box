@@ -4,7 +4,7 @@ import type {
   FileEvent,
   GitSnapshot,
   SessionBaseline,
-  SessionChangeEvidence
+  SessionChangeEvidence,
 } from "../types.js";
 import { normalizePath } from "../utils/paths.js";
 
@@ -34,9 +34,9 @@ export function buildChangeEvidence(
         atStart: baseline ? start !== undefined : null,
         observedDuringSession: observedPaths.has(filePath),
         atEnd: end !== undefined,
-        gitMetadataChanged: baseline ? !sameGitMetadata(start, end) : null
+        gitMetadataChanged: baseline ? !sameGitMetadata(start, end) : null,
       };
-    })
+    }),
   };
 }
 
@@ -49,9 +49,10 @@ export function selectSessionRelevantChanges(
   }
 
   const evidenceByPath = new Map(evidence.files.map((file) => [file.path, file]));
-  const relevantFinalChanges = !evidence.baselineAvailable || evidence.indexChanged
-    ? finalGit.changedFiles
-    : finalGit.changedFiles.filter((file) => isSessionRelevant(evidenceByPath.get(file.path)));
+  const relevantFinalChanges =
+    !evidence.baselineAvailable || evidence.indexChanged
+      ? finalGit.changedFiles
+      : finalGit.changedFiles.filter((file) => isSessionRelevant(evidenceByPath.get(file.path)));
   const changesByPath = new Map((evidence.committedChanges ?? []).map((file) => [file.path, file]));
   for (const file of relevantFinalChanges) {
     changesByPath.set(file.path, file);
@@ -67,9 +68,7 @@ export function findFileChangeEvidence(
   return evidence?.files.find((file) => file.path === filePath);
 }
 
-export function indexFileChangeEvidence(
-  evidence: SessionChangeEvidence | undefined
-): Map<string, FileChangeEvidence> {
+export function indexFileChangeEvidence(evidence: SessionChangeEvidence | undefined): Map<string, FileChangeEvidence> {
   return new Map((evidence?.files ?? []).map((file) => [file.path, file]));
 }
 

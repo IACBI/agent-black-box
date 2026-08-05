@@ -5,14 +5,16 @@ import { detectRiskForPath, detectRisks } from "../src/risks/riskDetector.js";
 describe("risk detector", () => {
   it("detects env files including .env variants", () => {
     const findings = detectRiskForPath(".env.local", DEFAULT_CONFIG.riskPatterns);
-    expect(findings.some((finding) => finding.category === "Environment file" && finding.severity === "high")).toBe(true);
+    expect(findings.some((finding) => finding.category === "Environment file" && finding.severity === "high")).toBe(
+      true
+    );
   });
 
   it("detects dependency and CI changes", () => {
     const findings = detectRisks(
       [
         { path: "package.json", status: "modified" },
-        { path: ".github/workflows/ci.yml", status: "modified" }
+        { path: ".github/workflows/ci.yml", status: "modified" },
       ],
       DEFAULT_CONFIG
     );
@@ -26,7 +28,7 @@ describe("risk detector", () => {
     const findings = detectRisks(
       [
         { path: "src/auth/session.ts", status: "modified" },
-        { path: "db/migrations/001_create_users.sql", status: "added" }
+        { path: "db/migrations/001_create_users.sql", status: "added" },
       ],
       DEFAULT_CONFIG
     );
@@ -36,10 +38,7 @@ describe("risk detector", () => {
   });
 
   it("adds a bounded score bonus for larger risky changes", () => {
-    const [finding] = detectRisks(
-      [{ path: ".env", status: "added", insertions: 600, deletions: 0 }],
-      DEFAULT_CONFIG
-    );
+    const [finding] = detectRisks([{ path: ".env", status: "added", insertions: 600, deletions: 0 }], DEFAULT_CONFIG);
 
     expect(finding?.severity).toBe("high");
     expect(finding?.score).toBe(100);

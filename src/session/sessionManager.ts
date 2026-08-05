@@ -1,4 +1,6 @@
-import { appendFile, open, readFile, rename, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { appendFile, open, readFile, realpath, writeFile } from "node:fs/promises";
+import { createReadStream } from "node:fs";
 import path from "node:path";
 import type {
   ActiveSession,
@@ -8,14 +10,14 @@ import type {
   GitSnapshot,
   SessionBaseline,
   SessionReport,
-  StopRequest
+  StopRequest,
 } from "../types.js";
 import { collectGitChangesBetween, collectGitSnapshot } from "../git/git.js";
 import { detectRisks } from "../risks/riskDetector.js";
 import { detectPossibleSecrets } from "../risks/secretDetector.js";
 import { buildSessionReport } from "../reports/markdown.js";
 import { writeReports } from "../reports/reportWriter.js";
-import { ensureDir, pathExists, readJsonFile, removeFileIfExists, writeJsonFile } from "../utils/files.js";
+import { ensureDir, pathExists, removeFileIfExists, writeJsonFile } from "../utils/files.js";
 import { buildChangeEvidence, selectSessionRelevantChanges } from "./changeEvidence.js";
 import { listSessionCatalog, resolveSessionEntry } from "./sessionCatalog.js";
 
@@ -26,12 +28,28 @@ const EVENTS_FILE = "events.ndjson";
 const COMMANDS_FILE = "commands.ndjson";
 const SESSION_START_FILE = "session-start.json";
 const GIT_BASELINE_FILE = "git-start.json";
+const MAX_NDJSON_LINE_BYTES = 1024 * 1024;
+const MAX_NDJSON_RECORDS = 1_000_000;
+const MAX_INTEGRITY_WARNINGS = 100;
+const MAX_PATH_LENGTH = 32_768;
+const MAX_COMMAND_LENGTH = 32_768;
+const MAX_METADATA_LENGTH = 80;
 
-interface SessionLock {
+export interface SessionLock {
   sessionId: string;
   pid: number;
   createdAt: string;
   sessionDir: string;
+  ownerToken?: string;
+}
+
+export type SessionRecoveryStatus =
+  "no-active-session" | "active" | "recoverable" | "already-complete" | "corrupt" | "inconsistent";
+
+export interface SessionRecoveryState {
+  status: SessionRecoveryStatus;
+  message: string;
+  active: ActiveSession | null;
 }
 
 interface StateReadResult<T> {
@@ -87,28 +105,38 @@ export async function createSession(repoRoot: string, config: AgentBlackBoxConfi
     repoRoot,
     sessionDir,
     startedAt,
-    pid: process.pid
+    pid: process.pid,
+    ownerToken: randomUUID(),
   };
   const baseline: SessionBaseline = {
     capturedAt: new Date().toISOString(),
-    git: await collectGitSnapshot(repoRoot, config.exclude)
+    git: await collectGitSnapshot(repoRoot, config.exclude),
   };
 
   await ensureDir(getStateDir(repoRoot, config));
+  const recoveryState = await inspectSessionRecoveryState(repoRoot, config);
+  if (recoveryState.status !== "no-active-session") {
+    throw new Error(`${recoveryState.message} Run \`abb recover\` before starting another session.`);
+  }
+
   await acquireSessionLock(repoRoot, config, {
     sessionId: session.id,
     pid: session.pid,
     createdAt: session.startedAt,
-    sessionDir: session.sessionDir
+    sessionDir: session.sessionDir,
+    ownerToken: session.ownerToken,
   });
 
   try {
     const existingState = await readStateFile<ActiveSession>(getActiveSessionPath(repoRoot, config), isActiveSession);
     if (existingState.corrupted) {
-      await quarantineStateFile(getActiveSessionPath(repoRoot, config));
-    } else if (existingState.value && isProcessRunning(existingState.value.pid)) {
-      await releaseSessionLock(repoRoot, config);
-      throw new Error(`A session is already active: ${existingState.value.id}`);
+      await releaseSessionLock(repoRoot, config, session);
+      throw new Error("Active session state is corrupted. Run `abb doctor` before starting another session.");
+    } else if (existingState.value) {
+      await releaseSessionLock(repoRoot, config, session);
+      throw new Error(
+        `A session already exists: ${existingState.value.id}. Run \`abb recover\` before starting another session.`
+      );
     }
 
     await ensureDir(sessionDir);
@@ -121,7 +149,7 @@ export async function createSession(repoRoot: string, config: AgentBlackBoxConfi
 
     return session;
   } catch (error) {
-    await releaseSessionLock(repoRoot, config);
+    await releaseSessionLock(repoRoot, config, session);
     throw error;
   }
 }
@@ -130,12 +158,114 @@ export async function readActiveSession(repoRoot: string, config: AgentBlackBoxC
   return (await readActiveSessionState(repoRoot, config)).value;
 }
 
-export async function readActiveSessionState(repoRoot: string, config: AgentBlackBoxConfig): Promise<StateReadResult<ActiveSession>> {
+export async function readActiveSessionState(
+  repoRoot: string,
+  config: AgentBlackBoxConfig
+): Promise<StateReadResult<ActiveSession>> {
   return readStateFile(getActiveSessionPath(repoRoot, config), isActiveSession);
 }
 
 export async function readSessionLock(repoRoot: string, config: AgentBlackBoxConfig): Promise<SessionLock | null> {
-  return (await readStateFile<SessionLock>(getSessionLockPath(repoRoot, config), isSessionLock)).value;
+  return (await readSessionLockState(repoRoot, config)).value;
+}
+
+export async function readSessionLockState(
+  repoRoot: string,
+  config: AgentBlackBoxConfig
+): Promise<StateReadResult<SessionLock>> {
+  return readStateFile<SessionLock>(getSessionLockPath(repoRoot, config), isSessionLock);
+}
+
+export async function inspectSessionRecoveryState(
+  repoRoot: string,
+  config: AgentBlackBoxConfig
+): Promise<SessionRecoveryState> {
+  const activeState = await readActiveSessionState(repoRoot, config);
+  const lockState = await readSessionLockState(repoRoot, config);
+
+  if (activeState.corrupted || lockState.corrupted) {
+    return {
+      status: "corrupt",
+      message: "Session state or lock is unreadable; no automatic recovery was attempted.",
+      active: null,
+    };
+  }
+
+  if (!activeState.value) {
+    return lockState.value
+      ? {
+          status: "inconsistent",
+          message: `Session lock ${lockState.value.sessionId} exists without an active session state.`,
+          active: null,
+        }
+      : { status: "no-active-session", message: "No active session.", active: null };
+  }
+
+  const active = activeState.value;
+  if (!(await isSessionLocationTrusted(active, repoRoot, config))) {
+    return {
+      status: "inconsistent",
+      message: `Active session ${active.id} does not belong to this repository or configured session directory.`,
+      active,
+    };
+  }
+  if (!lockState.value) {
+    return {
+      status: "inconsistent",
+      message: `Active session ${active.id} has no lock ownership proof.`,
+      active,
+    };
+  }
+  if (!lockMatchesActive(lockState.value, active)) {
+    return {
+      status: "inconsistent",
+      message: `Active session ${active.id} and the session lock do not have the same owner.`,
+      active,
+    };
+  }
+
+  if (isProcessRunning(active.pid)) {
+    return { status: "active", message: `Session ${active.id} is active.`, active };
+  }
+
+  if (await pathExists(path.join(active.sessionDir, "session-metadata.json"))) {
+    return {
+      status: "already-complete",
+      message: `Session ${active.id} has completed reports but stale state files.`,
+      active,
+    };
+  }
+
+  return {
+    status: "recoverable",
+    message: `Session ${active.id} is stale and can be finalized from the current Git state.`,
+    active,
+  };
+}
+
+export async function recoverActiveSession(
+  repoRoot: string,
+  config: AgentBlackBoxConfig
+): Promise<{ state: SessionRecoveryStatus; report?: SessionReport }> {
+  const recovery = await inspectSessionRecoveryState(repoRoot, config);
+
+  if (recovery.status === "no-active-session") {
+    return { state: recovery.status };
+  }
+  if (recovery.status === "active" || recovery.status === "corrupt" || recovery.status === "inconsistent") {
+    throw new Error(recovery.message);
+  }
+
+  const active = recovery.active;
+  if (!active) {
+    throw new Error("Recovery state did not include an active session.");
+  }
+  if (recovery.status === "already-complete") {
+    await clearSessionState(active, config);
+    return { state: recovery.status };
+  }
+
+  return { state: recovery.status, report: await finalizeSession(active, config, "recovery") };
 }
 
 export async function writeStopRequest(
@@ -145,7 +275,7 @@ export async function writeStopRequest(
 ): Promise<StopRequest> {
   const request = {
     sessionId,
-    requestedAt: new Date().toISOString()
+    requestedAt: new Date().toISOString(),
   };
   await writeJsonFile(getStopRequestPath(repoRoot, config), request);
   return request;
@@ -157,7 +287,7 @@ export async function readStopRequest(repoRoot: string, config: AgentBlackBoxCon
     return null;
   }
 
-  return readJsonFile<StopRequest>(requestPath);
+  return (await readStateFile<StopRequest>(requestPath, isStopRequest)).value;
 }
 
 export async function appendFileEvent(session: ActiveSession, event: FileEvent): Promise<void> {
@@ -210,18 +340,30 @@ export async function finalizeSession(
     : [
         baselineState.corrupted
           ? `Git start baseline was unreadable: ${baselineState.error ?? "unexpected shape"}. Change attribution is limited.`
-          : "Git start baseline was missing. Change attribution is limited."
+          : "Git start baseline was missing. Change attribution is limited.",
       ];
-  const report = buildSessionReport(active, endedAt, finalizedBy, fileEvents.records, commandEvents.records, git, risks, possibleSecrets, {
-    warnings: [...fileEvents.warnings, ...commandEvents.warnings, ...baselineWarnings],
-    discardedFileEventLines: fileEvents.discardedLines,
-    discardedCommandEventLines: commandEvents.discardedLines
-  }, baselineState.value, committedChanges);
+  const report = buildSessionReport(
+    active,
+    endedAt,
+    finalizedBy,
+    fileEvents.records,
+    commandEvents.records,
+    git,
+    risks,
+    possibleSecrets,
+    {
+      warnings: [...fileEvents.warnings, ...commandEvents.warnings, ...baselineWarnings],
+      discardedFileEventLines: fileEvents.discardedLines,
+      discardedCommandEventLines: commandEvents.discardedLines,
+    },
+    baselineState.value,
+    committedChanges
+  );
 
   await writeReports(report);
   await removeFileIfExists(getActiveSessionPath(active.repoRoot, config));
   await removeFileIfExists(getStopRequestPath(active.repoRoot, config));
-  await releaseSessionLock(active.repoRoot, config);
+  await releaseSessionLock(active.repoRoot, config, active);
 
   return report;
 }
@@ -274,11 +416,25 @@ async function acquireSessionLock(repoRoot: string, config: AgentBlackBoxConfig,
     throw new Error(`A session lock is already active for ${existing.value.sessionId}.`);
   }
 
-  await removeFileIfExists(lockPath);
-  await acquireSessionLock(repoRoot, config, lock);
+  throw new Error("A stale or unreadable session lock exists. Run `abb recover` or inspect it with `abb doctor`.");
 }
 
-async function releaseSessionLock(repoRoot: string, config: AgentBlackBoxConfig): Promise<void> {
+async function clearSessionState(active: ActiveSession, config: AgentBlackBoxConfig): Promise<void> {
+  const current = await readActiveSession(active.repoRoot, config);
+  if (!current || !activeMatches(current, active)) {
+    throw new Error("Session ownership changed during recovery; state was left untouched.");
+  }
+
+  await removeFileIfExists(getActiveSessionPath(active.repoRoot, config));
+  await removeFileIfExists(getStopRequestPath(active.repoRoot, config));
+  await releaseSessionLock(active.repoRoot, config, active);
+}
+
+async function releaseSessionLock(repoRoot: string, config: AgentBlackBoxConfig, active: ActiveSession): Promise<void> {
+  const lockState = await readSessionLockState(repoRoot, config);
+  if (!lockState.value || !lockMatchesActive(lockState.value, active)) {
+    return;
+  }
   await removeFileIfExists(getSessionLockPath(repoRoot, config));
 }
 
@@ -298,15 +454,6 @@ async function readStateFile<T>(filePath: string, guard: (value: unknown) => val
   }
 }
 
-async function quarantineStateFile(filePath: string): Promise<void> {
-  if (!(await pathExists(filePath))) {
-    return;
-  }
-
-  const suffix = new Date().toISOString().replace(/[:.]/g, "-");
-  await rename(filePath, `${filePath}.corrupt-${suffix}`);
-}
-
 async function readNdjsonRecords<T>(
   filePath: string,
   guard: (value: unknown) => value is T,
@@ -316,29 +463,97 @@ async function readNdjsonRecords<T>(
     return { records: [], discardedLines: 0, warnings: [] };
   }
 
-  const raw = await readFile(filePath, "utf8");
   const records: T[] = [];
   const warnings: string[] = [];
   let discardedLines = 0;
+  let lineNumber = 0;
+  let warningOverflowRecorded = false;
+  const input = createReadStream(filePath);
+  let lineParts: Buffer[] = [];
+  let lineLength = 0;
+  let discardingOversizedLine = false;
 
-  raw.split(/\r?\n/).forEach((line, index) => {
-    if (!line) {
+  const addWarning = (warning: string): void => {
+    if (warnings.length < MAX_INTEGRITY_WARNINGS) {
+      warnings.push(warning);
+    } else if (!warningOverflowRecorded) {
+      warnings.push(`Additional malformed ${label} warnings were omitted.`);
+      warningOverflowRecorded = true;
+    }
+  };
+
+  const processLine = (line: Buffer, oversized: boolean): void => {
+    lineNumber += 1;
+    const normalized = line.length > 0 && line[line.length - 1] === 13 ? line.subarray(0, -1) : line;
+    if (oversized) {
+      discardedLines += 1;
+      addWarning(`Discarded oversized ${label} on line ${lineNumber}.`);
+      return;
+    }
+
+    if (normalized.length === 0) {
+      return;
+    }
+
+    if (records.length >= MAX_NDJSON_RECORDS) {
+      discardedLines += 1;
+      addWarning(`Discarded ${label} beyond the ${MAX_NDJSON_RECORDS} record limit.`);
       return;
     }
 
     try {
-      const parsed = JSON.parse(line) as unknown;
+      const parsed = JSON.parse(normalized.toString("utf8")) as unknown;
       if (guard(parsed)) {
         records.push(parsed);
         return;
       }
       discardedLines += 1;
-      warnings.push(`Discarded malformed ${label} on line ${index + 1}.`);
+      addWarning(`Discarded malformed ${label} on line ${lineNumber}.`);
     } catch {
       discardedLines += 1;
-      warnings.push(`Discarded unreadable ${label} on line ${index + 1}.`);
+      addWarning(`Discarded unreadable ${label} on line ${lineNumber}.`);
     }
-  });
+  };
+
+  for await (const chunk of input) {
+    let offset = 0;
+    while (offset < chunk.length) {
+      const newline = chunk.indexOf(10, offset);
+      const segmentEnd = newline === -1 ? chunk.length : newline;
+      const segment = chunk.subarray(offset, segmentEnd);
+
+      if (!discardingOversizedLine) {
+        if (lineLength + segment.length > MAX_NDJSON_LINE_BYTES) {
+          lineParts = [];
+          lineLength = 0;
+          discardingOversizedLine = true;
+        } else if (segment.length > 0) {
+          lineParts.push(segment);
+          lineLength += segment.length;
+        }
+      }
+
+      if (newline === -1) {
+        break;
+      }
+
+      processLine(
+        discardingOversizedLine ? Buffer.alloc(0) : Buffer.concat(lineParts, lineLength),
+        discardingOversizedLine
+      );
+      lineParts = [];
+      lineLength = 0;
+      discardingOversizedLine = false;
+      offset = newline + 1;
+    }
+  }
+
+  if (discardingOversizedLine || lineLength > 0) {
+    processLine(
+      discardingOversizedLine ? Buffer.alloc(0) : Buffer.concat(lineParts, lineLength),
+      discardingOversizedLine
+    );
+  }
 
   return { records, discardedLines, warnings };
 }
@@ -349,11 +564,12 @@ function isActiveSession(value: unknown): value is ActiveSession {
   }
 
   return (
-    typeof value.id === "string" &&
-    typeof value.repoRoot === "string" &&
-    typeof value.sessionDir === "string" &&
-    typeof value.startedAt === "string" &&
-    Number.isInteger(value.pid)
+    isSessionId(value.id) &&
+    isBoundedString(value.repoRoot, MAX_PATH_LENGTH) &&
+    isBoundedString(value.sessionDir, MAX_PATH_LENGTH) &&
+    isIsoDate(value.startedAt) &&
+    isPositiveInteger(value.pid) &&
+    isOptionalOwnerToken(value.ownerToken)
   );
 }
 
@@ -363,11 +579,20 @@ function isSessionLock(value: unknown): value is SessionLock {
   }
 
   return (
-    typeof value.sessionId === "string" &&
-    typeof value.createdAt === "string" &&
-    typeof value.sessionDir === "string" &&
-    Number.isInteger(value.pid)
+    isSessionId(value.sessionId) &&
+    isIsoDate(value.createdAt) &&
+    isBoundedString(value.sessionDir, MAX_PATH_LENGTH) &&
+    isPositiveInteger(value.pid) &&
+    isOptionalOwnerToken(value.ownerToken)
   );
+}
+
+function isStopRequest(value: unknown): value is StopRequest {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return isSessionId(value.sessionId) && isIsoDate(value.requestedAt);
 }
 
 function isFileEvent(value: unknown): value is FileEvent {
@@ -376,8 +601,8 @@ function isFileEvent(value: unknown): value is FileEvent {
   }
 
   return (
-    typeof value.timestamp === "string" &&
-    typeof value.path === "string" &&
+    isIsoDate(value.timestamp) &&
+    isBoundedString(value.path, MAX_PATH_LENGTH) &&
     (value.eventType === "add" || value.eventType === "change" || value.eventType === "unlink")
   );
 }
@@ -388,37 +613,37 @@ function isCommandEvent(value: unknown): value is CommandEvent {
   }
 
   return (
-    typeof value.startedAt === "string" &&
-    typeof value.endedAt === "string" &&
-    typeof value.command === "string" &&
-    typeof value.cwd === "string" &&
-    (typeof value.label === "string" || value.label === undefined) &&
-    (typeof value.group === "string" || value.group === undefined) &&
-    (typeof value.phase === "string" || value.phase === undefined) &&
-    (typeof value.exitCode === "number" || value.exitCode === null) &&
-    typeof value.durationMs === "number" &&
-    (typeof value.error === "string" || value.error === undefined)
+    isIsoDate(value.startedAt) &&
+    isIsoDate(value.endedAt) &&
+    isBoundedString(value.command, MAX_COMMAND_LENGTH) &&
+    isBoundedString(value.cwd, MAX_PATH_LENGTH) &&
+    isOptionalBoundedString(value.label, MAX_METADATA_LENGTH) &&
+    isOptionalBoundedString(value.group, MAX_METADATA_LENGTH) &&
+    isOptionalBoundedString(value.phase, MAX_METADATA_LENGTH) &&
+    (isInteger(value.exitCode) || value.exitCode === null) &&
+    isNonNegativeFiniteNumber(value.durationMs) &&
+    isOptionalBoundedString(value.error, MAX_COMMAND_LENGTH)
   );
 }
 
 function isSessionBaseline(value: unknown): value is SessionBaseline {
-  return isRecord(value) && typeof value.capturedAt === "string" && isGitSnapshot(value.git);
+  return isRecord(value) && isIsoDate(value.capturedAt) && isGitSnapshot(value.git);
 }
 
 function isGitSnapshot(value: unknown): value is GitSnapshot {
   return (
     isRecord(value) &&
-    typeof value.repoRoot === "string" &&
-    (typeof value.head === "string" || value.head === undefined) &&
-    (typeof value.indexFingerprint === "string" || value.indexFingerprint === undefined) &&
-    (typeof value.branch === "string" || value.branch === undefined) &&
-    typeof value.statusText === "string" &&
-    typeof value.diffSummaryText === "string" &&
+    isBoundedString(value.repoRoot, MAX_PATH_LENGTH) &&
+    isOptionalBoundedString(value.head, 128) &&
+    isOptionalBoundedString(value.indexFingerprint, 128) &&
+    isOptionalBoundedString(value.branch, 1024) &&
+    isBoundedString(value.statusText, MAX_COMMAND_LENGTH * 32) &&
+    isBoundedString(value.diffSummaryText, MAX_COMMAND_LENGTH * 32) &&
     Array.isArray(value.changedFiles) &&
     value.changedFiles.every(
       (file) =>
         isRecord(file) &&
-        typeof file.path === "string" &&
+        isBoundedString(file.path, MAX_PATH_LENGTH) &&
         ["added", "modified", "deleted", "renamed", "unknown"].includes(String(file.status))
     )
   );
@@ -426,6 +651,83 @@ function isGitSnapshot(value: unknown): value is GitSnapshot {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isSessionId(value: unknown): value is string {
+  return typeof value === "string" && /^session-[A-Za-z0-9._-]{1,200}$/.test(value);
+}
+
+function isIsoDate(value: unknown): value is string {
+  return typeof value === "string" && value.length <= 40 && !Number.isNaN(Date.parse(value));
+}
+
+function isBoundedString(value: unknown, maxLength: number): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= maxLength;
+}
+
+function isOptionalBoundedString(value: unknown, maxLength: number): value is string | undefined {
+  return value === undefined || isBoundedString(value, maxLength);
+}
+
+function isOptionalOwnerToken(value: unknown): value is string | undefined {
+  return value === undefined || (typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(value));
+}
+
+function lockMatchesActive(lock: SessionLock, active: ActiveSession): boolean {
+  if (lock.sessionId !== active.id || lock.pid !== active.pid || lock.sessionDir !== active.sessionDir) {
+    return false;
+  }
+  return lock.ownerToken === active.ownerToken;
+}
+
+function activeMatches(left: ActiveSession, right: ActiveSession): boolean {
+  return (
+    left.id === right.id &&
+    left.pid === right.pid &&
+    left.sessionDir === right.sessionDir &&
+    left.ownerToken === right.ownerToken
+  );
+}
+
+async function isSessionLocationTrusted(
+  active: ActiveSession,
+  repoRoot: string,
+  config: AgentBlackBoxConfig
+): Promise<boolean> {
+  const expectedSessionDir = path.join(getSessionRoot(repoRoot, config), active.id);
+  const [trustedRepoRoot, activeRepoRoot, expectedDirectory, activeDirectory] = await Promise.all([
+    tryRealpath(repoRoot),
+    tryRealpath(active.repoRoot),
+    tryRealpath(expectedSessionDir),
+    tryRealpath(active.sessionDir),
+  ]);
+
+  return (
+    trustedRepoRoot !== null &&
+    trustedRepoRoot === activeRepoRoot &&
+    expectedDirectory !== null &&
+    expectedDirectory === activeDirectory
+  );
+}
+
+async function tryRealpath(targetPath: string): Promise<string | null> {
+  try {
+    return await realpath(targetPath);
+  } catch {
+    return null;
+  }
+}
+
+function isInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value);
+}
+
+function isPositiveInteger(value: unknown): value is number {
+  return isInteger(value) && value > 0;
+}
+
+function isNonNegativeFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
 function isFileExistsError(error: unknown): boolean {

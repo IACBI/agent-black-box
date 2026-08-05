@@ -1,4 +1,5 @@
-import { access, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { access, mkdir, open, readFile, readdir, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
 
 export async function pathExists(filePath: string): Promise<boolean> {
@@ -20,8 +21,31 @@ export async function readJsonFile<T>(filePath: string): Promise<T> {
 }
 
 export async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
-  await ensureDir(path.dirname(filePath));
-  await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  await writeTextFileAtomic(filePath, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+export async function writeTextFileAtomic(filePath: string, contents: string): Promise<void> {
+  const directory = path.dirname(filePath);
+  await ensureDir(directory);
+
+  const temporaryPath = path.join(directory, `.${path.basename(filePath)}.${process.pid}.${randomUUID()}.tmp`);
+  const handle = await open(temporaryPath, "wx", 0o600);
+  try {
+    await handle.writeFile(contents, "utf8");
+    await handle.sync();
+  } catch (error) {
+    await handle.close();
+    await rm(temporaryPath, { force: true });
+    throw error;
+  }
+
+  await handle.close();
+  try {
+    await rename(temporaryPath, filePath);
+  } catch (error) {
+    await rm(temporaryPath, { force: true });
+    throw error;
+  }
 }
 
 export async function removeFileIfExists(filePath: string): Promise<void> {

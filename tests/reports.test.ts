@@ -7,7 +7,7 @@ import {
   generateRisksMarkdown,
   generateRollbackMarkdown,
   generateSummaryMarkdown,
-  generateTimelineMarkdown
+  generateTimelineMarkdown,
 } from "../src/reports/markdown.js";
 
 const baseReport = buildSessionReport(
@@ -15,7 +15,7 @@ const baseReport = buildSessionReport(
     id: "session-test",
     repoRoot: "/repo",
     sessionDir: "/repo/.agent-black-box/sessions/session-test",
-    startedAt: "2026-01-01T00:00:00.000Z"
+    startedAt: "2026-01-01T00:00:00.000Z",
   },
   "2026-01-01T00:01:00.000Z",
   "test",
@@ -30,22 +30,22 @@ const baseReport = buildSessionReport(
       group: "validation",
       phase: "test",
       exitCode: 0,
-      durationMs: 1000
-    }
+      durationMs: 1000,
+    },
   ],
   {
     repoRoot: "/repo",
     branch: "main",
     statusText: "modified src/index.ts",
     diffSummaryText: "src/index.ts | 2 +",
-    changedFiles: [{ path: "src/index.ts", status: "modified", insertions: 2, deletions: 0 }]
+    changedFiles: [{ path: "src/index.ts", status: "modified", insertions: 2, deletions: 0 }],
   },
   [{ path: "src/config.ts", category: "Config file", severity: "medium", score: 60, reason: "Configuration changed." }],
   [{ path: "src/config.ts", line: 4, reason: "Possible token detected.", redacted: "<redacted>" }],
   {
     warnings: [],
     discardedFileEventLines: 0,
-    discardedCommandEventLines: 0
+    discardedCommandEventLines: 0,
   },
   {
     capturedAt: "2026-01-01T00:00:00.000Z",
@@ -54,8 +54,8 @@ const baseReport = buildSessionReport(
       branch: "main",
       statusText: "Working tree clean for included paths.",
       diffSummaryText: "No tracked Git diff was detected.",
-      changedFiles: []
-    }
+      changedFiles: [],
+    },
   }
 );
 
@@ -83,7 +83,9 @@ describe("markdown reports", () => {
     const markdown = generateDiffSummaryMarkdown(baseReport);
 
     expect(markdown).toContain("Git status");
-    expect(markdown).toContain("| <code>src/index.ts</code> | modified | no | yes | unknown | unknown | 2 | 0 | unknown |  |");
+    expect(markdown).toContain(
+      "| <code>src/index.ts</code> | modified | no | yes | unknown | unknown | 2 | 0 | unknown |  |"
+    );
   });
 
   it("escapes repository-controlled values in diff summary tables", () => {
@@ -97,13 +99,29 @@ describe("markdown reports", () => {
             status: "modified",
             insertions: 1,
             deletions: 1,
-            statsNote: "line one | line two\nnext"
-          }
-        ]
-      }
+            statsNote: "line one | line two\nnext",
+          },
+        ],
+      },
     });
 
-    expect(markdown).toContain("| <code>src/a&#124;&#96;b&#96;.ts</code> | modified | unknown | unknown | unknown | unknown | 1 | 1 | unknown | line one \\| line two next |");
+    expect(markdown).toContain(
+      "| <code>src/a&#124;&#96;b&#96;.ts</code> | modified | unknown | unknown | unknown | unknown | 1 | 1 | unknown | line one \\| line two next |"
+    );
+  });
+
+  it("keeps Git status and diff text inside safe code fences", () => {
+    const markdown = generateDiffSummaryMarkdown({
+      ...baseReport,
+      git: {
+        ...baseReport.git,
+        statusText: "modified\n```\n# not a heading",
+        diffSummaryText: "diff\n````\nnot a fence",
+      },
+    });
+
+    expect(markdown).toContain("````text\nmodified\n```\n# not a heading\n````");
+    expect(markdown).toContain("`````text\ndiff\n````\nnot a fence\n`````");
   });
 
   it("generates an executive summary", () => {
@@ -131,7 +149,7 @@ describe("markdown reports", () => {
   it("filters risk findings by severity and category", () => {
     const risks = [
       ...baseReport.risks,
-      { path: ".env", category: "Environment file", severity: "high" as const, score: 90, reason: "Env changed." }
+      { path: ".env", category: "Environment file", severity: "high" as const, score: 90, reason: "Env changed." },
     ];
 
     expect(filterRiskFindings(risks, { minSeverity: "high" }).map((risk) => risk.path)).toEqual([".env"]);
@@ -151,8 +169,8 @@ describe("markdown reports", () => {
       ...baseReport,
       git: {
         ...baseReport.git,
-        changedFiles: [{ path: "src/weird'$(touch owned)\nfile.ts", status: "modified" }]
-      }
+        changedFiles: [{ path: "src/weird'$(touch owned)\nfile.ts", status: "modified" }],
+      },
     });
 
     expect(markdown).toContain("git diff -- 'src/weird'\\''$(touch owned)\\nfile.ts'");

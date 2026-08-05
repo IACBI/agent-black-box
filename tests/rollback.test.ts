@@ -7,7 +7,7 @@ import {
   createRollbackPlan,
   getConfirmationText,
   renderRollbackPlan,
-  toLiteralGitPathspec
+  toLiteralGitPathspec,
 } from "../src/rollback/rollback.js";
 import type { SessionReport } from "../src/types.js";
 import { createTempDir, initGitRepo, removeTempDir } from "./testUtils.js";
@@ -22,7 +22,7 @@ const report = {
   commandCapture: {
     implemented: true,
     mode: "wrapper-only",
-    note: "test"
+    note: "test",
   },
   events: [],
   commands: [],
@@ -34,8 +34,8 @@ const report = {
       { path: "src/index.ts", status: "modified" },
       { path: "README.md", status: "added" },
       { path: "src/old.ts", status: "deleted" },
-      { path: "src/pre-existing.ts", status: "modified" }
-    ]
+      { path: "src/pre-existing.ts", status: "modified" },
+    ],
   },
   baseline: {
     capturedAt: "2026-01-01T00:00:00.000Z",
@@ -43,8 +43,8 @@ const report = {
       repoRoot: "/repo",
       statusText: "modified src/pre-existing.ts",
       diffSummaryText: "",
-      changedFiles: [{ path: "src/pre-existing.ts", status: "modified" }]
-    }
+      changedFiles: [{ path: "src/pre-existing.ts", status: "modified" }],
+    },
   },
   changeEvidence: {
     baselineAvailable: true,
@@ -57,8 +57,14 @@ const report = {
       { path: "src/index.ts", atStart: false, observedDuringSession: true, atEnd: true, gitMetadataChanged: true },
       { path: "README.md", atStart: false, observedDuringSession: true, atEnd: true, gitMetadataChanged: true },
       { path: "src/old.ts", atStart: false, observedDuringSession: true, atEnd: true, gitMetadataChanged: true },
-      { path: "src/pre-existing.ts", atStart: true, observedDuringSession: false, atEnd: true, gitMetadataChanged: false }
-    ]
+      {
+        path: "src/pre-existing.ts",
+        atStart: true,
+        observedDuringSession: false,
+        atEnd: true,
+        gitMetadataChanged: false,
+      },
+    ],
   },
   risks: [],
   riskSummary: {
@@ -68,15 +74,15 @@ const report = {
     severityCounts: {
       low: 0,
       medium: 0,
-      high: 0
-    }
+      high: 0,
+    },
   },
   possibleSecrets: [],
   integrity: {
     warnings: [],
     discardedFileEventLines: 0,
-    discardedCommandEventLines: 0
-  }
+    discardedCommandEventLines: 0,
+  },
 } satisfies SessionReport;
 
 describe("rollback planner", () => {
@@ -87,12 +93,12 @@ describe("rollback planner", () => {
     expect(plan.skippedFiles).toEqual([
       {
         path: "README.md",
-        reason: "Added or untracked files are not removed automatically."
+        reason: "Added or untracked files are not removed automatically.",
       },
       {
         path: "src/pre-existing.ts",
-        reason: "File already had changes at session start; restoring to HEAD could discard pre-session work."
-      }
+        reason: "File already had changes at session start; restoring to HEAD could discard pre-session work.",
+      },
     ]);
     expect(getConfirmationText(plan)).toBe("RESTORE 2 files");
   });
@@ -126,7 +132,7 @@ describe("rollback planner", () => {
       await applyRollbackPlan(repo, {
         requestedFiles: [],
         restorableFiles: [{ path: "src/index.txt", status: "modified" }],
-        skippedFiles: []
+        skippedFiles: [],
       });
 
       const restored = await readFile(filePath, "utf8");

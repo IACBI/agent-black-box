@@ -6,7 +6,7 @@ Full localized README documentation is available in the language section: [Langu
 
 ## Requirements
 
-- Node.js 20 or newer.
+- Node.js 22 or newer. Node.js 20 reached end of life and is no longer supported.
 - pnpm.
 - A Git repository.
 
@@ -85,6 +85,8 @@ Terminal output is not captured.
 
 Commands are executed without a shell. Pass the executable and arguments directly after `--`.
 
+`--cwd` must resolve physically inside the repository. Paths that escape through a symbolic link or junction are rejected.
+
 Use `--group` for related command batches such as `validation`, `release`, or `database`. Use `--phase` for workflow stages such as `setup`, `test`, `build`, or `deploy`.
 
 Sensitive-looking assignments and flags are redacted before writing reports:
@@ -105,7 +107,25 @@ abb stop
 
 The foreground watcher receives a stop request, flushes pending file events, captures Git state, writes reports, and clears active session state.
 
-If the watcher process is stale, `abb stop` finalizes from the current Git state.
+If the watcher process is stale, recover it explicitly from the current Git state:
+
+```sh
+abb recover
+```
+
+Recovery only runs when active state and lock ownership agree. For a diagnosis and safe repair in one command, use `abb doctor --repair`.
+
+## Analyze Current Changes Without A Watcher
+
+Use `analyze` in CI or before a review when a recording session is unnecessary:
+
+```sh
+abb analyze
+abb analyze --format json
+abb analyze --format sarif --fail-on high
+```
+
+It inspects included working-tree changes with bounded local reads. Findings contain locations and fixed descriptions only; they never include matched secret values.
 
 ## Review Reports
 
@@ -167,9 +187,10 @@ Use `doctor` when setup or session state looks wrong:
 
 ```sh
 abb doctor
+abb doctor --repair
 ```
 
-It checks Node.js, Git repository detection, config, write access, session directory, active/stale session state, and session lock state.
+It checks Node.js, Git repository detection, config, write access, session directory, and validated session ownership. `--repair` only finalizes a safely identified stale session or removes state already backed by completed reports.
 
 ## Safe Rollback Apply
 
@@ -207,10 +228,10 @@ Run Agent Black Box from a Git repository root or subdirectory.
 If the watcher was killed, run:
 
 ```sh
-abb stop
+abb recover
 ```
 
-Agent Black Box will finalize from current Git state when possible.
+Agent Black Box finalizes from current Git state only when the state and lock owner match. Inconsistent or unreadable state is left untouched for manual review.
 
 ### No command history appears
 

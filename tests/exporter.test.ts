@@ -1,7 +1,12 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseExportFormat, parseRiskSeverity, renderSessionExport, writeSessionExport } from "../src/export/exporter.js";
+import {
+  parseExportFormat,
+  parseRiskSeverity,
+  renderSessionExport,
+  writeSessionExport,
+} from "../src/export/exporter.js";
 import { buildSessionReport } from "../src/reports/markdown.js";
 import { createTempDir, removeTempDir } from "./testUtils.js";
 
@@ -10,7 +15,7 @@ const report = buildSessionReport(
     id: "session-export",
     repoRoot: "/repo",
     sessionDir: "/repo/.agent-black-box/sessions/session-export",
-    startedAt: "2026-01-01T00:00:00.000Z"
+    startedAt: "2026-01-01T00:00:00.000Z",
   },
   "2026-01-01T00:01:00.000Z",
   "test",
@@ -20,7 +25,7 @@ const report = buildSessionReport(
     repoRoot: "/repo",
     statusText: "modified .env",
     diffSummaryText: ".env | 1 +",
-    changedFiles: [{ path: ".env", status: "modified", insertions: 1, deletions: 0 }]
+    changedFiles: [{ path: ".env", status: "modified", insertions: 1, deletions: 0 }],
   },
   [{ path: ".env", category: "Environment file", severity: "high", score: 90, reason: "Environment file changed." }],
   []

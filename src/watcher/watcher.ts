@@ -1,13 +1,25 @@
 import chokidar from "chokidar";
-import type { ActiveSession, AgentBlackBoxConfig, FileEventType } from "../types.js";
+import type { ActiveSession, AgentBlackBoxConfig, FileEvent, FileEventType } from "../types.js";
 import { appendFileEvent, finalizeSession, readStopRequest } from "../session/sessionManager.js";
 import { isPathExcluded, toRepoRelative } from "../utils/paths.js";
 
 const WATCH_EVENTS = new Set<string>(["add", "change", "unlink"]);
+export const MAX_PENDING_FILE_EVENTS = 10_000;
 
 export async function runWatcher(session: ActiveSession, config: AgentBlackBoxConfig): Promise<void> {
   let finalized = false;
-  let eventWriteQueue = Promise.resolve();
+  const pendingFileEvents: FileEvent[] = [];
+  let droppedFileEventCount = 0;
+  let eventFlushPromise: Promise<void> | undefined;
+  let finalizePromise: Promise<void> | undefined;
+  let stopPoll: ReturnType<typeof setInterval> | undefined;
+
+  let resolveCompletion: (() => void) | undefined;
+  let rejectCompletion: ((error: unknown) => void) | undefined;
+  const completion = new Promise<void>((resolve, reject) => {
+    resolveCompletion = resolve;
+    rejectCompletion = reject;
+  });
 
   const watcher = chokidar.watch(".", {
     cwd: session.repoRoot,
@@ -18,23 +30,44 @@ export async function runWatcher(session: ActiveSession, config: AgentBlackBoxCo
     ignoreInitial: true,
     awaitWriteFinish: {
       stabilityThreshold: 200,
-      pollInterval: 50
+      pollInterval: 50,
     },
-    persistent: true
+    persistent: true,
   });
 
-  const finalizeOnce = async (reason: string): Promise<void> => {
-    if (finalized) {
-      return;
+  const cleanup = (): void => {
+    if (stopPoll) {
+      clearInterval(stopPoll);
+      stopPoll = undefined;
+    }
+    process.removeListener("SIGINT", handleSigint);
+    process.removeListener("SIGTERM", handleSigterm);
+  };
+
+  const finalizeOnce = (reason: string): Promise<void> => {
+    if (finalizePromise) {
+      return finalizePromise;
     }
 
     finalized = true;
-    clearInterval(stopPoll);
-    await watcher.close();
-    await eventWriteQueue;
-    const report = await finalizeSession(session, config, reason);
-    console.log(`Agent Black Box session stopped: ${report.id}`);
-    console.log(`Reports written to ${report.sessionDir}`);
+    finalizePromise = (async () => {
+      cleanup();
+      await watcher.close();
+      await flushPendingFileEvents();
+      if (droppedFileEventCount > 0) {
+        console.error(`Dropped ${droppedFileEventCount} file events because the watcher queue reached its limit.`);
+      }
+      const report = await finalizeSession(session, config, reason);
+      console.log(`Agent Black Box session stopped: ${report.id}`);
+      console.log(`Reports written to ${report.sessionDir}`);
+    })();
+
+    void finalizePromise.then(
+      () => resolveCompletion?.(),
+      (error: unknown) => rejectCompletion?.(error)
+    );
+
+    return finalizePromise;
   };
 
   watcher.on("all", (eventName, changedPath) => {
@@ -47,52 +80,91 @@ export async function runWatcher(session: ActiveSession, config: AgentBlackBoxCo
       return;
     }
 
-    eventWriteQueue = eventWriteQueue
-      .then(() =>
-        appendFileEvent(session, {
-          timestamp: new Date().toISOString(),
-          eventType: eventName as FileEventType,
-          path: relativePath
-        })
-      )
-      .catch((error: unknown) => {
-        console.error(`Failed to record file event: ${(error as Error).message}`);
-      })
+    if (pendingFileEvents.length >= MAX_PENDING_FILE_EVENTS) {
+      droppedFileEventCount += 1;
+      return;
+    }
+
+    pendingFileEvents.push({
+      timestamp: new Date().toISOString(),
+      eventType: eventName as FileEventType,
+      path: relativePath,
+    });
+    void flushPendingFileEvents();
   });
+
+  function flushPendingFileEvents(): Promise<void> {
+    if (eventFlushPromise) {
+      return eventFlushPromise;
+    }
+
+    eventFlushPromise = (async () => {
+      while (pendingFileEvents.length > 0) {
+        const event = pendingFileEvents.shift();
+        if (!event) {
+          continue;
+        }
+        try {
+          await appendFileEvent(session, event);
+        } catch (error) {
+          console.error(`Failed to record file event: ${(error as Error).message}`);
+        }
+      }
+    })().finally(() => {
+      eventFlushPromise = undefined;
+    });
+
+    return eventFlushPromise;
+  }
 
   watcher.on("error", (error) => {
     console.error(`Watcher error: ${(error as Error).message}`);
+    if (!finalized) {
+      rejectCompletion?.(error);
+    }
   });
 
-  const stopPoll = setInterval(() => {
-    void (async () => {
-      const request = await readStopRequest(session.repoRoot, config);
-      if (request?.sessionId === session.id) {
-        await finalizeOnce("stop-request");
-      }
-    })();
+  stopPoll = setInterval(() => {
+    void readStopRequest(session.repoRoot, config)
+      .then((request) => {
+        if (request?.sessionId === session.id) {
+          return finalizeOnce("stop-request");
+        }
+        return undefined;
+      })
+      .catch((error: unknown) => {
+        console.error(`Failed to read stop request: ${(error as Error).message}`);
+      });
   }, 500);
 
-  process.once("SIGINT", () => {
-    void finalizeOnce("sigint").finally(() => process.exit(0));
-  });
-
-  process.once("SIGTERM", () => {
-    void finalizeOnce("sigterm").finally(() => process.exit(0));
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    watcher.once("ready", () => {
-      console.log(`Agent Black Box session started: ${session.id}`);
-      console.log("Recording observable repository changes. Run `abb stop` from another terminal to finalize.");
+  const handleSigint = (): void => {
+    void finalizeOnce("sigint").catch((error: unknown) => {
+      console.error(`Failed to finalize session: ${(error as Error).message}`);
+      process.exitCode = 1;
     });
-    watcher.once("error", reject);
+  };
 
-    const completionPoll = setInterval(() => {
-      if (finalized) {
-        clearInterval(completionPoll);
-        resolve();
-      }
-    }, 100);
+  const handleSigterm = (): void => {
+    void finalizeOnce("sigterm").catch((error: unknown) => {
+      console.error(`Failed to finalize session: ${(error as Error).message}`);
+      process.exitCode = 1;
+    });
+  };
+
+  process.once("SIGINT", handleSigint);
+  process.once("SIGTERM", handleSigterm);
+
+  watcher.once("ready", () => {
+    console.log(`Agent Black Box session started: ${session.id}`);
+    console.log("Recording observable repository changes. Run `abb stop` from another terminal to finalize.");
   });
+
+  try {
+    await completion;
+  } finally {
+    cleanup();
+    if (!finalized) {
+      await watcher.close();
+    }
+  }
 }

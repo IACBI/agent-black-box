@@ -1,0 +1,6 @@
+dist/
+coverage/
+node_modules/
+.pnpm-store/
+.agent-black-box/
+*.tgz

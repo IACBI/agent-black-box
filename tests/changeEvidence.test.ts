@@ -13,9 +13,9 @@ const baseline: SessionBaseline = {
     diffSummaryText: "",
     changedFiles: [
       { path: "src/observed.ts", status: "modified", insertions: 1, deletions: 0 },
-      { path: "src/pre-existing.ts", status: "modified", insertions: 1, deletions: 0 }
-    ]
-  }
+      { path: "src/pre-existing.ts", status: "modified", insertions: 1, deletions: 0 },
+    ],
+  },
 };
 
 const finalGit: GitSnapshot = {
@@ -28,8 +28,8 @@ const finalGit: GitSnapshot = {
   changedFiles: [
     { path: "src/new.ts", status: "added", insertions: 2, deletions: 0 },
     { path: "src/observed.ts", status: "modified", insertions: 1, deletions: 0 },
-    { path: "src/pre-existing.ts", status: "modified", insertions: 1, deletions: 0 }
-  ]
+    { path: "src/pre-existing.ts", status: "modified", insertions: 1, deletions: 0 },
+  ],
 };
 
 describe("session change evidence", () => {
@@ -39,29 +39,34 @@ describe("session change evidence", () => {
       [
         { timestamp: "2026-01-01T00:00:10.000Z", eventType: "change", path: "src/observed.ts" },
         { timestamp: "2026-01-01T00:00:20.000Z", eventType: "add", path: "src/transient.ts" },
-        { timestamp: "2026-01-01T00:00:30.000Z", eventType: "unlink", path: "src/transient.ts" }
+        { timestamp: "2026-01-01T00:00:30.000Z", eventType: "unlink", path: "src/transient.ts" },
       ],
       finalGit
     );
 
-    expect(evidence).toMatchObject({ baselineAvailable: true, headChanged: true, indexChanged: false, branchChanged: true });
+    expect(evidence).toMatchObject({
+      baselineAvailable: true,
+      headChanged: true,
+      indexChanged: false,
+      branchChanged: true,
+    });
     expect(evidence.files).toContainEqual({
       path: "src/pre-existing.ts",
       atStart: true,
       observedDuringSession: false,
       atEnd: true,
-      gitMetadataChanged: false
+      gitMetadataChanged: false,
     });
     expect(evidence.files).toContainEqual({
       path: "src/transient.ts",
       atStart: false,
       observedDuringSession: true,
       atEnd: false,
-      gitMetadataChanged: false
+      gitMetadataChanged: false,
     });
     expect(selectSessionRelevantChanges(finalGit, evidence).map((file) => file.path)).toEqual([
       "src/new.ts",
-      "src/observed.ts"
+      "src/observed.ts",
     ]);
   });
 

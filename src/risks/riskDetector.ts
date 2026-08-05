@@ -1,5 +1,12 @@
 import path from "node:path";
-import type { AgentBlackBoxConfig, ChangedFile, RiskFinding, RiskSeverity, RiskSummary, SecretFinding } from "../types.js";
+import type {
+  AgentBlackBoxConfig,
+  ChangedFile,
+  RiskFinding,
+  RiskSeverity,
+  RiskSummary,
+  SecretFinding,
+} from "../types.js";
 import { pathMatchesPattern } from "../utils/paths.js";
 
 const LOCKFILES = new Set([
@@ -11,7 +18,7 @@ const LOCKFILES = new Set([
   "poetry.lock",
   "Pipfile.lock",
   "Gemfile.lock",
-  "go.sum"
+  "go.sum",
 ]);
 
 const PACKAGE_FILES = new Set([
@@ -23,7 +30,7 @@ const PACKAGE_FILES = new Set([
   "pom.xml",
   "build.gradle",
   "Gemfile",
-  "Pipfile"
+  "Pipfile",
 ]);
 
 export function detectRisks(changedFiles: ChangedFile[], config: AgentBlackBoxConfig): RiskFinding[] {
@@ -44,11 +51,20 @@ export function detectRiskForPath(relativePath: string, riskPatterns: string[]):
   const findings: RiskFinding[] = [];
 
   if (lowerBaseName === ".env" || lowerBaseName.startsWith(".env.")) {
-    findings.push(finding(normalized, "Environment file", "high", "Environment files often contain credentials or private runtime settings."));
+    findings.push(
+      finding(
+        normalized,
+        "Environment file",
+        "high",
+        "Environment files often contain credentials or private runtime settings."
+      )
+    );
   }
 
   if (LOCKFILES.has(baseName) || LOCKFILES.has(lowerBaseName)) {
-    findings.push(finding(normalized, "Lockfile", "medium", "Lockfile changes can alter installed dependency versions."));
+    findings.push(
+      finding(normalized, "Lockfile", "medium", "Lockfile changes can alter installed dependency versions.")
+    );
   }
 
   if (PACKAGE_FILES.has(baseName) || PACKAGE_FILES.has(lowerBaseName)) {
@@ -63,19 +79,39 @@ export function detectRiskForPath(relativePath: string, riskPatterns: string[]):
     lower.includes(".circleci/") ||
     lowerBaseName === "jenkinsfile"
   ) {
-    findings.push(finding(normalized, "CI/CD file", "medium", "CI/CD changes can affect build, test, release, or deployment behavior."));
+    findings.push(
+      finding(
+        normalized,
+        "CI/CD file",
+        "medium",
+        "CI/CD changes can affect build, test, release, or deployment behavior."
+      )
+    );
   }
 
-  if (lowerBaseName === "dockerfile" || lowerBaseName.startsWith("dockerfile.") || lowerBaseName.startsWith("docker-compose")) {
+  if (
+    lowerBaseName === "dockerfile" ||
+    lowerBaseName.startsWith("dockerfile.") ||
+    lowerBaseName.startsWith("docker-compose")
+  ) {
     findings.push(finding(normalized, "Docker file", "medium", "Container build or runtime behavior changed."));
   }
 
   if (lower.split("/").includes("migrations")) {
-    findings.push(finding(normalized, "Migration file", "medium", "Database migration changes can affect persistent data."));
+    findings.push(
+      finding(normalized, "Migration file", "medium", "Database migration changes can affect persistent data.")
+    );
   }
 
   if (/(^|\/)(auth|security|oauth|jwt)(\/|[-_.]|$)/i.test(normalized)) {
-    findings.push(finding(normalized, "Auth/security-related file", "high", "Authentication or security-related code appears to have changed."));
+    findings.push(
+      finding(
+        normalized,
+        "Auth/security-related file",
+        "high",
+        "Authentication or security-related code appears to have changed."
+      )
+    );
   }
 
   if (
@@ -88,7 +124,9 @@ export function detectRiskForPath(relativePath: string, riskPatterns: string[]):
   if (findings.length === 0) {
     for (const pattern of riskPatterns) {
       if (pathMatchesPattern(normalized, pattern)) {
-        findings.push(finding(normalized, "Configured risk pattern", "medium", `Matched configured risk pattern "${pattern}".`));
+        findings.push(
+          finding(normalized, "Configured risk pattern", "medium", `Matched configured risk pattern "${pattern}".`)
+        );
       }
     }
   }
@@ -108,7 +146,7 @@ function finding(pathName: string, category: string, severity: RiskSeverity, rea
     category,
     severity,
     score: baseScoreForSeverity(severity),
-    reason
+    reason,
   };
 }
 
@@ -116,7 +154,7 @@ export function summarizeRisks(risks: RiskFinding[], possibleSecrets: SecretFind
   const severityCounts: Record<RiskSeverity, number> = {
     low: 0,
     medium: 0,
-    high: 0
+    high: 0,
   };
 
   for (const risk of risks) {
@@ -130,7 +168,7 @@ export function summarizeRisks(risks: RiskFinding[], possibleSecrets: SecretFind
     score,
     maxSeverity: score >= 80 ? "high" : score >= 50 ? "medium" : score > 0 ? "low" : "none",
     possibleSecretCount: possibleSecrets.length,
-    severityCounts
+    severityCounts,
   };
 }
 
@@ -141,7 +179,7 @@ function scoreFinding(finding: RiskFinding, file: ChangedFile): RiskFinding {
 
   return {
     ...finding,
-    score: Math.min(100, finding.score + churnBonus + statusBonus)
+    score: Math.min(100, finding.score + churnBonus + statusBonus),
   };
 }
 

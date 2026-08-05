@@ -1,12 +1,15 @@
 import { spawn } from "node:child_process";
-import { stat } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { loadConfig } from "../config/config.js";
 import { requireRepositoryRoot } from "../git/git.js";
 import { appendCommandEvent, isProcessRunning, readActiveSession } from "../session/sessionManager.js";
 import { normalizePath, toRepoRelative } from "../utils/paths.js";
 
-const SENSITIVE_PATTERN = /(api[_-]?key|secret|token|password|passwd|private[_-]?key|client[_-]?secret|access[_-]?key)/i;
+const SENSITIVE_PATTERN =
+  /(api[_-]?key|secret|token|password|passwd|private[_-]?key|client[_-]?secret|access[_-]?key|authorization|cookie)/i;
+const MAX_COMMAND_PART_LENGTH = 4096;
+const MAX_RECORDED_COMMAND_LENGTH = 32_768;
 
 export interface RecordCommandOptions {
   cwd?: string;
@@ -15,7 +18,11 @@ export interface RecordCommandOptions {
   phase?: string;
 }
 
-export async function recordAndRunCommand(commandParts: string[], cwd: string, options: RecordCommandOptions = {}): Promise<number> {
+export async function recordAndRunCommand(
+  commandParts: string[],
+  cwd: string,
+  options: RecordCommandOptions = {}
+): Promise<number> {
   const normalizedCommandParts = normalizeCommandParts(commandParts);
 
   if (normalizedCommandParts.length === 0) {
@@ -52,7 +59,7 @@ export async function recordAndRunCommand(commandParts: string[], cwd: string, o
     ...optionalMetadata("phase", options.phase),
     exitCode: result.exitCode,
     durationMs: endedAtDate.getTime() - startedAtDate.getTime(),
-    ...(result.error ? { error: result.error } : {})
+    ...(result.error ? { error: result.error } : {}),
   });
 
   return result.exitCode ?? 1;
@@ -73,6 +80,12 @@ export async function resolveRunCwd(repoRoot: string, requestedCwd?: string): Pr
   const stats = await stat(resolved);
   if (!stats.isDirectory()) {
     throw new Error(`--cwd must point to a directory: ${requestedCwd}`);
+  }
+
+  const [physicalRepoRoot, physicalRunCwd] = await Promise.all([realpath(repoRoot), realpath(resolved)]);
+  const physicalRelative = normalizePath(path.relative(physicalRepoRoot, physicalRunCwd));
+  if (physicalRelative === ".." || physicalRelative.startsWith("../") || path.isAbsolute(physicalRelative)) {
+    throw new Error("--cwd must stay inside the repository, including through symbolic links.");
   }
 
   return resolved;
@@ -100,6 +113,18 @@ export function redactCommandParts(parts: string[]): string[] {
       continue;
     }
 
+    const nestedAssignment = redactNestedSensitiveAssignment(part);
+    if (nestedAssignment) {
+      redacted.push(nestedAssignment);
+      continue;
+    }
+
+    const redactedUrl = redactSensitiveUrl(part);
+    if (redactedUrl !== part) {
+      redacted.push(redactedUrl);
+      continue;
+    }
+
     if (isSensitiveFlagWithValue(part)) {
       const [flag] = part.split("=", 1);
       redacted.push(`${flag}=<redacted>`);
@@ -112,17 +137,23 @@ export function redactCommandParts(parts: string[]): string[] {
       continue;
     }
 
-    redacted.push(part);
+    redacted.push(truncateCommandPart(part));
   }
 
   return redacted;
 }
 
 export function formatCommand(parts: string[]): string {
-  return parts.map(quoteCommandPart).join(" ");
+  const formatted = parts.map(quoteCommandPart).join(" ");
+  return formatted.length <= MAX_RECORDED_COMMAND_LENGTH
+    ? formatted
+    : `${formatted.slice(0, MAX_RECORDED_COMMAND_LENGTH - 14)}…<truncated>`;
 }
 
-function optionalMetadata<K extends "label" | "group" | "phase">(key: K, value: string | undefined): Partial<Record<K, string>> {
+function optionalMetadata<K extends "label" | "group" | "phase">(
+  key: K,
+  value: string | undefined
+): Partial<Record<K, string>> {
   const normalized = value?.trim().replace(/\s+/g, " ");
   if (!normalized) {
     return {};
@@ -133,30 +164,63 @@ function optionalMetadata<K extends "label" | "group" | "phase">(key: K, value: 
 
 function spawnCommand(commandParts: string[], cwd: string): Promise<{ exitCode: number | null; error?: string }> {
   const [command, ...args] = commandParts;
-  const spawnTarget = getSpawnTarget(command, args);
 
   return new Promise((resolve) => {
-    const child = spawn(spawnTarget.command, spawnTarget.args, {
-      cwd,
-      shell: false,
-      stdio: "inherit"
-    });
+    const spawnWithFallback = (targetCommand: string, fallbackIndex: number): void => {
+      const spawnTarget = getSpawnTarget(targetCommand, args);
+      const child = spawn(spawnTarget.command, spawnTarget.args, {
+        cwd,
+        shell: false,
+        stdio: "inherit",
+      });
+      let fallbackStarted = false;
+      let settled = false;
 
-    child.once("error", (error) => {
-      resolve({ exitCode: null, error: error.message });
-    });
+      child.once("error", (error: NodeJS.ErrnoException) => {
+        if (shouldTryWindowsScriptFallback(command, error, fallbackIndex)) {
+          fallbackStarted = true;
+          spawnWithFallback(`${command}${WINDOWS_SCRIPT_EXTENSIONS[fallbackIndex]}`, fallbackIndex + 1);
+          return;
+        }
 
-    child.once("close", (code) => {
-      resolve({ exitCode: code });
-    });
+        if (!settled) {
+          settled = true;
+          resolve({ exitCode: null, error: formatSpawnError(error) });
+        }
+      });
+
+      child.once("close", (code) => {
+        if (!fallbackStarted && !settled) {
+          settled = true;
+          resolve({ exitCode: code });
+        }
+      });
+    };
+
+    spawnWithFallback(command, 0);
   });
+}
+
+const WINDOWS_SCRIPT_EXTENSIONS = [".cmd", ".bat"] as const;
+
+function shouldTryWindowsScriptFallback(
+  originalCommand: string,
+  error: NodeJS.ErrnoException,
+  fallbackIndex: number
+): boolean {
+  return (
+    process.platform === "win32" &&
+    error.code === "ENOENT" &&
+    path.extname(originalCommand) === "" &&
+    fallbackIndex < WINDOWS_SCRIPT_EXTENSIONS.length
+  );
 }
 
 function getSpawnTarget(command: string, args: string[]): { command: string; args: string[] } {
   if (process.platform === "win32" && /\.(cmd|bat)$/i.test(command)) {
     return {
       command: process.env.ComSpec ?? "cmd.exe",
-      args: ["/d", "/s", "/c", buildWindowsCommandLine([command, ...args])]
+      args: ["/d", "/v:off", "/s", "/c", buildWindowsCommandLine([command, ...args])],
     };
   }
 
@@ -168,7 +232,7 @@ export function buildWindowsCommandLine(parts: string[]): string {
 }
 
 function quoteWindowsCommandPart(part: string): string {
-  const escaped = part.replace(/([&|<>^"%])/g, "^$1");
+  const escaped = part.replace(/([&|<>^"%!])/g, "^$1");
 
   if (escaped.length === 0 || /\s/.test(escaped)) {
     return `"${escaped}"`;
@@ -187,6 +251,55 @@ function isSensitiveFlagWithValue(part: string): boolean {
 
 function isSensitiveFlag(part: string): boolean {
   return /^--/.test(part) && SENSITIVE_PATTERN.test(part);
+}
+
+function redactNestedSensitiveAssignment(part: string): string | null {
+  const separatorIndex = part.indexOf("=");
+  if (separatorIndex < 0) {
+    return null;
+  }
+
+  const prefix = part.slice(0, separatorIndex + 1);
+  const nested = part.slice(separatorIndex + 1);
+  if (!isSensitiveAssignment(nested)) {
+    return null;
+  }
+
+  const nestedSeparator = nested.includes("=") ? "=" : ":";
+  const [key] = nested.split(nestedSeparator, 1);
+  return `${prefix}${key}${nestedSeparator}<redacted>`;
+}
+
+function redactSensitiveUrl(part: string): string {
+  if (!/^https?:\/\//i.test(part)) {
+    return part;
+  }
+
+  try {
+    const url = new URL(part);
+    let changed = false;
+    if (url.password) {
+      url.password = "<redacted>";
+      changed = true;
+    }
+    for (const key of [...url.searchParams.keys()]) {
+      if (SENSITIVE_PATTERN.test(key)) {
+        url.searchParams.set(key, "<redacted>");
+        changed = true;
+      }
+    }
+    return changed ? url.toString() : part;
+  } catch {
+    return part;
+  }
+}
+
+function truncateCommandPart(part: string): string {
+  return part.length <= MAX_COMMAND_PART_LENGTH ? part : `${part.slice(0, MAX_COMMAND_PART_LENGTH - 14)}…<truncated>`;
+}
+
+function formatSpawnError(error: NodeJS.ErrnoException): string {
+  return error.code ? `${error.code}: command could not be started.` : "Command could not be started.";
 }
 
 function quoteCommandPart(part: string): string {

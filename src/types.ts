@@ -32,6 +32,8 @@ export interface ActiveSession {
   sessionDir: string;
   startedAt: string;
   pid: number;
+  /** Random ownership marker used to prevent a stale process from clearing a newer lock. */
+  ownerToken?: string;
 }
 
 export interface StopRequest {
