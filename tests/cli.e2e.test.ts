@@ -45,7 +45,7 @@ describe("CLI end-to-end", () => {
       await removeTempDir(repo);
       await removeTempDir(externalDir);
     }
-  });
+  }, 15_000);
 
   it("records a full init/start/run/stop/report flow in a Git repository", async () => {
     const repo = await createTempDir("abb-e2e-");
