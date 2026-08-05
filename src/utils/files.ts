@@ -20,6 +20,24 @@ export async function readJsonFile<T>(filePath: string): Promise<T> {
   return JSON.parse(raw) as T;
 }
 
+export async function readJsonFileLimited<T>(filePath: string, maxBytes: number): Promise<T> {
+  const raw = await readTextFileLimited(filePath, maxBytes);
+  return JSON.parse(raw) as T;
+}
+
+export async function readTextFileLimited(filePath: string, maxBytes: number): Promise<string> {
+  const details = await stat(filePath);
+  if (details.size > maxBytes) {
+    throw new Error(`${path.basename(filePath)} exceeds the ${formatByteLimit(maxBytes)} size limit.`);
+  }
+
+  const raw = await readFile(filePath, "utf8");
+  if (Buffer.byteLength(raw, "utf8") > maxBytes) {
+    throw new Error(`${path.basename(filePath)} exceeds the ${formatByteLimit(maxBytes)} size limit.`);
+  }
+  return raw;
+}
+
 export async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
   await writeTextFileAtomic(filePath, `${JSON.stringify(value, null, 2)}\n`);
 }
@@ -70,4 +88,11 @@ export async function getNewestDirectory(parentDir: string): Promise<string | nu
 
   directories.sort((a, b) => b.mtimeMs - a.mtimeMs);
   return directories[0]?.fullPath ?? null;
+}
+
+function formatByteLimit(maxBytes: number): string {
+  if (maxBytes % (1024 * 1024) === 0) {
+    return `${maxBytes / (1024 * 1024)} MiB`;
+  }
+  return `${maxBytes} bytes`;
 }

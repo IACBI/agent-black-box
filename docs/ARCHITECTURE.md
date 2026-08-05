@@ -75,6 +75,8 @@ Catalog listing reads compact metadata in bounded batches. Sessions from older v
 - Files already changed at session start are never eligible for interactive rollback apply.
 - Direct AI-agent private APIs are not used.
 - Config and session state are validated before use with bounded string, date, process, and record constraints.
+- Config, state, metadata, and session-report JSON reads have explicit size limits; oversized local files fail closed instead of being fully parsed into memory.
+- Session output paths must remain physically inside the repository by default. A command-scoped override is required for trusted local external storage, while UNC and network paths remain blocked.
 - Repository file inspection does not follow symbolic links, and command working directories cannot escape through links.
 - JSON state and finalized reports use same-directory temporary files followed by atomic rename.
 - Active state and lock files share a random owner token; recovery fails closed when their repository, session directory, or ownership does not match.

@@ -1,4 +1,4 @@
-import { readFile, readdir } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import path from "node:path";
 import type {
   AgentBlackBoxConfig,
@@ -11,7 +11,7 @@ import type {
   SessionReport,
 } from "../types.js";
 import { summarizeRisks } from "../risks/riskDetector.js";
-import { pathExists } from "../utils/files.js";
+import { pathExists, readJsonFileLimited } from "../utils/files.js";
 import { buildChangeEvidence, selectSessionRelevantChanges } from "./changeEvidence.js";
 
 export const SESSION_METADATA_FILE = "session-metadata.json";
@@ -19,6 +19,8 @@ const SESSION_REPORT_FILE = "session.json";
 const SESSION_START_FILE = "session-start.json";
 const SESSION_DIRECTORY_PATTERN = /^session-[A-Za-z0-9._-]+$/;
 const CATALOG_BATCH_SIZE = 32;
+const MAX_SESSION_METADATA_BYTES = 1024 * 1024;
+const MAX_SESSION_REPORT_BYTES = 32 * 1024 * 1024;
 
 export type SessionCatalogState = "complete" | "incomplete" | "corrupt";
 
@@ -221,7 +223,9 @@ function compareCatalogEntries(left: SessionCatalogEntry, right: SessionCatalogE
 
 async function readJsonUnknown(filePath: string): Promise<{ value?: unknown; error?: string }> {
   try {
-    return { value: JSON.parse(await readFile(filePath, "utf8")) as unknown };
+    const maxBytes =
+      path.basename(filePath) === SESSION_REPORT_FILE ? MAX_SESSION_REPORT_BYTES : MAX_SESSION_METADATA_BYTES;
+    return { value: await readJsonFileLimited<unknown>(filePath, maxBytes) };
   } catch (error) {
     return { error: sanitizeSingleLine((error as Error).message) };
   }

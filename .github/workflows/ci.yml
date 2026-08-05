@@ -110,3 +110,23 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Check performance budgets
         run: pnpm perf
+
+  required-checks:
+    name: Required checks
+    if: always()
+    needs: [validate, quality, supply-chain, performance]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify all required CI jobs passed
+        env:
+          VALIDATE_RESULT: ${{ needs.validate.result }}
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          SUPPLY_CHAIN_RESULT: ${{ needs.supply-chain.result }}
+          PERFORMANCE_RESULT: ${{ needs.performance.result }}
+        shell: bash
+        run: |
+          test "${VALIDATE_RESULT}" = "success"
+          test "${QUALITY_RESULT}" = "success"
+          test "${SUPPLY_CHAIN_RESULT}" = "success"
+          test "${PERFORMANCE_RESULT}" = "success"

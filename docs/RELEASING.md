@@ -20,7 +20,15 @@ This verifies:
 - Vitest suite with coverage thresholds.
 - Production dependency audit.
 - Package tarball contents.
-- The release tag matches `package.json` and `CHANGELOG.md`.
+- A matching `CHANGELOG.md` heading for the `package.json` version.
+
+Before pushing a release tag, include the intended tag in the same preflight:
+
+```sh
+RELEASE_TAG=vX.Y.Z pnpm release:check
+```
+
+The command rejects a tag that does not match `package.json`. The release workflow always sets `RELEASE_TAG` from the pushed tag, so it also enforces tag, package, and changelog alignment.
 
 ## Versioning
 
@@ -45,7 +53,14 @@ git tag vX.Y.Z
 git push origin vX.Y.Z
 ```
 
-The release workflow builds, tests, audits production dependencies, validates version alignment, packs the npm tarball, writes `SHA256SUMS`, and creates a GitHub Release with the artifacts attached.
+The release workflow builds, tests, audits production dependencies, validates version alignment, packs the npm tarball, writes `SHA256SUMS`, generates a signed GitHub build-provenance attestation, and creates a GitHub Release with the artifacts attached.
+
+After downloading an artifact, verify both its checksum and provenance:
+
+```sh
+sha256sum --check SHA256SUMS
+gh attestation verify <artifact.tgz> --owner IACBI
+```
 
 Do not create the GitHub Release manually before pushing the tag. If a release already exists for the tag, the workflow updates its notes from `CHANGELOG.md` and replaces the generated tarball asset instead of failing.
 

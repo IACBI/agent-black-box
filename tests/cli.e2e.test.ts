@@ -17,6 +17,36 @@ describe("CLI end-to-end", () => {
     await Promise.all(spawnedProcesses.splice(0).map((child) => stopChild(child)));
   });
 
+  it("requires an explicit global opt-in for a trusted external session directory", async () => {
+    const repo = await createTempDir("abb-e2e-");
+    const externalDir = await createTempDir("abb-external-");
+    try {
+      initGitRepo(repo);
+      await writeFile(
+        path.join(repo, ".agentblackbox.json"),
+        JSON.stringify({
+          configVersion: 1,
+          sessionDir: externalDir,
+          exclude: [],
+          riskPatterns: [],
+          maxFileSizeKb: 128,
+        }),
+        "utf8"
+      );
+
+      const rejected = await runCli(repo, ["config", "validate"]);
+      expect(rejected.exitCode).toBe(1);
+      expect(rejected.stdout).toContain("must stay inside the repository");
+
+      const allowed = await runCli(repo, ["--allow-external-session-dir", "config", "validate"]);
+      expect(allowed.exitCode).toBe(0);
+      expect(allowed.stdout).toContain("explicitly allowed");
+    } finally {
+      await removeTempDir(repo);
+      await removeTempDir(externalDir);
+    }
+  });
+
   it("records a full init/start/run/stop/report flow in a Git repository", async () => {
     const repo = await createTempDir("abb-e2e-");
     try {

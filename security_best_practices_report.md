@@ -36,17 +36,25 @@ NDJSON input is streamed and bounded by line size, accepted record count, and wa
 
 ### SEC-005 — Mutable GitHub Action references — Resolved
 
-CI, CodeQL, and release workflows now pin checkout, Node setup, and CodeQL actions to verified release commit SHAs. Dependabot remains enabled for GitHub Actions maintenance.
+CI, CodeQL, and release workflows pin checkout, Node setup, CodeQL, and release attestation actions to verified release commit SHAs. Dependabot remains enabled for GitHub Actions maintenance.
 
 ## Low / Accepted Risk
 
-### SEC-006 — Absolute external session directory — Accepted with warning
+### SEC-006 — Repository-external session directory — Resolved
 
-Absolute `sessionDir` values remain supported for backward compatibility. Config loading and `abb doctor` warn when the target is outside the repository. Users should select an access-controlled location because reports contain repository metadata.
+Repository-controlled `sessionDir` values must remain physically inside the repository by default. `src/config/config.ts` rejects lexical traversal, existing symlink escapes, and UNC/network paths. A trusted local external location requires the explicit command-scoped `--allow-external-session-dir` override, which is never persisted back to configuration.
 
-### SEC-007 — Local dependency audit requires registry access — Operational limitation
+### SEC-007 — Dependency audit freshness — Resolved
 
-The audit environment could not reach the npm registry, so a fresh local advisory result could not be produced. CI and release workflows now run `pnpm audit --prod --audit-level high`; those jobs must pass before merge or release.
+Fresh production and development dependency audits completed successfully after registry connectivity was restored. CI and release workflows continue to gate production dependency advisories with `pnpm audit --prod --audit-level high`.
+
+### SEC-008 — Unbounded JSON input — Resolved
+
+Configuration, active state, catalog metadata, and session report JSON are read with explicit byte limits before parsing. Oversized files fail closed with a diagnostic instead of being loaded wholesale into memory.
+
+### SEC-009 — Release artifact provenance — Resolved
+
+The release workflow now creates a signed GitHub build-provenance attestation for each packaged tarball using short-lived OIDC credentials. Release consumers can verify the artifact with `gh attestation verify` in addition to checking `SHA256SUMS`.
 
 ## Validation Requirements
 

@@ -50,6 +50,18 @@ abb config migrate
 
 Legacy config files without `configVersion` still load in memory. Use `abb config migrate` when you want the file rewritten with the current schema.
 
+## Session Output Location
+
+`sessionDir` is resolved from the repository root and must remain inside that repository by default. This prevents repository-controlled configuration from silently sending session evidence to another local or network location. UNC and network paths are always rejected.
+
+If you intentionally use a trusted local directory outside the repository, explicitly opt in for the command that needs it:
+
+```sh
+abb --allow-external-session-dir start
+```
+
+Use this only for a location you control. The override is not stored in `.agentblackbox.json`, so a cloned repository cannot silently reuse the permission.
+
 ## Start A Session
 
 ```sh

@@ -461,7 +461,9 @@ Los reportes se escriben en:
 | `abb doctor`                       | Revisa requisitos locales, estado del repo, config y salud de sesión.                                  |
 | `abb run -- <command>`             | Ejecuta un comando y registra metadata redactada para la sesión activa. Soporta `--group` y `--phase`. |
 | `abb stop`                         | Detiene la sesión activa y genera reportes.                                                            |
+| `abb recover`                      | Finaliza una sesión obsoleta verificada o limpia sus archivos de estado completados.                   |
 | `abb status`                       | Muestra si la sesión está active, stale o absent.                                                      |
+| `abb analyze`                      | Analiza cambios sin watcher; admite JSON, SARIF y umbrales de severidad para el código de salida.      |
 | `abb sessions list`                | Lista sesiones completas, incompletas y corruptas.                                                     |
 | `abb sessions show <id>`           | Muestra el resumen o JSON normalizado de una sesión seleccionada.                                      |
 | `abb sessions compare <from> <to>` | Compara archivos, riesgos, comandos y revisiones HEAD entre dos sesiones.                              |
@@ -651,7 +653,9 @@ Reports werden hier geschrieben:
 | `abb doctor`                       | Prüft lokale Voraussetzungen, Repository-Status, Config und Session-Gesundheit.                                        |
 | `abb run -- <command>`             | Führt einen Befehl aus und speichert redigierte Metadaten für die aktive Session. Unterstützt `--group` und `--phase`. |
 | `abb stop`                         | Stoppt die aktive Session und erzeugt Reports.                                                                         |
+| `abb recover`                      | Schließt eine verifizierte veraltete Session ab oder bereinigt ihre abgeschlossenen Zustandsdateien.                   |
 | `abb status`                       | Zeigt, ob eine Session active, stale oder absent ist.                                                                  |
+| `abb analyze`                      | Analysiert Änderungen ohne Watcher; unterstützt JSON, SARIF und Schweregrad-Schwellen für den Exit-Code.               |
 | `abb sessions list`                | Listet vollständige, unvollständige und beschädigte Sessions.                                                          |
 | `abb sessions show <id>`           | Zeigt Summary oder normalisiertes JSON einer gewählten Session.                                                        |
 | `abb sessions compare <from> <to>` | Vergleicht Dateien, Risiken, Befehle und HEAD-Stände zweier Sessions.                                                  |
@@ -841,7 +845,9 @@ Les rapports sont écrits dans :
 | `abb doctor`                       | Vérifie les prérequis locaux, l'état du dépôt, la config et la santé de session.                                     |
 | `abb run -- <command>`             | Exécute une commande et enregistre des métadonnées masquées pour la session active. Supporte `--group` et `--phase`. |
 | `abb stop`                         | Arrête la session active et génère les rapports.                                                                     |
+| `abb recover`                      | Finalise une session obsolète vérifiée ou nettoie ses fichiers d’état terminés.                                      |
 | `abb status`                       | Indique si une session est active, stale ou absent.                                                                  |
+| `abb analyze`                      | Analyse les changements sans watcher ; prend en charge JSON, SARIF et les seuils de sévérité du code de sortie.      |
 | `abb sessions list`                | Liste les sessions terminées, incomplètes et corrompues.                                                             |
 | `abb sessions show <id>`           | Affiche le résumé ou le JSON normalisé d'une session choisie.                                                        |
 | `abb sessions compare <from> <to>` | Compare fichiers, risques, commandes et révisions HEAD de deux sessions.                                             |
@@ -1031,7 +1037,9 @@ Os relatórios são gravados em:
 | `abb doctor`                       | Verifica pré-requisitos locais, estado do repositório, config e saúde da sessão.                       |
 | `abb run -- <command>`             | Executa um comando e registra metadados mascarados para a sessão ativa. Suporta `--group` e `--phase`. |
 | `abb stop`                         | Para a sessão ativa e gera relatórios.                                                                 |
+| `abb recover`                      | Finaliza uma sessão obsoleta verificada ou limpa seus arquivos de estado concluídos.                   |
 | `abb status`                       | Mostra se a sessão está active, stale ou absent.                                                       |
+| `abb analyze`                      | Analisa mudanças sem watcher; suporta JSON, SARIF e limites de severidade para o código de saída.      |
 | `abb sessions list`                | Lista sessões completas, incompletas e corrompidas.                                                    |
 | `abb sessions show <id>`           | Mostra o resumo ou JSON normalizado de uma sessão selecionada.                                         |
 | `abb sessions compare <from> <to>` | Compara arquivos, riscos, comandos e revisões HEAD entre duas sessões.                                 |
@@ -1221,7 +1229,9 @@ pnpm dev rollback
 | `abb doctor`                       | 检查本地前置条件、仓库状态、配置和会话健康。                                |
 | `abb run -- <command>`             | 运行命令，并为活动会话记录已脱敏的命令元数据。支持 `--group` 和 `--phase`。 |
 | `abb stop`                         | 停止活动会话并生成报告。                                                    |
+| `abb recover`                      | 完成已验证的过期会话，或清理其已完成的状态文件。                            |
 | `abb status`                       | 显示会话是 active、stale 还是 absent。                                      |
+| `abb analyze`                      | 无需 watcher 即可分析变更；支持 JSON、SARIF 和严重性阈值退出码。            |
 | `abb sessions list`                | 列出已完成、不完整和损坏的会话。                                            |
 | `abb sessions show <id>`           | 显示所选会话的摘要或规范化 JSON 报告。                                      |
 | `abb sessions compare <from> <to>` | 比较两个会话的文件、风险、命令和 HEAD 修订。                                |
@@ -1411,7 +1421,9 @@ Reports यहां लिखे जाते हैं:
 | `abb doctor`                       | local prerequisites, repository state, config और session health check करता है।                                              |
 | `abb run -- <command>`             | command चलाता है और active session के लिए redacted command metadata record करता है। `--group` और `--phase` support करता है। |
 | `abb stop`                         | active session stop करता है और reports generate करता है।                                                                    |
+| `abb recover`                      | सत्यापित stale session को finalise करता है या उसकी complete state files साफ करता है।                                        |
 | `abb status`                       | session active, stale या absent है यह दिखाता है।                                                                            |
+| `abb analyze`                      | watcher के बिना changes analyze करता है; JSON, SARIF और severity-threshold exit code समर्थित हैं।                           |
 | `abb sessions list`                | complete, incomplete और corrupt sessions list करता है।                                                                      |
 | `abb sessions show <id>`           | selected session का summary या normalized JSON report दिखाता है।                                                            |
 | `abb sessions compare <from> <to>` | दो sessions के files, risks, commands और HEAD revisions compare करता है।                                                    |
@@ -1601,7 +1613,9 @@ pnpm dev rollback
 | `abb doctor`                       | يفحص المتطلبات المحلية وحالة المستودع و config وصحة الجلسة.                          |
 | `abb run -- <command>`             | يشغل الأمر ويسجل بيانات أوامر مخفية القيم للجلسة النشطة. يدعم `--group` و `--phase`. |
 | `abb stop`                         | يوقف الجلسة النشطة وينشئ التقارير.                                                   |
+| `abb recover`                      | ينهي جلسة stale تم التحقق منها أو ينظف ملفات الحالة المكتملة الخاصة بها.             |
 | `abb status`                       | يعرض ما إذا كانت الجلسة active أو stale أو absent.                                   |
+| `abb analyze`                      | يحلل التغييرات دون watcher؛ يدعم JSON و SARIF وحدود الشدة لرمز الخروج.               |
 | `abb sessions list`                | يسرد الجلسات المكتملة وغير المكتملة والتالفة.                                        |
 | `abb sessions show <id>`           | يعرض ملخص الجلسة المحددة أو تقرير JSON المنظم.                                       |
 | `abb sessions compare <from> <to>` | يقارن الملفات والمخاطر والأوامر ومراجعات HEAD بين جلستين.                            |
@@ -1791,7 +1805,9 @@ pnpm dev rollback
 | `abb doctor`                       | Проверяет local prerequisites, repository state, config и session health.                                   |
 | `abb run -- <command>`             | Запускает команду и пишет redacted command metadata для active session. Поддерживает `--group` и `--phase`. |
 | `abb stop`                         | Останавливает active session и генерирует reports.                                                          |
+| `abb recover`                      | Завершает проверенную stale session или очищает её завершённые state files.                                 |
 | `abb status`                       | Показывает, является ли session active, stale или absent.                                                   |
+| `abb analyze`                      | Анализирует изменения без watcher; поддерживает JSON, SARIF и пороги серьёзности для кода выхода.           |
 | `abb sessions list`                | Показывает завершенные, незавершенные и поврежденные sessions.                                              |
 | `abb sessions show <id>`           | Показывает summary или нормализованный JSON выбранной session.                                              |
 | `abb sessions compare <from> <to>` | Сравнивает файлы, риски, команды и HEAD revisions двух sessions.                                            |
@@ -1981,7 +1997,9 @@ Reports は以下に書き込まれます:
 | `abb doctor`                       | local prerequisites、repository state、config、session health を確認します。                                          |
 | `abb run -- <command>`             | command を実行し、active session の redacted command metadata を記録します。`--group` と `--phase` をサポートします。 |
 | `abb stop`                         | active session を停止し reports を生成します。                                                                        |
+| `abb recover`                      | 検証済みの stale session を完了するか、完了済み state files をクリーンアップします。                                  |
 | `abb status`                       | session が active、stale、absent のどれかを表示します。                                                               |
+| `abb analyze`                      | watcher なしで changes を分析し、JSON、SARIF、severity threshold による exit code をサポートします。                  |
 | `abb sessions list`                | 完了、未完了、破損した sessions を一覧表示します。                                                                    |
 | `abb sessions show <id>`           | 選択した session の summary または normalized JSON を表示します。                                                     |
 | `abb sessions compare <from> <to>` | 2つの sessions の files、risks、commands、HEAD revisions を比較します。                                               |
@@ -2171,7 +2189,9 @@ Laporan ditulis ke:
 | `abb doctor`                       | Memeriksa local prerequisites, repository state, config, dan session health.                                       |
 | `abb run -- <command>`             | Menjalankan command dan merekam redacted command metadata untuk active session. Mendukung `--group` dan `--phase`. |
 | `abb stop`                         | Menghentikan active session dan menghasilkan reports.                                                              |
+| `abb recover`                      | Menyelesaikan session stale yang terverifikasi atau membersihkan file status yang sudah selesai.                   |
 | `abb status`                       | Menampilkan apakah session active, stale, atau absent.                                                             |
+| `abb analyze`                      | Menganalisis perubahan tanpa watcher; mendukung JSON, SARIF, dan ambang severity untuk exit code.                  |
 | `abb sessions list`                | Menampilkan session complete, incomplete, dan corrupt.                                                             |
 | `abb sessions show <id>`           | Menampilkan summary atau normalized JSON untuk session terpilih.                                                   |
 | `abb sessions compare <from> <to>` | Membandingkan files, risks, commands, dan HEAD revisions dua session.                                              |

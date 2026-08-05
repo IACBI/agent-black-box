@@ -17,7 +17,7 @@
     "sessionDir": {
       "type": "string",
       "minLength": 1,
-      "description": "Directory where session reports are written. Relative paths are resolved from the repository root."
+      "description": "Directory where session reports are written. Paths must remain inside the repository by default; a trusted local external path requires the CLI override. Network and UNC paths are never allowed."
     },
     "exclude": {
       "type": "array",

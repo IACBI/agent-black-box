@@ -1,8 +1,14 @@
-import { access, readFile } from "node:fs/promises";
+import { access, realpath } from "node:fs/promises";
 import path from "node:path";
 import type { AgentBlackBoxConfig, ConfigLoadResult } from "../types.js";
 import { CONFIG_FILE_NAME, CONFIG_SCHEMA_URL, CURRENT_CONFIG_VERSION, DEFAULT_CONFIG } from "./defaults.js";
-import { writeTextFileAtomic } from "../utils/files.js";
+import { pathExists, readTextFileLimited, writeTextFileAtomic } from "../utils/files.js";
+
+const MAX_CONFIG_BYTES = 1024 * 1024;
+
+export interface ConfigLoadOptions {
+  allowExternalSessionDir?: boolean;
+}
 
 export function getConfigPath(repoRoot: string): string {
   return path.join(repoRoot, CONFIG_FILE_NAME);
@@ -27,8 +33,8 @@ export async function createDefaultConfig(repoRoot: string): Promise<string> {
   return configPath;
 }
 
-export async function loadConfig(repoRoot: string): Promise<AgentBlackBoxConfig> {
-  const result = await loadConfigWithMeta(repoRoot);
+export async function loadConfig(repoRoot: string, options?: ConfigLoadOptions): Promise<AgentBlackBoxConfig> {
+  const result = await loadConfigWithMeta(repoRoot, options);
   if (result.errors.length > 0) {
     throw new Error(formatConfigProblems("Invalid Agent Black Box config", result.errors));
   }
@@ -36,7 +42,7 @@ export async function loadConfig(repoRoot: string): Promise<AgentBlackBoxConfig>
   return result.config;
 }
 
-export async function loadConfigWithMeta(repoRoot: string): Promise<ConfigLoadResult> {
+export async function loadConfigWithMeta(repoRoot: string, options?: ConfigLoadOptions): Promise<ConfigLoadResult> {
   const configPath = getConfigPath(repoRoot);
   if (!(await configExists(repoRoot))) {
     return {
@@ -49,7 +55,7 @@ export async function loadConfigWithMeta(repoRoot: string): Promise<ConfigLoadRe
     };
   }
 
-  const raw = await readFile(configPath, "utf8");
+  const raw = await readTextFileLimited(configPath, MAX_CONFIG_BYTES);
   let parsed: unknown;
 
   try {
@@ -59,11 +65,7 @@ export async function loadConfigWithMeta(repoRoot: string): Promise<ConfigLoadRe
   }
 
   const result = normalizeConfig(parsed);
-  if (path.isAbsolute(result.config.sessionDir) && !isPathInside(repoRoot, result.config.sessionDir)) {
-    result.warnings.push(
-      "sessionDir points outside the repository. Session evidence will be written to that external location."
-    );
-  }
+  await validateSessionDirectory(repoRoot, result.config.sessionDir, options, result.errors, result.warnings);
   return {
     ...result,
     configPath,
@@ -76,18 +78,67 @@ function isPathInside(parentPath: string, candidatePath: string): boolean {
   return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
 }
 
-export async function migrateConfigFile(repoRoot: string): Promise<ConfigLoadResult> {
+export async function migrateConfigFile(repoRoot: string, options?: ConfigLoadOptions): Promise<ConfigLoadResult> {
   if (!(await configExists(repoRoot))) {
     throw new Error(`${CONFIG_FILE_NAME} does not exist. Run \`abb init\` first.`);
   }
 
-  const result = await loadConfigWithMeta(repoRoot);
+  const result = await loadConfigWithMeta(repoRoot, options);
   if (result.errors.length > 0) {
     throw new Error(formatConfigProblems("Cannot migrate invalid Agent Black Box config", result.errors));
   }
 
   await writeTextFileAtomic(result.configPath, `${JSON.stringify(result.config, null, 2)}\n`);
   return result;
+}
+
+async function validateSessionDirectory(
+  repoRoot: string,
+  sessionDir: string,
+  options: ConfigLoadOptions | undefined,
+  errors: string[],
+  warnings: string[]
+): Promise<void> {
+  if (isNetworkPath(sessionDir)) {
+    errors.push("sessionDir must not use a network or UNC path.");
+    return;
+  }
+
+  const resolvedRepoRoot = await realpath(repoRoot);
+  const resolvedSessionDir = path.resolve(resolvedRepoRoot, sessionDir);
+  const existingAncestor = await findExistingAncestor(resolvedSessionDir);
+  const canonicalAncestor = await realpath(existingAncestor);
+  const staysInsideRepository =
+    isPathInside(resolvedRepoRoot, resolvedSessionDir) && isPathInside(resolvedRepoRoot, canonicalAncestor);
+
+  if (staysInsideRepository) {
+    return;
+  }
+
+  if (!options?.allowExternalSessionDir) {
+    errors.push(
+      "sessionDir must stay inside the repository. Use --allow-external-session-dir only for a trusted local path."
+    );
+    return;
+  }
+
+  warnings.push("sessionDir is outside the repository and was explicitly allowed for this command.");
+}
+
+function isNetworkPath(value: string): boolean {
+  return /^(?:\\\\|\/\/)/.test(value) || /^\\\\\?\\UNC\\/i.test(value);
+}
+
+async function findExistingAncestor(candidatePath: string): Promise<string> {
+  let currentPath = candidatePath;
+  while (!(await pathExists(currentPath))) {
+    const parentPath = path.dirname(currentPath);
+    if (parentPath === currentPath) {
+      return currentPath;
+    }
+    currentPath = parentPath;
+  }
+  return currentPath;
 }
 
 export function formatConfigProblems(title: string, problems: string[]): string {

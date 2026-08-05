@@ -43,7 +43,8 @@
     "format:check": "prettier --check .",
     "lint": "eslint --cache --cache-location .cache/eslint src tests scripts vitest.config.ts",
     "perf": "tsx scripts/performance.ts",
-    "release:check": "pnpm check && pnpm audit --prod --audit-level high && pnpm pack --dry-run",
+    "release:check": "pnpm check && pnpm audit --prod --audit-level high && pnpm pack --dry-run && pnpm release:validate",
+    "release:validate": "tsx scripts/release-check.ts",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc -p tsconfig.json --noEmit"

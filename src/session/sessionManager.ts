@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { appendFile, open, readFile, realpath, writeFile } from "node:fs/promises";
+import { appendFile, open, realpath, writeFile } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import path from "node:path";
 import type {
@@ -17,7 +17,7 @@ import { detectRisks } from "../risks/riskDetector.js";
 import { detectPossibleSecrets } from "../risks/secretDetector.js";
 import { buildSessionReport } from "../reports/markdown.js";
 import { writeReports } from "../reports/reportWriter.js";
-import { ensureDir, pathExists, removeFileIfExists, writeJsonFile } from "../utils/files.js";
+import { ensureDir, pathExists, readJsonFileLimited, removeFileIfExists, writeJsonFile } from "../utils/files.js";
 import { buildChangeEvidence, selectSessionRelevantChanges } from "./changeEvidence.js";
 import { listSessionCatalog, resolveSessionEntry } from "./sessionCatalog.js";
 
@@ -34,6 +34,7 @@ const MAX_INTEGRITY_WARNINGS = 100;
 const MAX_PATH_LENGTH = 32_768;
 const MAX_COMMAND_LENGTH = 32_768;
 const MAX_METADATA_LENGTH = 80;
+const MAX_STATE_FILE_BYTES = 1024 * 1024;
 
 export interface SessionLock {
   sessionId: string;
@@ -444,7 +445,7 @@ async function readStateFile<T>(filePath: string, guard: (value: unknown) => val
   }
 
   try {
-    const value = JSON.parse(await readFile(filePath, "utf8")) as unknown;
+    const value = await readJsonFileLimited<unknown>(filePath, MAX_STATE_FILE_BYTES);
     if (!guard(value)) {
       return { value: null, corrupted: true, error: "State file has an unexpected shape." };
     }

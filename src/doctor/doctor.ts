@@ -2,7 +2,7 @@ import { access, constants } from "node:fs/promises";
 import path from "node:path";
 import type { AgentBlackBoxConfig } from "../types.js";
 import { CONFIG_FILE_NAME, DEFAULT_CONFIG } from "../config/defaults.js";
-import { configExists, loadConfigWithMeta } from "../config/config.js";
+import { configExists, type ConfigLoadOptions, loadConfigWithMeta } from "../config/config.js";
 import { getRepositoryRoot } from "../git/git.js";
 import { getSessionRoot, inspectSessionRecoveryState } from "../session/sessionManager.js";
 import { pathExists } from "../utils/files.js";
@@ -21,7 +21,7 @@ export interface DoctorReport {
   checks: DoctorCheck[];
 }
 
-export async function runDoctor(cwd: string): Promise<DoctorReport> {
+export async function runDoctor(cwd: string, configOptions?: ConfigLoadOptions): Promise<DoctorReport> {
   const checks: DoctorCheck[] = [];
 
   checks.push(checkNodeVersion(process.versions.node));
@@ -48,7 +48,7 @@ export async function runDoctor(cwd: string): Promise<DoctorReport> {
 
   let config: AgentBlackBoxConfig = DEFAULT_CONFIG;
   try {
-    const configResult = await loadConfigWithMeta(repoRoot);
+    const configResult = await loadConfigWithMeta(repoRoot, configOptions);
     config = configResult.config;
     checks.push(await checkConfig(repoRoot, configResult));
   } catch (error) {

@@ -89,7 +89,7 @@ describe("config", () => {
     }
   });
 
-  it("warns when an absolute session directory is outside the repository", async () => {
+  it("rejects an external session directory unless the caller explicitly allows it", async () => {
     const dir = await createTempDir();
     const externalDir = await createTempDir();
     try {
@@ -102,10 +102,53 @@ describe("config", () => {
       const result = await loadConfigWithMeta(dir);
 
       expect(result.config.sessionDir).toBe(externalDir);
-      expect(result.warnings.join("\n")).toContain("outside the repository");
+      expect(result.errors.join("\n")).toContain("must stay inside the repository");
+      await expect(loadConfig(dir)).rejects.toThrow("must stay inside the repository");
+
+      const allowed = await loadConfigWithMeta(dir, { allowExternalSessionDir: true });
+
+      expect(allowed.errors).toEqual([]);
+      expect(allowed.warnings.join("\n")).toContain("explicitly allowed");
+      await expect(loadConfig(dir, { allowExternalSessionDir: true })).resolves.toMatchObject({
+        sessionDir: externalDir,
+      });
     } finally {
       await removeTempDir(dir);
       await removeTempDir(externalDir);
+    }
+  });
+
+  it("rejects session directories that escape through relative traversal or UNC paths", async () => {
+    const dir = await createTempDir();
+    const externalDir = await createTempDir();
+    try {
+      await writeFile(
+        path.join(dir, ".agentblackbox.json"),
+        JSON.stringify({ ...DEFAULT_CONFIG, sessionDir: path.relative(dir, externalDir) }),
+        "utf8"
+      );
+      await expect(loadConfig(dir)).rejects.toThrow("must stay inside the repository");
+
+      await writeFile(
+        path.join(dir, ".agentblackbox.json"),
+        JSON.stringify({ ...DEFAULT_CONFIG, sessionDir: "\\\\server\\share\\sessions" }),
+        "utf8"
+      );
+      await expect(loadConfig(dir, { allowExternalSessionDir: true })).rejects.toThrow("network or UNC path");
+    } finally {
+      await removeTempDir(dir);
+      await removeTempDir(externalDir);
+    }
+  });
+
+  it("rejects oversized config files before parsing them", async () => {
+    const dir = await createTempDir();
+    try {
+      await writeFile(path.join(dir, ".agentblackbox.json"), " ".repeat(1024 * 1024 + 1), "utf8");
+
+      await expect(loadConfig(dir)).rejects.toThrow("exceeds the 1 MiB size limit");
+    } finally {
+      await removeTempDir(dir);
     }
   });
 });

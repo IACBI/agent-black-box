@@ -11,6 +11,9 @@
 
 ## 0.7.0
 
+- Rejected repository-external and UNC session directories by default, with an explicit trusted-local override.
+- Bounded config, session-state, and session-catalog JSON reads to prevent oversized local input from exhausting memory.
+- Added a stable CI required-check gate and signed release artifact provenance attestations.
 - Added compact `session-metadata.json` files for efficient history listing without reading every full report.
 - Added a backward-compatible session catalog that classifies complete, incomplete, and corrupt sessions.
 - Added safe selection by `latest`, exact session ID, or unique session ID prefix.

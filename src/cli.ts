@@ -11,6 +11,7 @@ import {
 import { recordAndRunCommand } from "./commands/commandRecorder.js";
 import {
   createDefaultConfig,
+  type ConfigLoadOptions,
   formatConfigProblems,
   loadConfig,
   loadConfigWithMeta,
@@ -49,7 +50,11 @@ const program = new Command();
 program
   .name("abb")
   .description("Record and explain observable repository changes during AI coding sessions.")
-  .version("0.7.0");
+  .version("0.7.0")
+  .option(
+    "--allow-external-session-dir",
+    "allow a trusted local sessionDir outside the repository; network and UNC paths remain blocked"
+  );
 
 program
   .command("init")
@@ -67,7 +72,7 @@ configCommand
   .description("Validate .agentblackbox.json and report schema/version issues.")
   .action(async () => {
     const root = (await getRepositoryRoot(process.cwd())) ?? process.cwd();
-    const result = await loadConfigWithMeta(root);
+    const result = await loadConfigWithMeta(root, getConfigLoadOptions());
     console.log(renderConfigLoadResult(result));
     process.exitCode = result.errors.length === 0 ? 0 : 1;
   });
@@ -77,7 +82,7 @@ configCommand
   .description("Rewrite .agentblackbox.json using the current schema version.")
   .action(async () => {
     const root = (await getRepositoryRoot(process.cwd())) ?? process.cwd();
-    const result = await migrateConfigFile(root);
+    const result = await migrateConfigFile(root, getConfigLoadOptions());
     console.log(renderConfigLoadResult(result));
     console.log(`Migrated ${await displayPathFromCurrentDirectory(result.configPath)}`);
   });
@@ -87,7 +92,7 @@ program
   .description("Start a foreground recording session in the current repository.")
   .action(async () => {
     const repoRoot = await requireRepositoryRoot(process.cwd());
-    const config = await loadConfig(repoRoot);
+    const config = await loadRuntimeConfig(repoRoot);
     const { createSession } = await import("./session/sessionManager.js");
     const session = await createSession(repoRoot, config);
     await runWatcher(session, config);
@@ -98,7 +103,7 @@ program
   .description("Stop the active session and generate reports.")
   .action(async () => {
     const repoRoot = await requireRepositoryRoot(process.cwd());
-    const config = await loadConfig(repoRoot);
+    const config = await loadRuntimeConfig(repoRoot);
     const active = await readActiveSession(repoRoot, config);
 
     if (!active) {
@@ -130,7 +135,7 @@ program
   .description("Safely finalize a stale session or clean its completed state files.")
   .action(async () => {
     const repoRoot = await requireRepositoryRoot(process.cwd());
-    const config = await loadConfig(repoRoot);
+    const config = await loadRuntimeConfig(repoRoot);
     const recovery = await recoverActiveSession(repoRoot, config);
 
     if (recovery.state === "no-active-session") {
@@ -147,7 +152,7 @@ program
   .description("Show active session status.")
   .action(async () => {
     const repoRoot = await requireRepositoryRoot(process.cwd());
-    const config = await loadConfig(repoRoot);
+    const config = await loadRuntimeConfig(repoRoot);
     const recovery = await inspectSessionRecoveryState(repoRoot, config);
     if (!recovery.active) {
       console.log(`State: ${recovery.status}`);
@@ -169,7 +174,7 @@ program
   .action(async (options: { repair?: boolean }) => {
     if (options.repair) {
       const repoRoot = await requireRepositoryRoot(process.cwd());
-      const config = await loadConfig(repoRoot);
+      const config = await loadRuntimeConfig(repoRoot);
       const recovery = await recoverActiveSession(repoRoot, config);
       console.log(
         recovery.report
@@ -179,7 +184,7 @@ program
             : "Completed session state cleanup."
       );
     }
-    const report = await runDoctor(process.cwd());
+    const report = await runDoctor(process.cwd(), getConfigLoadOptions());
     console.log(renderDoctorReport(report));
     process.exitCode = report.ok ? 0 : 1;
   });
@@ -191,7 +196,7 @@ program
   .option("--fail-on <severity>", "exit with code 1 at or above low, medium, or high")
   .action(async (options: { format: string; failOn?: string }) => {
     const repoRoot = await requireRepositoryRoot(process.cwd());
-    const config = await loadConfig(repoRoot);
+    const config = await loadRuntimeConfig(repoRoot);
     const format = parseAnalyzeFormat(options.format);
     const failOn = parseRiskSeverity(options.failOn);
     const snapshot = await collectGitSnapshot(repoRoot, config.exclude);
@@ -302,7 +307,7 @@ program
     }
 
     const repoRoot = await requireRepositoryRoot(process.cwd());
-    const config = await loadConfig(repoRoot);
+    const config = await loadRuntimeConfig(repoRoot);
     const entries = await listSessionCatalog(repoRoot, config);
     const latest = resolveSessionEntry(entries, "latest");
     const selected = resolveSessionEntry(entries, options.session);
@@ -372,7 +377,7 @@ sessionsCommand
   .option("--json", "print structured JSON")
   .action(async (options: { json?: boolean }) => {
     const repoRoot = await requireRepositoryRoot(process.cwd());
-    const config = await loadConfig(repoRoot);
+    const config = await loadRuntimeConfig(repoRoot);
     const entries = await listSessionCatalog(repoRoot, config);
     console.log(
       options.json ? JSON.stringify(toPublicSessionCatalog(entries), null, 2) : renderSessionCatalog(entries)
@@ -398,7 +403,7 @@ sessionsCommand
   .option("--json", "print structured comparison JSON")
   .action(async (from: string, to: string, options: { json?: boolean }) => {
     const repoRoot = await requireRepositoryRoot(process.cwd());
-    const config = await loadConfig(repoRoot);
+    const config = await loadRuntimeConfig(repoRoot);
     const entries = await listSessionCatalog(repoRoot, config);
     const fromReport = await readCatalogSessionReport(resolveSessionEntry(entries, from));
     const toReport = await readCatalogSessionReport(resolveSessionEntry(entries, to));
@@ -408,7 +413,7 @@ sessionsCommand
 
 async function printSessionReportFile(fileName: string, selector?: string): Promise<void> {
   const repoRoot = await requireRepositoryRoot(process.cwd());
-  const config = await loadConfig(repoRoot);
+  const config = await loadRuntimeConfig(repoRoot);
   const selected = await resolveSession(repoRoot, config, selector);
   await readCatalogSessionReport(selected);
   const reportPath = path.join(selected.sessionDir, fileName);
@@ -420,7 +425,7 @@ async function printSessionReportFile(fileName: string, selector?: string): Prom
 }
 
 async function readSelectedSessionReport(repoRoot: string, selector?: string): Promise<SessionReport> {
-  const config = await loadConfig(repoRoot);
+  const config = await loadRuntimeConfig(repoRoot);
   return readCatalogSessionReport(await resolveSession(repoRoot, config, selector));
 }
 
@@ -444,6 +449,15 @@ async function waitForSessionToFinalize(
 async function displayPathFromCurrentDirectory(targetPath: string): Promise<string> {
   const [currentDirectory, resolvedTarget] = await Promise.all([realpath(process.cwd()), realpath(targetPath)]);
   return path.relative(currentDirectory, resolvedTarget) || path.basename(resolvedTarget);
+}
+
+function getConfigLoadOptions(): ConfigLoadOptions {
+  const options = program.opts() as { allowExternalSessionDir?: boolean };
+  return { allowExternalSessionDir: options.allowExternalSessionDir === true };
+}
+
+async function loadRuntimeConfig(repoRoot: string) {
+  return loadConfig(repoRoot, getConfigLoadOptions());
 }
 
 function renderConfigLoadResult(result: Awaited<ReturnType<typeof loadConfigWithMeta>>): string {
