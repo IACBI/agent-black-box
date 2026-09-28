@@ -306,6 +306,9 @@ describe("CLI end-to-end", () => {
       expect(JSON.parse(filteredHistory.stdout)).toMatchObject([{ id: session.id, latest: false }]);
       const commandHistory = await runCli(repo, ["sessions", "list", "--command", "node --version", "--json"]);
       expect(JSON.parse(commandHistory.stdout)).toMatchObject([{ id: session.id }]);
+      const browseWithoutTerminal = await runCli(repo, ["sessions", "browse"]);
+      expect(browseWithoutTerminal.exitCode).not.toBe(0);
+      expect(browseWithoutTerminal.stderr).toContain("interactive terminal");
       const prunePreview = await runCli(repo, ["sessions", "prune", "--before", "2099-01-01"]);
       expect(prunePreview.stdout).toContain(session.id);
       expect(prunePreview.stdout).toContain("1 session(s) eligible");

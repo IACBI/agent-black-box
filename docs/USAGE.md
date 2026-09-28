@@ -181,6 +181,7 @@ abb sessions list
 abb sessions list --json
 abb sessions list --state complete --since 2026-01-01 --min-severity medium
 abb sessions list --file src/auth --command test --category security --limit 20
+abb sessions browse --state complete --page-size 10
 abb sessions show <session-id>
 abb sessions show <session-id> --json
 abb sessions compare <from-session> <to-session>
@@ -191,6 +192,8 @@ abb sessions prune --before 2026-01-01
 The catalog lists complete, incomplete, and corrupt sessions. Only completed sessions can be shown, compared, exported, or selected by report commands. `latest` resolves to the newest completed session, so an active incomplete session does not hide the latest usable report.
 
 History filters are case-insensitive substring matches for session-relevant file paths, recorded redacted commands, and risk categories. Date filtering uses UTC. Content filters use a bounded search index for new sessions and fall back to the validated report for older sessions. A filtered result is marked `latest` only when it is also the newest completed session overall.
+
+`sessions browse` uses the same history filters in an interactive terminal. Enter a number to read a completed session summary, `n` or `p` to change pages, and `q` to quit. Incomplete and corrupt sessions remain visible but cannot be opened. Page size is limited to 1–50 to keep terminal output bounded.
 
 `sessions prune` previews completed sessions started before the given UTC date and keeps at least the newest completed session (or `--keep <count>`). Incomplete and corrupt directories are never selected. To delete the previewed sessions, run the same command with `--apply` in an interactive terminal and type the requested confirmation. The command rechecks the catalog, report validity, active state, and directory links before deletion. If deletion is interrupted, a hidden `.pruning-*` directory may remain under the session root; inspect it manually before removing it.
 

@@ -55,6 +55,7 @@ import {
   type SessionCatalogState,
 } from "./session/sessionCatalog.js";
 import { buildSessionComparison } from "./session/sessionComparison.js";
+import { browseSessionCatalog } from "./session/sessionBrowser.js";
 import { applySessionRetention, planSessionRetention, renderSessionRetentionPlan } from "./session/sessionRetention.js";
 import { filterSessionCatalog } from "./session/sessionSearch.js";
 import { runWatcher } from "./watcher/watcher.js";
@@ -455,6 +456,54 @@ sessionsCommand
           ? JSON.stringify(toPublicSessionCatalog(filtered, latestCompleteId), null, 2)
           : renderSessionCatalog(filtered, latestCompleteId)
       );
+    }
+  );
+
+sessionsCommand
+  .command("browse")
+  .description("Browse filtered session history in an interactive terminal.")
+  .option("--state <state>", "only include complete, incomplete, or corrupt sessions")
+  .option("--since <date>", "only include sessions started on or after YYYY-MM-DD (UTC)")
+  .option("--min-severity <severity>", "only include sessions at or above low, medium, or high risk")
+  .option("--file <text>", "find session-relevant paths containing text")
+  .option("--command <text>", "find recorded redacted commands containing text")
+  .option("--category <text>", "find risk categories containing text")
+  .option("--page-size <count>", "sessions per page (1–50)", "10")
+  .action(
+    async (options: {
+      state?: string;
+      since?: string;
+      minSeverity?: string;
+      file?: string;
+      command?: string;
+      category?: string;
+      pageSize: string;
+    }) => {
+      if (!process.stdin.isTTY || !process.stdout.isTTY) {
+        throw new Error("Session browsing requires an interactive terminal.");
+      }
+      const repoRoot = await requireRepositoryRoot(process.cwd());
+      const config = await loadRuntimeConfig(repoRoot);
+      const entries = await filterSessionCatalog(await listSessionCatalog(repoRoot, config), {
+        state: parseSessionState(options.state),
+        since: options.since,
+        minSeverity: parseRiskSeverity(options.minSeverity),
+        file: options.file,
+        command: options.command,
+        category: options.category,
+      });
+      const pageSize = parseSessionListLimit(options.pageSize, "--page-size") ?? 10;
+      const prompt = createInterface({ input: process.stdin, output: process.stdout });
+      try {
+        await browseSessionCatalog(
+          entries,
+          pageSize,
+          { ask: (question) => prompt.question(question), write: (text) => process.stdout.write(text) },
+          async (entry) => generateSummaryMarkdown(await readCatalogSessionReport(entry))
+        );
+      } finally {
+        prompt.close();
+      }
     }
   );
 
