@@ -88,13 +88,16 @@ After the Windows quoting fix, the full local check passed 144 tests with the sa
 ## Existing features worth enhancing
 
 - Support reports beyond the explicit 256 MiB policy with streaming or paged APIs if real usage requires them.
-- Consider exposing rename-source provenance in structured analysis output if reviewers need to audit why a finding was suppressed.
 - Bring watcherless and recorded-session findings into closer semantic alignment through shared fixtures before any consolidation.
-- If real sessions exceed the current report policy, design paged or streaming report APIs and validate them with production-size fixtures.
 
 ## New features aligned with the project
 
-- An optional local terminal history browser on top of the new CLI filters.
-- Configurable retention policies and archival destinations on top of the current preview-and-confirm prune command.
 - Review policies for allowed dependency/config changes, producing local CI findings without external services.
-- Optional policy profiles for deciding which _new_ staged findings should fail CI.
+
+## Follow-up implementation — 2026-09-28
+
+- Staged baseline output now identifies Git-verified rename sources and suppression counts in text, JSON, and SARIF without exposing matched values.
+- `sessions browse` provides a bounded, interactive terminal view over the existing history filters.
+- `analyze --policy new-secrets` and `--policy complete-review` provide explicit CI exit policies after staged baseline comparison. The latter also fails when required content could not be scanned.
+- Optional `retention.days`, `retention.keep`, and `retention.archiveDir` configure preview defaults. `sessions archive` copies and hashes older completed sessions to a trusted local directory, marking verified copies complete while leaving the originals in place. The existing interactive `prune --apply` remains the separate deletion step.
+- The largest local `session.json` inspected was approximately 0.02 MiB. No observed session approaches the 256 MiB policy. Supporting larger completed reports would require streaming the event reader, full JSON writer, Markdown writers, and catalog API together; raising the limit or adding a page view alone would leave finalization's memory cost and report contract unsafe. The limit remains in place pending a real workload that warrants that redesign.

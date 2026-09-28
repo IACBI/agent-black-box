@@ -28,6 +28,8 @@ const REQUIRED_COMMANDS = [
   "abb status",
   "abb analyze",
   "abb sessions list",
+  "abb sessions browse",
+  "abb sessions archive",
   "abb sessions show <id>",
   "abb sessions compare <from> <to>",
   "abb report",

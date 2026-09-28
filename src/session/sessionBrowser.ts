@@ -51,7 +51,7 @@ export async function browseSessionCatalog(
   }
 }
 
-export function renderSessionBrowserPage(
+function renderSessionBrowserPage(
   entries: readonly SessionCatalogEntry[],
   page: number,
   pageCount: number,
