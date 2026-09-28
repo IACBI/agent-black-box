@@ -275,7 +275,13 @@ export function buildWindowsCommandLine(parts: string[]): string {
 
 function quoteWindowsCommandPart(part: string): string {
   if (part.length === 0 || /[\s&|<>^"!]/.test(part)) {
-    const escaped = part.replace(/"/g, '""').replace(/\\+$/, (slashes) => slashes + slashes);
+    let trailingBackslashStart = part.length;
+    while (trailingBackslashStart > 0 && part[trailingBackslashStart - 1] === "\\") {
+      trailingBackslashStart--;
+    }
+    const escaped =
+      part.slice(0, trailingBackslashStart).replace(/"/g, '""') +
+      "\\".repeat((part.length - trailingBackslashStart) * 2);
     return `"${escaped}"`;
   }
 

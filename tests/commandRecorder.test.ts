@@ -146,6 +146,14 @@ describe("command recorder", () => {
     expect(() => buildWindowsCommandLine(["pnpm.cmd", "%USERNAME%"])).toThrow("percent signs");
   });
 
+  it("handles long runs of backslashes in Windows command-script arguments", () => {
+    const backslashes = "\\".repeat(20_000);
+    const commandLine = buildWindowsCommandLine(["pnpm.cmd", `has space ${backslashes}x`, `ends with ${backslashes}`]);
+
+    expect(commandLine).toContain(`"has space ${backslashes}x"`);
+    expect(commandLine).toContain(`"ends with ${backslashes}${backslashes}"`);
+  });
+
   it.skipIf(process.platform !== "win32")(
     "passes Windows batch arguments without changing their values",
     async () => {
@@ -169,9 +177,19 @@ describe("command recorder", () => {
         );
         await createSession(dir, DEFAULT_CONFIG);
 
-        const args = ["plain", "with spaces", "a&b", "a!b", "a^b", 'a"b', "path with spaces\\"];
+        const args = [
+          "plain",
+          "with spaces",
+          "a&b",
+          "a!b",
+          "a^b",
+          'a"b',
+          'literal" & echo injected>injected.txt & "text',
+          "path with spaces\\",
+        ];
         expect(await recordAndRunCommand([scriptPath, ...args], dir)).toBe(0);
         expect(JSON.parse(await readFile(outputPath, "utf8"))).toEqual(args);
+        await expect(readFile(path.join(dir, "injected.txt"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
         expect(await recordAndRunCommand([scriptPath, "%USERNAME%"], dir)).toBe(1);
         expect(JSON.parse(await readFile(outputPath, "utf8"))).toEqual(args);
       } finally {
