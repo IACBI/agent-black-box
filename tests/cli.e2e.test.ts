@@ -83,6 +83,20 @@ describe("CLI end-to-end", () => {
 
       const sarif = await runCli(repo, ["analyze", "--staged", "--baseline", "HEAD", "--format", "sarif"]);
       expect(JSON.parse(sarif.stdout).runs[0].properties.analysisBaselineComparison.suppressedExistingSecrets).toBe(1);
+      const policy = await runCli(repo, [
+        "analyze",
+        "--staged",
+        "--baseline",
+        "HEAD",
+        "--policy",
+        "new-secrets",
+        "--format",
+        "json",
+      ]);
+      expect(policy.exitCode).toBe(1);
+      expect(JSON.parse(policy.stdout).policyEvaluation).toMatchObject({ profile: "new-secrets", newSecretCount: 1 });
+      const policyWithoutBaseline = await runCli(repo, ["analyze", "--staged", "--policy", "new-secrets"]);
+      expect(policyWithoutBaseline.stderr).toContain("--policy requires --staged and --baseline");
       const invalid = await runCli(repo, ["analyze", "--baseline", "HEAD"]);
       expect(invalid.exitCode).not.toBe(0);
       expect(invalid.stderr).toContain("--baseline requires --staged");

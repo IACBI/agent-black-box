@@ -12,6 +12,7 @@ import {
   type WatcherlessAnalysisResult,
 } from "./analyze/analyzer.js";
 import { compareAnalysisWithBaseline } from "./analyze/baseline.js";
+import { evaluateAnalysisPolicy, parseAnalysisPolicyProfile } from "./analyze/policy.js";
 import {
   collectBaselineAnalysisInputFiles,
   collectStagedAnalysisInputFiles,
@@ -216,40 +217,51 @@ program
   .option("--staged", "analyze staged Git blobs instead of working-tree contents")
   .option("--baseline <ref>", "with --staged, report new content findings relative to a Git commit")
   .option("--fail-on <severity>", "exit with code 1 at or above low, medium, or high")
-  .action(async (options: { format: string; staged?: boolean; baseline?: string; failOn?: string }) => {
-    if (options.baseline && !options.staged) {
-      throw new Error("--baseline requires --staged.");
-    }
-    const repoRoot = await requireRepositoryRoot(process.cwd());
-    const config = await loadRuntimeConfig(repoRoot);
-    const format = parseAnalyzeFormat(options.format);
-    const failOn = parseRiskSeverity(options.failOn);
-    const files = options.staged
-      ? await collectStagedAnalysisInputFiles(repoRoot, config)
-      : await collectAnalysisInputFiles(
-          repoRoot,
-          (await collectGitSnapshot(repoRoot, config.exclude)).changedFiles,
-          config.maxFileSizeKb * 1024
+  .option("--policy <profile>", "CI policy with --staged --baseline: new-secrets or complete-review")
+  .action(
+    async (options: { format: string; staged?: boolean; baseline?: string; failOn?: string; policy?: string }) => {
+      if (options.baseline && !options.staged) {
+        throw new Error("--baseline requires --staged.");
+      }
+      if (options.policy && (!options.staged || !options.baseline)) {
+        throw new Error("--policy requires --staged and --baseline.");
+      }
+      const repoRoot = await requireRepositoryRoot(process.cwd());
+      const config = await loadRuntimeConfig(repoRoot);
+      const format = parseAnalyzeFormat(options.format);
+      const failOn = parseRiskSeverity(options.failOn);
+      const policy = parseAnalysisPolicyProfile(options.policy);
+      const files = options.staged
+        ? await collectStagedAnalysisInputFiles(repoRoot, config)
+        : await collectAnalysisInputFiles(
+            repoRoot,
+            (await collectGitSnapshot(repoRoot, config.exclude)).changedFiles,
+            config.maxFileSizeKb * 1024
+          );
+      let result: WatcherlessAnalysisResult = {
+        ...analyzeChangedFiles(files),
+        coverage: summarizeAnalysisCoverage(files, options.staged ? "index" : "worktree"),
+      };
+      if (options.baseline) {
+        const commit = await resolveBaselineCommit(repoRoot, options.baseline);
+        const secretPaths = new Set(
+          result.findings.filter((finding) => finding.kind === "possible-secret").map((finding) => finding.path)
         );
-    let result: WatcherlessAnalysisResult = {
-      ...analyzeChangedFiles(files),
-      coverage: summarizeAnalysisCoverage(files, options.staged ? "index" : "worktree"),
-    };
-    if (options.baseline) {
-      const commit = await resolveBaselineCommit(repoRoot, options.baseline);
-      const secretPaths = new Set(
-        result.findings.filter((finding) => finding.kind === "possible-secret").map((finding) => finding.path)
-      );
-      const comparedFiles = files.filter((file) => secretPaths.has(file.path));
-      const baselineFiles = await collectBaselineAnalysisInputFiles(repoRoot, comparedFiles, config, commit);
-      result = compareAnalysisWithBaseline(comparedFiles, baselineFiles, result, commit);
-    }
+        const comparedFiles = files.filter((file) => secretPaths.has(file.path));
+        const baselineFiles = await collectBaselineAnalysisInputFiles(repoRoot, comparedFiles, config, commit);
+        result = compareAnalysisWithBaseline(comparedFiles, baselineFiles, result, commit);
+      }
 
-    console.log(renderAnalysis(result, format));
-    if (failOn && meetsSeverityThreshold(result.summary.maxSeverity, failOn)) {
-      process.exitCode = 1;
+      if (policy) {
+        result = { ...result, policyEvaluation: evaluateAnalysisPolicy(result, files, policy) };
+      }
+
+      console.log(renderAnalysis(result, format));
+      if ((failOn && meetsSeverityThreshold(result.summary.maxSeverity, failOn)) || result.policyEvaluation?.failed) {
+        process.exitCode = 1;
+      }
     }
-  });
+  );
 
 program
   .command("run")
@@ -763,6 +775,15 @@ function renderAnalysis(result: WatcherlessAnalysisResult, format: AnalyzeFormat
         .map((source) => `- ${source.path} <- ${source.sourcePath}: ${source.suppressedExistingSecrets} suppressed.`)
     );
   }
+  if (result.policyEvaluation) {
+    const evaluation = result.policyEvaluation;
+    lines.push(`Policy ${evaluation.profile}: ${evaluation.failed ? "failed" : "passed"}.`);
+    lines.push(`New secret findings: ${evaluation.newSecretCount}.`);
+    if (evaluation.profile === "complete-review") {
+      lines.push(`Skipped staged content: ${evaluation.skippedStagedFiles} file(s).`);
+      lines.push(`Skipped baseline content: ${evaluation.skippedBaselineFiles} file(s).`);
+    }
+  }
   if (result.findings.length > 0) {
     lines.push("");
     lines.push(...result.findings.map(renderAnalysisFinding));
@@ -781,11 +802,12 @@ function toSarif(result: WatcherlessAnalysisResult): Record<string, unknown> {
     $schema: "https://json.schemastore.org/sarif-2.1.0.json",
     runs: [
       {
-        ...(result.coverage || result.baselineComparison
+        ...(result.coverage || result.baselineComparison || result.policyEvaluation
           ? {
               properties: {
                 ...(result.coverage ? { analysisCoverage: result.coverage } : {}),
                 ...(result.baselineComparison ? { analysisBaselineComparison: result.baselineComparison } : {}),
+                ...(result.policyEvaluation ? { analysisPolicy: result.policyEvaluation } : {}),
               },
             }
           : {}),

@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { ChangedFile, RiskSeverity } from "../types.js";
+import type { AnalysisPolicyEvaluation } from "./policy.js";
 
 const DEFAULT_MAX_CONTENT_CHARACTERS = 256 * 1024;
 
@@ -76,6 +77,7 @@ export interface WatcherlessAnalysisResult {
     skipped: Array<{ path: string; reason: string }>;
     renameSources: Array<{ path: string; sourcePath: string; suppressedExistingSecrets: number }>;
   };
+  policyEvaluation?: AnalysisPolicyEvaluation;
 }
 
 export interface AnalyzeChangedFilesOptions {
