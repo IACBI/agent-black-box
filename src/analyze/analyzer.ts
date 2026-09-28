@@ -36,6 +36,7 @@ const PRIVATE_KEY_HEADER = /-----BEGIN(?: [A-Z0-9]+)? PRIVATE KEY-----/;
 export interface AnalysisInputFile extends ChangedFile {
   content?: string;
   analysisSkipReason?: string;
+  baselineSourcePath?: string;
 }
 
 export interface AnalysisCoverage {
@@ -73,6 +74,7 @@ export interface WatcherlessAnalysisResult {
     scannedTextFiles: number;
     absentFiles: number;
     skipped: Array<{ path: string; reason: string }>;
+    renameSources: Array<{ path: string; sourcePath: string; suppressedExistingSecrets: number }>;
   };
 }
 

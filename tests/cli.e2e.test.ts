@@ -109,11 +109,21 @@ describe("CLI end-to-end", () => {
       expect(result.exitCode).toBe(0);
       const report = JSON.parse(result.stdout) as {
         findings: Array<{ kind: string }>;
-        baselineComparison: { suppressedExistingSecrets: number };
+        baselineComparison: {
+          suppressedExistingSecrets: number;
+          renameSources: Array<{ path: string; sourcePath: string; suppressedExistingSecrets: number }>;
+        };
       };
       expect(report.findings.some((finding) => finding.kind === "possible-secret")).toBe(false);
       expect(report.baselineComparison.suppressedExistingSecrets).toBe(1);
+      expect(report.baselineComparison.renameSources).toEqual([
+        { path: "new-config.ts", sourcePath: "old-config.ts", suppressedExistingSecrets: 1 },
+      ]);
       expect(result.stdout).not.toContain(oldValue);
+      const sarif = await runCli(repo, ["analyze", "--staged", "--baseline", "HEAD", "--format", "sarif"]);
+      expect(JSON.parse(sarif.stdout).runs[0].properties.analysisBaselineComparison.renameSources).toEqual(
+        report.baselineComparison.renameSources
+      );
     } finally {
       await removeTempDir(repo);
     }

@@ -707,6 +707,12 @@ function renderAnalysis(result: WatcherlessAnalysisResult, format: AnalyzeFormat
     lines.push(`Absent at baseline: ${comparison.absentFiles} file(s).`);
     lines.push(`Baseline content skipped: ${comparison.skipped.length} file(s).`);
     lines.push(...comparison.skipped.slice(0, 20).map((file) => `- ${file.path}: ${file.reason}`));
+    lines.push(`Baseline rename sources: ${comparison.renameSources.length} file(s).`);
+    lines.push(
+      ...comparison.renameSources
+        .slice(0, 20)
+        .map((source) => `- ${source.path} <- ${source.sourcePath}: ${source.suppressedExistingSecrets} suppressed.`)
+    );
   }
   if (result.findings.length > 0) {
     lines.push("");

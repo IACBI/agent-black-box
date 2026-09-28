@@ -16,6 +16,10 @@ export function compareAnalysisWithBaseline(
   let scannedTextFiles = 0;
   let absentFiles = 0;
   const skipped: Array<{ path: string; reason: string }> = [];
+  const renameSources = baselineFiles
+    .filter((file) => file.kind === "text" && file.baselineSourcePath)
+    .map((file) => ({ path: file.path, sourcePath: file.baselineSourcePath!, suppressedExistingSecrets: 0 }));
+  const renameSourcesByPath = new Map(renameSources.map((source) => [source.path, source]));
 
   for (const file of baselineFiles) {
     if (file.status === "deleted") {
@@ -67,6 +71,10 @@ export function compareAnalysisWithBaseline(
     }
     counts?.set(line, remaining - 1);
     suppressedExistingSecrets += 1;
+    const renameSource = renameSourcesByPath.get(finding.path);
+    if (renameSource) {
+      renameSource.suppressedExistingSecrets += 1;
+    }
     return false;
   });
 
@@ -74,6 +82,6 @@ export function compareAnalysisWithBaseline(
     ...current,
     findings,
     summary: summarizeAnalysisFindings(findings),
-    baselineComparison: { commit, suppressedExistingSecrets, scannedTextFiles, absentFiles, skipped },
+    baselineComparison: { commit, suppressedExistingSecrets, scannedTextFiles, absentFiles, skipped, renameSources },
   };
 }

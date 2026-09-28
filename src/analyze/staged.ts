@@ -96,10 +96,14 @@ export async function collectBaselineAnalysisInputFiles(
       return { ...file, analysisSkipReason: "Deleted staged paths have no content finding to compare." };
     }
     let entry = samePathEntries[index];
+    let baselineSourcePath: string | undefined;
     if (!entry) {
       const sourcePath = renameSources.get(file.path);
       if (sourcePath) {
         entry = await findBaselineBlob(git, commit, sourcePath);
+        if (entry) {
+          baselineSourcePath = sourcePath;
+        }
       }
     }
     if (!entry) {
@@ -130,7 +134,13 @@ export async function collectBaselineAnalysisInputFiles(
         analysisSkipReason: "Binary-like baseline content.",
       };
     }
-    return { path: file.path, status: file.status, kind: "text" as const, content: blob.toString("utf8") };
+    return {
+      path: file.path,
+      status: file.status,
+      kind: "text" as const,
+      content: blob.toString("utf8"),
+      ...(baselineSourcePath ? { baselineSourcePath } : {}),
+    };
   });
 }
 

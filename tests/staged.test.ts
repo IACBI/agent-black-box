@@ -136,7 +136,11 @@ describe("staged analysis", () => {
       expect(files).toContainEqual(expect.objectContaining({ path: "new-config.ts", status: "renamed" }));
       expect(result.findings.some((finding) => finding.kind === "possible-secret")).toBe(false);
       expect(result.findings).toContainEqual(expect.objectContaining({ path: ".env", kind: "metadata-risk" }));
-      expect(result.baselineComparison).toMatchObject({ suppressedExistingSecrets: 1, absentFiles: 0 });
+      expect(result.baselineComparison).toMatchObject({
+        suppressedExistingSecrets: 1,
+        absentFiles: 0,
+        renameSources: [{ path: "new-config.ts", sourcePath: "old-config.ts", suppressedExistingSecrets: 1 }],
+      });
 
       const newValue = "test_credential_new_987654321";
       await writeFile(
@@ -157,6 +161,9 @@ describe("staged analysis", () => {
         { path: "new-config.ts", line: 10 },
       ]);
       expect(updated.baselineComparison?.suppressedExistingSecrets).toBe(1);
+      expect(updated.baselineComparison?.renameSources).toEqual([
+        { path: "new-config.ts", sourcePath: "old-config.ts", suppressedExistingSecrets: 1 },
+      ]);
       expect(JSON.stringify(updated)).not.toContain(newValue);
 
       const excludedSourceConfig = { ...DEFAULT_CONFIG, exclude: [...DEFAULT_CONFIG.exclude, "old-config.ts"] };
@@ -174,6 +181,7 @@ describe("staged analysis", () => {
       );
       expect(withoutSource.findings.filter((finding) => finding.kind === "possible-secret")).toHaveLength(2);
       expect(withoutSource.baselineComparison).toMatchObject({ suppressedExistingSecrets: 0, absentFiles: 1 });
+      expect(withoutSource.baselineComparison?.renameSources).toEqual([]);
     } finally {
       await removeTempDir(repo);
     }
