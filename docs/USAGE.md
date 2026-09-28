@@ -50,6 +50,14 @@ abb config migrate
 
 Legacy config files without `configVersion` still load in memory. Use `abb config migrate` when you want the file rewritten with the current schema.
 
+Optional retention defaults can be added without changing the config version:
+
+```json
+{ "retention": { "days": 30, "keep": 2, "archiveDir": ".agent-black-box/archive" } }
+```
+
+These values set the default UTC cutoff, minimum newest-session count, and local archive destination for `sessions prune` and `sessions archive`. No deletion or copying runs automatically.
+
 ## Session Output Location
 
 `sessionDir` is resolved from the repository root and must remain inside that repository by default. This prevents repository-controlled configuration from silently sending session evidence to another local or network location. UNC and network paths are always rejected.
@@ -190,6 +198,7 @@ abb sessions show <session-id> --json
 abb sessions compare <from-session> <to-session>
 abb sessions compare <from-session> <to-session> --json
 abb sessions prune --before 2026-01-01
+abb sessions archive --before 2026-01-01 --to .agent-black-box/archive
 ```
 
 The catalog lists complete, incomplete, and corrupt sessions. Only completed sessions can be shown, compared, exported, or selected by report commands. `latest` resolves to the newest completed session, so an active incomplete session does not hide the latest usable report.
@@ -199,6 +208,8 @@ History filters are case-insensitive substring matches for session-relevant file
 `sessions browse` uses the same history filters in an interactive terminal. Enter a number to read a completed session summary, `n` or `p` to change pages, and `q` to quit. Incomplete and corrupt sessions remain visible but cannot be opened. Page size is limited to 1–50 to keep terminal output bounded.
 
 `sessions prune` previews completed sessions started before the given UTC date and keeps at least the newest completed session (or `--keep <count>`). Incomplete and corrupt directories are never selected. To delete the previewed sessions, run the same command with `--apply` in an interactive terminal and type the requested confirmation. The command rechecks the catalog, report validity, active state, and directory links before deletion. If deletion is interrupted, a hidden `.pruning-*` directory may remain under the session root; inspect it manually before removing it.
+
+`sessions archive` uses the same selection policy, previews the destination, and copies eligible sessions only after `--apply` and typed confirmation. It streams file checksums to verify each copy and writes `.abb-archive-complete.json` after verification. Original sessions remain in place; use the separate `prune` preview if you later choose to delete them. An interrupted copy leaves an archive directory without the completion marker for manual inspection. Archives contain the same potentially sensitive reports as the originals, so choose a trusted local destination. The archive cannot be inside the session root, and an existing session ID at the destination is never overwritten.
 
 Interactive `abb rollback --apply` is restricted to the latest completed session. Historical rollback reports remain readable with `--session`, but they cannot be applied to the current worktree. Apply also checks that HEAD, the Git index, eligible path status, and eligible file contents still match the session's private rollback snapshot. If the snapshot is missing or anything differs, apply stops without restoring files.
 

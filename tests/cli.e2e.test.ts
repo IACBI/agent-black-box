@@ -329,6 +329,27 @@ describe("CLI end-to-end", () => {
       const pruneWithoutTerminal = await runCli(repo, ["sessions", "prune", "--before", "2099-01-01", "--apply"]);
       expect(pruneWithoutTerminal.exitCode).not.toBe(0);
       expect(pruneWithoutTerminal.stderr).toContain("interactive terminal");
+      const archivePreview = await runCli(repo, [
+        "sessions",
+        "archive",
+        "--before",
+        "2099-01-01",
+        "--to",
+        ".agent-black-box/archive",
+      ]);
+      expect(archivePreview.stdout).toContain("1 session(s) eligible for archival");
+      expect(archivePreview.stdout).toContain("Original sessions remain in place");
+      const archiveWithoutTerminal = await runCli(repo, [
+        "sessions",
+        "archive",
+        "--before",
+        "2099-01-01",
+        "--to",
+        ".agent-black-box/archive",
+        "--apply",
+      ]);
+      expect(archiveWithoutTerminal.exitCode).not.toBe(0);
+      expect(archiveWithoutTerminal.stderr).toContain("interactive terminal");
 
       const firstPrefix = session.id.slice(0, -2);
       const selectedSummary = await runCli(repo, ["summary", "--session", firstPrefix]);

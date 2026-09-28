@@ -7,8 +7,11 @@ import { writeReports } from "../src/reports/reportWriter.js";
 import { listSessionCatalog } from "../src/session/sessionCatalog.js";
 import {
   applySessionRetention,
+  archiveSessionRetention,
   planSessionRetention,
+  renderSessionArchivePlan,
   renderSessionRetentionPlan,
+  retentionDateForDays,
 } from "../src/session/sessionRetention.js";
 import { getActiveSessionPath } from "../src/session/sessionManager.js";
 import { createTempDir, removeTempDir } from "./testUtils.js";
@@ -76,6 +79,71 @@ describe("session retention", () => {
   it("rejects invalid cutoffs and keep counts", () => {
     expect(() => planSessionRetention([], "2026-02-30")).toThrow("valid date");
     expect(() => planSessionRetention([], "2026-01-01", 0)).toThrow("positive integer");
+    expect(retentionDateForDays(30, new Date("2026-09-28T23:59:00.000Z"))).toBe("2026-08-29");
+    expect(() => retentionDateForDays(0)).toThrow("Retention days");
+  });
+
+  it("copies and verifies eligible sessions without removing originals", async () => {
+    const repo = await createTempDir("abb-archive-");
+    try {
+      await makeSession(repo, "session-old", "2026-01-01T00:00:00.000Z");
+      await makeSession(repo, "session-new", "2026-01-03T00:00:00.000Z");
+      const archiveDir = path.join(repo, ".agent-black-box", "archive");
+      const plan = planSessionRetention(await listSessionCatalog(repo, DEFAULT_CONFIG), "2026-01-04");
+      expect(renderSessionArchivePlan(plan, archiveDir)).toContain("Original sessions remain in place");
+
+      await archiveSessionRetention(repo, DEFAULT_CONFIG, plan, archiveDir);
+      const source = path.join(repo, ".agent-black-box", "sessions", "session-old", "session.json");
+      const copied = path.join(archiveDir, "session-old", "session.json");
+      expect(await readFile(copied, "utf8")).toBe(await readFile(source, "utf8"));
+      expect(
+        JSON.parse(await readFile(path.join(archiveDir, "session-old", ".abb-archive-complete.json"), "utf8"))
+      ).toMatchObject({
+        archiveVersion: 1,
+        id: "session-old",
+      });
+      expect((await listSessionCatalog(repo, DEFAULT_CONFIG)).map((entry) => entry.id)).toContain("session-old");
+      await expect(archiveSessionRetention(repo, DEFAULT_CONFIG, plan, archiveDir)).rejects.toThrow("already contains");
+    } finally {
+      await removeTempDir(repo);
+    }
+  });
+
+  it("rejects an archive destination inside the session root", async () => {
+    const repo = await createTempDir("abb-archive-");
+    try {
+      await makeSession(repo, "session-old", "2026-01-01T00:00:00.000Z");
+      await makeSession(repo, "session-new", "2026-01-03T00:00:00.000Z");
+      const plan = planSessionRetention(await listSessionCatalog(repo, DEFAULT_CONFIG), "2026-01-04");
+      await expect(
+        archiveSessionRetention(repo, DEFAULT_CONFIG, plan, path.join(repo, ".agent-black-box", "sessions", "archive"))
+      ).rejects.toThrow("outside the session root");
+    } finally {
+      await removeTempDir(repo);
+    }
+  });
+
+  it("refuses to archive linked session content", async () => {
+    const repo = await createTempDir("abb-archive-");
+    try {
+      await makeSession(repo, "session-old", "2026-01-01T00:00:00.000Z");
+      await makeSession(repo, "session-new", "2026-01-03T00:00:00.000Z");
+      const outside = path.join(repo, "outside");
+      await mkdir(outside);
+      await writeFile(path.join(outside, "keep.txt"), "keep", "utf8");
+      await symlink(
+        outside,
+        path.join(repo, ".agent-black-box", "sessions", "session-old", "linked"),
+        process.platform === "win32" ? "junction" : "dir"
+      );
+      const plan = planSessionRetention(await listSessionCatalog(repo, DEFAULT_CONFIG), "2026-01-04");
+      await expect(
+        archiveSessionRetention(repo, DEFAULT_CONFIG, plan, path.join(repo, ".agent-black-box", "archive"))
+      ).rejects.toThrow("linked or special file");
+      expect(await readFile(path.join(outside, "keep.txt"), "utf8")).toBe("keep");
+    } finally {
+      await removeTempDir(repo);
+    }
   });
 
   it("refuses linked content and keeps external files", async () => {

@@ -163,7 +163,15 @@ function normalizeConfig(parsed: unknown): Omit<ConfigLoadResult, "configPath" |
     };
   }
 
-  const knownKeys = new Set(["$schema", "configVersion", "sessionDir", "exclude", "riskPatterns", "maxFileSizeKb"]);
+  const knownKeys = new Set([
+    "$schema",
+    "configVersion",
+    "sessionDir",
+    "exclude",
+    "riskPatterns",
+    "maxFileSizeKb",
+    "retention",
+  ]);
   for (const key of Object.keys(parsed)) {
     if (!knownKeys.has(key)) {
       warnings.push(`Unknown config key "${key}" is ignored.`);
@@ -187,6 +195,7 @@ function normalizeConfig(parsed: unknown): Omit<ConfigLoadResult, "configPath" |
     exclude: stringArrayOrDefault(parsed.exclude, DEFAULT_CONFIG.exclude, "exclude", warnings),
     riskPatterns: stringArrayOrDefault(parsed.riskPatterns, DEFAULT_CONFIG.riskPatterns, "riskPatterns", warnings),
     maxFileSizeKb: maxFileSizeOrDefault(parsed.maxFileSizeKb, warnings),
+    ...normalizeRetention(parsed.retention, errors),
   };
 
   return {
@@ -202,6 +211,41 @@ function cloneDefaultConfig(): AgentBlackBoxConfig {
     ...DEFAULT_CONFIG,
     exclude: [...DEFAULT_CONFIG.exclude],
     riskPatterns: [...DEFAULT_CONFIG.riskPatterns],
+  };
+}
+
+function normalizeRetention(value: unknown, errors: string[]): Pick<AgentBlackBoxConfig, "retention"> {
+  if (value === undefined) {
+    return {};
+  }
+  if (!isRecord(value)) {
+    errors.push("retention must be an object.");
+    return {};
+  }
+  const knownRetentionKeys = new Set(["days", "keep", "archiveDir"]);
+  for (const key of Object.keys(value)) {
+    if (!knownRetentionKeys.has(key)) {
+      errors.push(`Unknown retention key "${key}".`);
+    }
+  }
+  for (const key of ["days", "keep"] as const) {
+    const count = value[key];
+    if (count !== undefined && (!Number.isSafeInteger(count) || Number(count) < 1 || Number(count) > 100_000)) {
+      errors.push(`retention.${key} must be an integer between 1 and 100000.`);
+    }
+  }
+  if (value.archiveDir !== undefined && (typeof value.archiveDir !== "string" || !value.archiveDir.trim())) {
+    errors.push("retention.archiveDir must be a non-empty local path.");
+  }
+  if (errors.length > 0) {
+    return {};
+  }
+  return {
+    retention: {
+      ...(value.days === undefined ? {} : { days: Number(value.days) }),
+      ...(value.keep === undefined ? {} : { keep: Number(value.keep) }),
+      ...(value.archiveDir === undefined ? {} : { archiveDir: String(value.archiveDir) }),
+    },
   };
 }
 

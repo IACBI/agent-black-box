@@ -57,7 +57,14 @@ import {
 } from "./session/sessionCatalog.js";
 import { buildSessionComparison } from "./session/sessionComparison.js";
 import { browseSessionCatalog } from "./session/sessionBrowser.js";
-import { applySessionRetention, planSessionRetention, renderSessionRetentionPlan } from "./session/sessionRetention.js";
+import {
+  applySessionRetention,
+  archiveSessionRetention,
+  planSessionRetention,
+  renderSessionArchivePlan,
+  renderSessionRetentionPlan,
+  retentionDateForDays,
+} from "./session/sessionRetention.js";
 import { filterSessionCatalog } from "./session/sessionSearch.js";
 import { runWatcher } from "./watcher/watcher.js";
 import { pathExists } from "./utils/files.js";
@@ -522,14 +529,18 @@ sessionsCommand
 sessionsCommand
   .command("prune")
   .description("Preview deletion of older completed sessions; --apply requires interactive confirmation.")
-  .requiredOption("--before <date>", "only consider sessions started before YYYY-MM-DD (UTC)")
-  .option("--keep <count>", "keep at least this many newest completed sessions", "1")
+  .option("--before <date>", "only consider sessions started before YYYY-MM-DD (UTC)")
+  .option("--keep <count>", "keep at least this many newest completed sessions")
   .option("--apply", "delete eligible sessions after typed confirmation")
-  .action(async (options: { before: string; keep: string; apply?: boolean }) => {
+  .action(async (options: { before?: string; keep?: string; apply?: boolean }) => {
     const repoRoot = await requireRepositoryRoot(process.cwd());
     const config = await loadRuntimeConfig(repoRoot);
-    const keep = parseSessionListLimit(options.keep, "--keep");
-    const plan = planSessionRetention(await listSessionCatalog(repoRoot, config), options.before, keep);
+    const before = options.before ?? (config.retention?.days && retentionDateForDays(config.retention.days));
+    if (!before) {
+      throw new Error("--before is required unless retention.days is configured.");
+    }
+    const keep = parseSessionListLimit(options.keep, "--keep") ?? config.retention?.keep ?? 1;
+    const plan = planSessionRetention(await listSessionCatalog(repoRoot, config), before, keep);
     console.log(renderSessionRetentionPlan(plan));
     if (!options.apply || plan.sessions.length === 0) {
       return;
@@ -550,6 +561,48 @@ sessionsCommand
     }
     await applySessionRetention(repoRoot, config, plan);
     console.log(`${plan.sessions.length} completed session(s) deleted.`);
+  });
+
+sessionsCommand
+  .command("archive")
+  .description("Preview verified copies of older completed sessions; --apply preserves the originals.")
+  .option("--before <date>", "only consider sessions started before YYYY-MM-DD (UTC)")
+  .option("--keep <count>", "keep at least this many newest completed sessions")
+  .option("--to <directory>", "local archive destination (or configure retention.archiveDir)")
+  .option("--apply", "copy and verify eligible sessions after typed confirmation")
+  .action(async (options: { before?: string; keep?: string; to?: string; apply?: boolean }) => {
+    const repoRoot = await requireRepositoryRoot(process.cwd());
+    const config = await loadRuntimeConfig(repoRoot);
+    const before = options.before ?? (config.retention?.days && retentionDateForDays(config.retention.days));
+    if (!before) {
+      throw new Error("--before is required unless retention.days is configured.");
+    }
+    const archiveDir = options.to ?? config.retention?.archiveDir;
+    if (!archiveDir) {
+      throw new Error("--to is required unless retention.archiveDir is configured.");
+    }
+    const keep = parseSessionListLimit(options.keep, "--keep") ?? config.retention?.keep ?? 1;
+    const plan = planSessionRetention(await listSessionCatalog(repoRoot, config), before, keep);
+    console.log(renderSessionArchivePlan(plan, archiveDir));
+    if (!options.apply || plan.sessions.length === 0) {
+      return;
+    }
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+      throw new Error("Session archiving requires an interactive terminal.");
+    }
+    const confirmation = `archive ${plan.sessions.length} sessions`;
+    const prompt = createInterface({ input: process.stdin, output: process.stdout });
+    try {
+      const answer = await prompt.question(`Type "${confirmation}" to copy these sessions: `);
+      if (answer !== confirmation) {
+        console.log("Session archiving cancelled.");
+        return;
+      }
+    } finally {
+      prompt.close();
+    }
+    await archiveSessionRetention(repoRoot, config, plan, archiveDir);
+    console.log(`${plan.sessions.length} completed session(s) archived; originals remain in place.`);
   });
 
 sessionsCommand

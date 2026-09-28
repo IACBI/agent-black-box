@@ -74,6 +74,22 @@ describe("config", () => {
     }
   });
 
+  it("accepts optional retention defaults and rejects unsafe policy values", async () => {
+    const dir = await createTempDir();
+    try {
+      const configPath = getConfigPath(dir);
+      await writeFile(configPath, JSON.stringify({ retention: { days: 30, keep: 2, archiveDir: "archive" } }));
+      expect((await loadConfig(dir)).retention).toEqual({ days: 30, keep: 2, archiveDir: "archive" });
+
+      await writeFile(configPath, JSON.stringify({ retention: { days: 0, keep: 2 } }));
+      await expect(loadConfig(dir)).rejects.toThrow("retention.days must be an integer");
+      await writeFile(configPath, JSON.stringify({ retention: { days: 30, unknown: true } }));
+      await expect(loadConfig(dir)).rejects.toThrow('Unknown retention key "unknown"');
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
   it("migrates legacy configs in memory and can rewrite them", async () => {
     const dir = await createTempDir();
     try {

@@ -15,6 +15,11 @@ export interface AgentBlackBoxConfig {
   exclude: string[];
   riskPatterns: string[];
   maxFileSizeKb: number;
+  retention?: {
+    days?: number;
+    keep?: number;
+    archiveDir?: string;
+  };
 }
 
 export interface ConfigLoadResult {
