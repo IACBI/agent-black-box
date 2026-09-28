@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { ChangedFile, RiskSeverity } from "../types.js";
+import type { AnalysisPolicyEvaluation } from "./policy.js";
 
 const DEFAULT_MAX_CONTENT_CHARACTERS = 256 * 1024;
 
@@ -35,6 +36,14 @@ const PRIVATE_KEY_HEADER = /-----BEGIN(?: [A-Z0-9]+)? PRIVATE KEY-----/;
 
 export interface AnalysisInputFile extends ChangedFile {
   content?: string;
+  analysisSkipReason?: string;
+  baselineSourcePath?: string;
+}
+
+export interface AnalysisCoverage {
+  source: "worktree" | "index";
+  scannedTextFiles: number;
+  skipped: Array<{ path: string; reason: string }>;
 }
 
 type AnalysisFindingKind = "metadata-risk" | "possible-secret" | "analysis-limit";
@@ -49,7 +58,7 @@ export interface AnalysisFinding {
   reason: string;
 }
 
-interface AnalysisSummary {
+export interface AnalysisSummary {
   findingCount: number;
   maxSeverity: RiskSeverity | "none";
   score: number;
@@ -59,6 +68,16 @@ interface AnalysisSummary {
 export interface WatcherlessAnalysisResult {
   findings: AnalysisFinding[];
   summary: AnalysisSummary;
+  coverage?: AnalysisCoverage;
+  baselineComparison?: {
+    commit: string;
+    suppressedExistingSecrets: number;
+    scannedTextFiles: number;
+    absentFiles: number;
+    skipped: Array<{ path: string; reason: string }>;
+    renameSources: Array<{ path: string; sourcePath: string; suppressedExistingSecrets: number }>;
+  };
+  policyEvaluation?: AnalysisPolicyEvaluation;
 }
 
 export interface AnalyzeChangedFilesOptions {
@@ -80,7 +99,7 @@ export function analyzeChangedFiles(
 
   return {
     findings: sortedFindings,
-    summary: summarizeFindings(sortedFindings),
+    summary: summarizeAnalysisFindings(sortedFindings),
   };
 }
 
@@ -362,7 +381,7 @@ function compareStrings(left: string, right: string): number {
   return left < right ? -1 : 1;
 }
 
-function summarizeFindings(findings: AnalysisFinding[]): AnalysisSummary {
+export function summarizeAnalysisFindings(findings: readonly AnalysisFinding[]): AnalysisSummary {
   const severityCounts: Record<RiskSeverity, number> = { low: 0, medium: 0, high: 0 };
   let score = 0;
 

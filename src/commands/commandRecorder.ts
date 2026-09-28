@@ -1,9 +1,10 @@
 import { spawn } from "node:child_process";
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
-import { loadConfig } from "../config/config.js";
+import { loadConfig, type ConfigLoadOptions } from "../config/config.js";
 import { requireRepositoryRoot } from "../git/git.js";
-import { appendCommandEvent, isProcessRunning, readActiveSession } from "../session/sessionManager.js";
+import { appendCommandEvent, inspectSessionRecoveryState, registerInFlightCommand } from "../session/sessionManager.js";
+import { removeFileIfExists } from "../utils/files.js";
 import { normalizePath, toRepoRelative } from "../utils/paths.js";
 
 const SENSITIVE_PATTERN =
@@ -11,7 +12,7 @@ const SENSITIVE_PATTERN =
 const MAX_COMMAND_PART_LENGTH = 4096;
 const MAX_RECORDED_COMMAND_LENGTH = 32_768;
 
-export interface RecordCommandOptions {
+export interface RecordCommandOptions extends ConfigLoadOptions {
   cwd?: string;
   label?: string;
   group?: string;
@@ -30,15 +31,16 @@ export async function recordAndRunCommand(
   }
 
   const repoRoot = await requireRepositoryRoot(cwd);
-  const config = await loadConfig(repoRoot);
-  const active = await readActiveSession(repoRoot, config);
+  const config = await loadConfig(repoRoot, options);
+  const recovery = await inspectSessionRecoveryState(repoRoot, config);
+  const active = recovery.active;
 
-  if (!active) {
+  if (recovery.status === "no-active-session") {
     throw new Error("No active Agent Black Box session. Run `abb start` before `abb run`.");
   }
 
-  if (!isProcessRunning(active.pid)) {
-    throw new Error(`Active session ${active.id} appears stale. Run \`abb stop\` to finalize it first.`);
+  if (recovery.status !== "active" || !active) {
+    throw new Error(`${recovery.message} Run \`abb doctor\` before recording commands.`);
   }
 
   const runCwd = await resolveRunCwd(repoRoot, options.cwd);
@@ -46,23 +48,31 @@ export async function recordAndRunCommand(
   const startedAt = startedAtDate.toISOString();
   const redactedCommand = formatCommand(redactCommandParts(normalizedCommandParts));
 
-  const result = await spawnCommand(normalizedCommandParts, runCwd);
-  const endedAtDate = new Date();
+  const inFlightMarker = await registerInFlightCommand(active);
+  let recorded = false;
+  try {
+    const result = await spawnCommand(normalizedCommandParts, runCwd);
+    const endedAtDate = new Date();
 
-  await appendCommandEvent(active, {
-    startedAt,
-    endedAt: endedAtDate.toISOString(),
-    command: redactedCommand,
-    cwd: toRepoRelative(repoRoot, runCwd) || ".",
-    ...optionalMetadata("label", options.label),
-    ...optionalMetadata("group", options.group),
-    ...optionalMetadata("phase", options.phase),
-    exitCode: result.exitCode,
-    durationMs: endedAtDate.getTime() - startedAtDate.getTime(),
-    ...(result.error ? { error: result.error } : {}),
-  });
-
-  return result.exitCode ?? 1;
+    await appendCommandEvent(active, {
+      startedAt,
+      endedAt: endedAtDate.toISOString(),
+      command: redactedCommand,
+      cwd: toRepoRelative(repoRoot, runCwd) || ".",
+      ...optionalMetadata("label", options.label),
+      ...optionalMetadata("group", options.group),
+      ...optionalMetadata("phase", options.phase),
+      exitCode: result.exitCode,
+      durationMs: endedAtDate.getTime() - startedAtDate.getTime(),
+      ...(result.error ? { error: result.error } : {}),
+    });
+    recorded = true;
+    return result.exitCode ?? 1;
+  } finally {
+    if (recorded) {
+      await removeFileIfExists(inFlightMarker);
+    }
+  }
 }
 
 export async function resolveRunCwd(repoRoot: string, requestedCwd?: string): Promise<string> {
@@ -107,9 +117,7 @@ export function redactCommandParts(parts: string[]): string[] {
     }
 
     if (isSensitiveAssignment(part)) {
-      const separator = part.includes("=") ? "=" : ":";
-      const [key] = part.split(separator, 1);
-      redacted.push(`${key}${separator}<redacted>`);
+      redacted.push(`${part.slice(0, part.search(/[=:]/) + 1)}<redacted>`);
       continue;
     }
 
@@ -119,9 +127,15 @@ export function redactCommandParts(parts: string[]): string[] {
       continue;
     }
 
-    const redactedUrl = redactSensitiveUrl(part);
+    const redactedUrl = redactUrlPart(part);
     if (redactedUrl !== part) {
       redacted.push(redactedUrl);
+      continue;
+    }
+
+    const redactedJson = redactSensitiveJson(part);
+    if (redactedJson !== part) {
+      redacted.push(redactedJson);
       continue;
     }
 
@@ -158,8 +172,16 @@ function optionalMetadata<K extends "label" | "group" | "phase">(
   if (!normalized) {
     return {};
   }
-
-  return { [key]: normalized.slice(0, 80) } as Partial<Record<K, string>>;
+  if (redactSensitiveJson(normalized) !== normalized) {
+    return { [key]: "<redacted>" } as Partial<Record<K, string>>;
+  }
+  for (const match of normalized.matchAll(/(?:^|\s)([A-Za-z_][A-Za-z0-9_-]*)\s*[:=]/g)) {
+    if (SENSITIVE_PATTERN.test(match[1])) {
+      return { [key]: "<redacted>" } as Partial<Record<K, string>>;
+    }
+  }
+  const redacted = redactCommandParts(normalized.split(" ")).join(" ");
+  return { [key]: redacted.slice(0, 80) } as Partial<Record<K, string>>;
 }
 
 function spawnCommand(commandParts: string[], cwd: string): Promise<{ exitCode: number | null; error?: string }> {
@@ -167,11 +189,18 @@ function spawnCommand(commandParts: string[], cwd: string): Promise<{ exitCode: 
 
   return new Promise((resolve) => {
     const spawnWithFallback = (targetCommand: string, fallbackIndex: number): void => {
-      const spawnTarget = getSpawnTarget(targetCommand, args);
+      let spawnTarget: ReturnType<typeof getSpawnTarget>;
+      try {
+        spawnTarget = getSpawnTarget(targetCommand, args);
+      } catch {
+        resolve({ exitCode: null, error: "Windows command script arguments could not be passed safely." });
+        return;
+      }
       const child = spawn(spawnTarget.command, spawnTarget.args, {
         cwd,
         shell: false,
         stdio: "inherit",
+        windowsVerbatimArguments: spawnTarget.windowsVerbatimArguments,
       });
       let fallbackStarted = false;
       let settled = false;
@@ -216,11 +245,19 @@ function shouldTryWindowsScriptFallback(
   );
 }
 
-function getSpawnTarget(command: string, args: string[]): { command: string; args: string[] } {
+function getSpawnTarget(
+  command: string,
+  args: string[]
+): {
+  command: string;
+  args: string[];
+  windowsVerbatimArguments?: boolean;
+} {
   if (process.platform === "win32" && /\.(cmd|bat)$/i.test(command)) {
     return {
       command: process.env.ComSpec ?? "cmd.exe",
       args: ["/d", "/v:off", "/s", "/c", buildWindowsCommandLine([command, ...args])],
+      windowsVerbatimArguments: true,
     };
   }
 
@@ -228,21 +265,31 @@ function getSpawnTarget(command: string, args: string[]): { command: string; arg
 }
 
 export function buildWindowsCommandLine(parts: string[]): string {
-  return parts.map(quoteWindowsCommandPart).join(" ");
+  if (parts.some((part) => /[%\r\n\0]/.test(part))) {
+    throw new Error("Windows command script arguments cannot safely contain percent signs or line breaks.");
+  }
+
+  // /s /c removes the outer quotes. Keep the inner quotes intact for paths with spaces.
+  return `"${parts.map(quoteWindowsCommandPart).join(" ")}"`;
 }
 
 function quoteWindowsCommandPart(part: string): string {
-  const escaped = part.replace(/([&|<>^"%!])/g, "^$1");
-
-  if (escaped.length === 0 || /\s/.test(escaped)) {
+  if (part.length === 0 || /[\s&|<>^"!]/.test(part)) {
+    let trailingBackslashStart = part.length;
+    while (trailingBackslashStart > 0 && part[trailingBackslashStart - 1] === "\\") {
+      trailingBackslashStart--;
+    }
+    const escaped =
+      part.slice(0, trailingBackslashStart).replace(/"/g, '""') +
+      "\\".repeat((part.length - trailingBackslashStart) * 2);
     return `"${escaped}"`;
   }
 
-  return escaped;
+  return part;
 }
 
 function isSensitiveAssignment(part: string): boolean {
-  return /^[A-Za-z_][A-Za-z0-9_]*(=|:).+/.test(part) && SENSITIVE_PATTERN.test(part.split(/=|:/, 1)[0] ?? "");
+  return /^[A-Za-z_][A-Za-z0-9_-]*(=|:).+/.test(part) && SENSITIVE_PATTERN.test(part.split(/=|:/, 1)[0] ?? "");
 }
 
 function isSensitiveFlagWithValue(part: string): boolean {
@@ -265,9 +312,7 @@ function redactNestedSensitiveAssignment(part: string): string | null {
     return null;
   }
 
-  const nestedSeparator = nested.includes("=") ? "=" : ":";
-  const [key] = nested.split(nestedSeparator, 1);
-  return `${prefix}${key}${nestedSeparator}<redacted>`;
+  return `${prefix}${nested.slice(0, nested.search(/[=:]/) + 1)}<redacted>`;
 }
 
 function redactSensitiveUrl(part: string): string {
@@ -278,6 +323,10 @@ function redactSensitiveUrl(part: string): string {
   try {
     const url = new URL(part);
     let changed = false;
+    if (url.username) {
+      url.username = "<redacted>";
+      changed = true;
+    }
     if (url.password) {
       url.password = "<redacted>";
       changed = true;
@@ -292,6 +341,27 @@ function redactSensitiveUrl(part: string): string {
   } catch {
     return part;
   }
+}
+
+function redactUrlPart(part: string): string {
+  const separator = part.indexOf("=");
+  if (separator > 0 && /^(?:--[A-Za-z0-9_-]+|[A-Za-z_][A-Za-z0-9_]*)$/.test(part.slice(0, separator))) {
+    const prefix = part.slice(0, separator + 1);
+    return `${prefix}${redactSensitiveUrl(part.slice(separator + 1))}`;
+  }
+  return redactSensitiveUrl(part);
+}
+
+function redactSensitiveJson(part: string): string {
+  const keyPattern = /"([^"\\]{1,128})"\s*:/g;
+  for (const match of part.matchAll(keyPattern)) {
+    if (SENSITIVE_PATTERN.test(match[1])) {
+      const separator = part.indexOf("=");
+      const prefix = separator > 0 ? part.slice(0, separator + 1) : "";
+      return /^--[A-Za-z0-9_-]+=$/.test(prefix) ? `${prefix}<redacted>` : "<redacted>";
+    }
+  }
+  return part;
 }
 
 function truncateCommandPart(part: string): string {

@@ -60,6 +60,12 @@ const baseReport = buildSessionReport(
 );
 
 describe("markdown reports", () => {
+  it("uses literal Git pathspecs in manual rollback suggestions", () => {
+    const markdown = generateRollbackMarkdown(baseReport);
+    expect(markdown).toContain("git restore -- ':(top,literal)src/index.ts'");
+    expect(markdown).toContain("git diff -- ':(top,literal)src/index.ts'");
+  });
+
   it("generates timeline with command placeholder", () => {
     const markdown = generateTimelineMarkdown(baseReport);
 
@@ -159,8 +165,8 @@ describe("markdown reports", () => {
   it("generates rollback suggestions without executing changes", () => {
     const markdown = generateRollbackMarkdown(baseReport);
 
-    expect(markdown).toContain("git diff -- 'src/index.ts'");
-    expect(markdown).toContain("git restore -- 'src/index.ts'");
+    expect(markdown).toContain("git diff -- ':(top,literal)src/index.ts'");
+    expect(markdown).toContain("git restore -- ':(top,literal)src/index.ts'");
     expect(markdown).toContain("does not automatically revert");
   });
 
@@ -173,7 +179,7 @@ describe("markdown reports", () => {
       },
     });
 
-    expect(markdown).toContain("git diff -- 'src/weird'\\''$(touch owned)\\nfile.ts'");
+    expect(markdown).toContain("git diff -- ':(top,literal)src/weird'\\''$(touch owned)\\nfile.ts'");
     expect(markdown).not.toContain("\nfile.ts");
   });
 });

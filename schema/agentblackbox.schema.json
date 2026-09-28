@@ -42,6 +42,16 @@
       "minimum": 1,
       "maximum": 102400,
       "description": "Maximum changed file size scanned for possible secret-like values."
+    },
+    "retention": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "days": { "type": "integer", "minimum": 1, "maximum": 100000 },
+        "keep": { "type": "integer", "minimum": 1, "maximum": 100000 },
+        "archiveDir": { "type": "string", "minLength": 1 }
+      },
+      "description": "Optional defaults for session retention previews. Archiving still requires an explicit interactive apply."
     }
   },
   "required": ["configVersion", "sessionDir", "exclude", "riskPatterns", "maxFileSizeKb"]

@@ -49,6 +49,24 @@ describe("git helpers", () => {
     }
   });
 
+  it("counts empty files, CRLF, and unterminated final lines consistently", async () => {
+    const dir = await createTempDir();
+    try {
+      initGitRepo(dir);
+      await writeFile(`${dir}/empty.txt`, "");
+      await writeFile(`${dir}/crlf.txt`, "one\r\ntwo\r\n");
+      await writeFile(`${dir}/unterminated.txt`, "one\ntwo");
+      const snapshot = await collectGitSnapshot(dir);
+      expect(Object.fromEntries(snapshot.changedFiles.map((file) => [file.path, file.insertions]))).toEqual({
+        "empty.txt": 0,
+        "crlf.txt": 2,
+        "unterminated.txt": 2,
+      });
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
   it("classifies untracked binary files without estimating text lines", async () => {
     const dir = await createTempDir();
     try {

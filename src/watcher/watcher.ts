@@ -1,6 +1,6 @@
 import chokidar from "chokidar";
 import type { ActiveSession, AgentBlackBoxConfig, FileEvent, FileEventType } from "../types.js";
-import { appendFileEvent, finalizeSession, readStopRequest } from "../session/sessionManager.js";
+import { appendFileEvent, finalizeSession, markCaptureLoss, readStopRequest } from "../session/sessionManager.js";
 import { isPathExcluded, toRepoRelative } from "../utils/paths.js";
 
 const WATCH_EVENTS = new Set<string>(["add", "change", "unlink"]);
@@ -10,9 +10,11 @@ export async function runWatcher(session: ActiveSession, config: AgentBlackBoxCo
   let finalized = false;
   const pendingFileEvents: FileEvent[] = [];
   let droppedFileEventCount = 0;
+  let failedFileEventWriteCount = 0;
   let eventFlushPromise: Promise<void> | undefined;
   let finalizePromise: Promise<void> | undefined;
   let stopPoll: ReturnType<typeof setInterval> | undefined;
+  const lossMarkerWrites: Promise<void>[] = [];
 
   let resolveCompletion: (() => void) | undefined;
   let rejectCompletion: ((error: unknown) => void) | undefined;
@@ -28,6 +30,7 @@ export async function runWatcher(session: ActiveSession, config: AgentBlackBoxCo
       return isPathExcluded(relativePath, config.exclude);
     },
     ignoreInitial: true,
+    followSymlinks: false,
     awaitWriteFinish: {
       stabilityThreshold: 200,
       pollInterval: 50,
@@ -53,11 +56,17 @@ export async function runWatcher(session: ActiveSession, config: AgentBlackBoxCo
     finalizePromise = (async () => {
       cleanup();
       await watcher.close();
-      await flushPendingFileEvents();
+      do {
+        await flushPendingFileEvents();
+      } while (pendingFileEvents.length > 0);
+      await Promise.all(lossMarkerWrites);
       if (droppedFileEventCount > 0) {
         console.error(`Dropped ${droppedFileEventCount} file events because the watcher queue reached its limit.`);
       }
-      const report = await finalizeSession(session, config, reason);
+      const report = await finalizeSession(session, config, reason, {
+        droppedFileEvents: droppedFileEventCount,
+        failedFileEventWrites: failedFileEventWriteCount,
+      });
       console.log(`Agent Black Box session stopped: ${report.id}`);
       console.log(`Reports written to ${report.sessionDir}`);
     })();
@@ -82,6 +91,9 @@ export async function runWatcher(session: ActiveSession, config: AgentBlackBoxCo
 
     if (pendingFileEvents.length >= MAX_PENDING_FILE_EVENTS) {
       droppedFileEventCount += 1;
+      if (droppedFileEventCount === 1) {
+        lossMarkerWrites.push(recordCaptureLoss("overflow"));
+      }
       return;
     }
 
@@ -107,6 +119,10 @@ export async function runWatcher(session: ActiveSession, config: AgentBlackBoxCo
         try {
           await appendFileEvent(session, event);
         } catch (error) {
+          failedFileEventWriteCount += 1;
+          if (failedFileEventWriteCount === 1) {
+            lossMarkerWrites.push(recordCaptureLoss("writeFailure"));
+          }
           console.error(`Failed to record file event: ${(error as Error).message}`);
         }
       }
@@ -120,9 +136,17 @@ export async function runWatcher(session: ActiveSession, config: AgentBlackBoxCo
   watcher.on("error", (error) => {
     console.error(`Watcher error: ${(error as Error).message}`);
     if (!finalized) {
-      rejectCompletion?.(error);
+      void recordCaptureLoss("watcherError").finally(() => rejectCompletion?.(error));
     }
   });
+
+  async function recordCaptureLoss(kind: "overflow" | "writeFailure" | "watcherError"): Promise<void> {
+    try {
+      await markCaptureLoss(session, kind);
+    } catch (error) {
+      console.error(`Failed to record capture loss: ${(error as Error).message}`);
+    }
+  }
 
   stopPoll = setInterval(() => {
     void readStopRequest(session.repoRoot, config)
