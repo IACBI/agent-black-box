@@ -10,9 +10,9 @@ pnpm check
 pnpm release:check
 ```
 
-`pnpm check` runs typecheck, dead-code/dependency reachability analysis, build, and tests.
+`pnpm check` runs formatting checks, ESLint, TypeScript typechecking, both dead-code checks, a production build, and tests with coverage thresholds.
 
-`pnpm perf` validates the large-session NDJSON time and memory budgets. CI runs the functional suite on Node.js 22 and 24 across Linux, Windows, and macOS.
+`pnpm perf` validates budgets for NDJSON ingestion, report generation, legacy catalog fallback, and large-repository analysis. CI runs the functional suite on Node.js 22 and 24 across Linux, Windows, and macOS.
 
 ## Development Workflow
 

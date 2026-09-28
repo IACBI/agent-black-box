@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Added staged analysis with fixed-commit baselines, count-aware secret suppression, and Git rename-source provenance in text, JSON, and SARIF.
+- Added `new-secrets` and `complete-review` CI policies, including explicit scan-coverage diagnostics.
+- Added filtered session history, interactive browsing, retention previews, and verified copy-only archives with optional configuration defaults.
+- Preserved full JSON reports with verified replay above 32 MiB and an explicit 256 MiB finalization limit that retains raw logs.
+- Added rollback end-state checks, command-finalization coordination, and persistent watcher capture-loss warnings.
+- Fixed adversarial JWT scanning cost, Unicode entropy calculation, header redaction, literal rollback path handling, and Windows batch argument quoting.
+- Consolidated audit documentation and updated usage, architecture, and contributor guidance.
+
 - Raised the supported runtime baseline to Node.js 22 and added a Node.js 22/24 Linux, Windows, and macOS CI matrix.
 - Added atomic state/report writes, physical repository containment for command working directories, and no-follow file inspection.
 - Expanded command metadata redaction for nested assignments, headers, URL credentials, and sensitive query parameters.

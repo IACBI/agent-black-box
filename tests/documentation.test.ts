@@ -101,7 +101,7 @@ describe("multilingual README", () => {
     expect(packageJson.scripts).toMatchObject({ deadcode: expect.any(String), perf: expect.any(String) });
     expect(usage).toContain("Node.js 22 or newer");
     expect(contributing).toContain("pnpm perf");
-    expect(security).toContain("security_best_practices_report.md");
+    expect(security).toContain("docs/AUDIT.md");
     expect(workflow).toContain("os: [ubuntu-latest, windows-latest, macos-latest]");
     expect(workflow).toContain("node: [22, 24]");
   });

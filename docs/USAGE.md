@@ -7,7 +7,7 @@ Full localized README documentation is available in the language section: [Langu
 ## Requirements
 
 - Node.js 22 or newer. Node.js 20 reached end of life and is no longer supported.
-- pnpm.
+- pnpm 10.30.3, as pinned in `package.json`.
 - A Git repository.
 
 Agent Black Box relies on Git status and diffs, so `abb start`, `abb stop`, and report commands must run inside a Git repository.
@@ -30,6 +30,8 @@ After building, use:
 ```sh
 node dist/cli.js <command>
 ```
+
+The examples below use `abb` as shorthand. For a source checkout without a globally installed executable, replace `abb` with `pnpm dev` or `node dist/cli.js`.
 
 ## Initialize
 
@@ -103,7 +105,7 @@ Only metadata is recorded:
 
 Terminal output is not captured.
 
-Commands are executed without a shell. Pass the executable and arguments directly after `--`.
+Pass the executable and arguments directly after `--`. Native executables run without a shell. On Windows, `.cmd` and `.bat` shims require a `cmd.exe` wrapper; arguments containing percent signs or line breaks are rejected because the command interpreter can expand or reinterpret them.
 
 `--cwd` must resolve physically inside the repository. Paths that escape through a symbolic link or junction are rejected.
 
@@ -205,7 +207,7 @@ The catalog lists complete, incomplete, and corrupt sessions. Only completed ses
 
 History filters are case-insensitive substring matches for session-relevant file paths, recorded redacted commands, and risk categories. Date filtering uses UTC. Content filters use a bounded search index for new sessions and fall back to the validated report for older sessions. A filtered result is marked `latest` only when it is also the newest completed session overall.
 
-`sessions browse` uses the same history filters in an interactive terminal. Enter a number to read a completed session summary, `n` or `p` to change pages, and `q` to quit. Incomplete and corrupt sessions remain visible but cannot be opened. Page size is limited to 1–50 to keep terminal output bounded.
+`sessions browse` supports the state, date, severity, file, command, and category filters in an interactive terminal. Enter a number to read a completed session summary, `n` or `p` to change pages, and `q` to quit. Incomplete and corrupt sessions remain visible but cannot be opened. Page size is limited to 1–50 to keep terminal output bounded.
 
 `sessions prune` previews completed sessions started before the given UTC date and keeps at least the newest completed session (or `--keep <count>`). Incomplete and corrupt directories are never selected. To delete the previewed sessions, run the same command with `--apply` in an interactive terminal and type the requested confirmation. The command rechecks the catalog, report validity, active state, and directory links before deletion. If deletion is interrupted, a hidden `.pruning-*` directory may remain under the session root; inspect it manually before removing it.
 

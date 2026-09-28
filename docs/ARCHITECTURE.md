@@ -9,12 +9,15 @@ Full localized README documentation is available in the language section: [Langu
 ```text
 src/
   cli.ts
+  analyze/
   commands/
   config/
+  doctor/
   export/
   git/
   reports/
   risks/
+  rollback/
   session/
   utils/
   watcher/
@@ -55,6 +58,7 @@ Final reports:
 - `session.json`
 - `session-replay.json` for reports larger than 32 MiB
 - `session-search.json` when the bounded search index fits in 4 MiB
+- `rollback-state.json` for interactive restore preflight
 - `timeline.md`
 - `summary.md`
 - `commands.md`
@@ -70,6 +74,8 @@ Catalog listing reads compact metadata in bounded batches. Sessions from older v
 History filters first use catalog metadata, then a bounded search index for file paths, redacted commands, and risk categories. Missing or invalid indices fall back to the validated report. Retention defaults to a preview; interactive apply rechecks eligible completed reports and rejects active state, linked entries, and changed catalog plans before moving each directory to a hidden quarantine name for deletion.
 
 Large reports keep the full `session.json` contract. A versioned replay sidecar stores a compact report body and content digests; structural commands reconstruct events and commands from the original NDJSON logs. Ready-made Markdown and JSON report files are streamed to stdout after verification. Legacy large reports can still be opened with a bounded direct parse.
+
+`sessions browse` provides interactive pagination over catalog filters. Staged analysis can evaluate the `new-secrets` or `complete-review` CI policy after baseline comparison. Optional retention settings only supply command defaults; they do not schedule background work. `sessions archive` verifies copies with streaming checksums and writes a completion marker, leaving source sessions intact.
 
 ## Safety Boundaries
 
