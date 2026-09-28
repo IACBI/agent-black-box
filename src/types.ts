@@ -150,6 +150,8 @@ export interface SessionReport {
     warnings: string[];
     discardedFileEventLines: number;
     discardedCommandEventLines: number;
+    droppedFileEvents?: number;
+    failedFileEventWrites?: number;
   };
 }
 

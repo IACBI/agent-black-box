@@ -1,4 +1,5 @@
-import { lstat, open } from "node:fs/promises";
+import { lstat, open, realpath, type FileHandle } from "node:fs/promises";
+import path from "node:path";
 import type { FileKind } from "../types.js";
 
 const DEFAULT_SAMPLE_BYTES = 64 * 1024;
@@ -13,38 +14,81 @@ export interface FileInspection {
 export async function inspectTextFile(
   absolutePath: string,
   maxTextBytes: number,
-  sampleBytes = DEFAULT_SAMPLE_BYTES
+  sampleBytes = DEFAULT_SAMPLE_BYTES,
+  trustedRoot?: string
 ): Promise<FileInspection> {
+  if (
+    !Number.isSafeInteger(maxTextBytes) ||
+    maxTextBytes < 0 ||
+    !Number.isSafeInteger(sampleBytes) ||
+    sampleBytes < 0
+  ) {
+    throw new Error("File inspection limits must be non-negative safe integers.");
+  }
   let stats;
   try {
     stats = await lstat(absolutePath);
-  } catch {
-    return { kind: "missing", reason: "File does not exist." };
+  } catch (error) {
+    if (isNotFound(error)) {
+      return { kind: "missing", reason: "File does not exist." };
+    }
+    throw error;
   }
 
   if (stats.isSymbolicLink() || !stats.isFile()) {
     return { kind: "not-file", sizeBytes: stats.size, reason: "Path is not a regular file." };
   }
 
-  if (stats.size > maxTextBytes) {
-    const sample = await readFilePrefix(absolutePath, Math.min(sampleBytes, stats.size));
+  if (trustedRoot) {
+    const [physicalRoot, physicalParent] = await Promise.all([
+      realpath(trustedRoot),
+      realpath(path.dirname(absolutePath)),
+    ]);
+    const relativeParent = path.relative(physicalRoot, physicalParent);
+    if (relativeParent === ".." || relativeParent.startsWith(`..${path.sep}`) || path.isAbsolute(relativeParent)) {
+      return { kind: "not-file", sizeBytes: stats.size, reason: "Path resolves outside the repository." };
+    }
+  }
+
+  const handle = await open(absolutePath, "r");
+  try {
+    const opened = await handle.stat();
+    if (
+      !opened.isFile() ||
+      opened.dev !== stats.dev ||
+      opened.ino !== stats.ino ||
+      opened.size !== stats.size ||
+      opened.mtimeMs !== stats.mtimeMs
+    ) {
+      return { kind: "not-file", sizeBytes: opened.size, reason: "Path changed during inspection." };
+    }
+
+    if (opened.size > maxTextBytes) {
+      const sample = await readFilePrefix(handle, Math.min(sampleBytes, opened.size));
+      return {
+        kind: isLikelyBinary(sample) ? "binary" : "large",
+        sizeBytes: opened.size,
+        reason: `File is larger than ${maxTextBytes} bytes.`,
+      };
+    }
+
+    const buffer = await readFilePrefix(handle, opened.size);
+    const completed = await handle.stat();
+    if (buffer.length !== opened.size || completed.size !== opened.size || completed.mtimeMs !== opened.mtimeMs) {
+      return { kind: "unknown", sizeBytes: completed.size, reason: "File changed during inspection." };
+    }
+    if (isLikelyBinary(buffer)) {
+      return { kind: "binary", sizeBytes: opened.size, reason: "Binary-like byte patterns detected." };
+    }
+
     return {
-      kind: isLikelyBinary(sample) ? "binary" : "large",
-      sizeBytes: stats.size,
-      reason: `File is larger than ${maxTextBytes} bytes.`,
+      kind: "text",
+      sizeBytes: opened.size,
+      text: buffer.toString("utf8"),
     };
+  } finally {
+    await handle.close();
   }
-
-  const buffer = await readFilePrefix(absolutePath, stats.size);
-  if (isLikelyBinary(buffer)) {
-    return { kind: "binary", sizeBytes: stats.size, reason: "Binary-like byte patterns detected." };
-  }
-
-  return {
-    kind: "text",
-    sizeBytes: stats.size,
-    text: buffer.toString("utf8"),
-  };
 }
 
 export function isLikelyBinary(buffer: Buffer): boolean {
@@ -72,15 +116,21 @@ export function isLikelyBinary(buffer: Buffer): boolean {
   return suspiciousRatio > 0.01 || replacementRatio > 0.01;
 }
 
-async function readFilePrefix(absolutePath: string, bytes: number): Promise<Buffer> {
-  const handle = await open(absolutePath, "r");
-  try {
-    const buffer = Buffer.alloc(bytes);
-    const result = await handle.read(buffer, 0, bytes, 0);
-    return buffer.subarray(0, result.bytesRead);
-  } finally {
-    await handle.close();
+async function readFilePrefix(handle: FileHandle, bytes: number): Promise<Buffer> {
+  const buffer = Buffer.alloc(bytes);
+  let offset = 0;
+  while (offset < bytes) {
+    const { bytesRead } = await handle.read(buffer, offset, bytes - offset, offset);
+    if (bytesRead === 0) {
+      break;
+    }
+    offset += bytesRead;
   }
+  return buffer.subarray(0, offset);
+}
+
+function isNotFound(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }
 
 function countReplacementCharacters(value: string): number {

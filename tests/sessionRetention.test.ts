@@ -1,0 +1,116 @@
+import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+import { DEFAULT_CONFIG } from "../src/config/defaults.js";
+import { buildSessionReport } from "../src/reports/markdown.js";
+import { writeReports } from "../src/reports/reportWriter.js";
+import { listSessionCatalog } from "../src/session/sessionCatalog.js";
+import {
+  applySessionRetention,
+  planSessionRetention,
+  renderSessionRetentionPlan,
+} from "../src/session/sessionRetention.js";
+import { getActiveSessionPath } from "../src/session/sessionManager.js";
+import { createTempDir, removeTempDir } from "./testUtils.js";
+
+describe("session retention", () => {
+  it("only selects older complete sessions and leaves preview read-only", async () => {
+    const repo = await createTempDir("abb-retention-");
+    try {
+      await makeSession(repo, "session-old", "2026-01-01T00:00:00.000Z");
+      await makeSession(repo, "session-new", "2026-01-03T00:00:00.000Z");
+      const incomplete = path.join(repo, ".agent-black-box", "sessions", "session-incomplete");
+      await mkdir(incomplete, { recursive: true });
+      await writeFile(
+        path.join(incomplete, "session-start.json"),
+        JSON.stringify({ id: "session-incomplete", startedAt: "2026-01-01T00:00:00.000Z" })
+      );
+      const corrupt = path.join(repo, ".agent-black-box", "sessions", "session-corrupt");
+      await mkdir(corrupt);
+      const interrupted = path.join(repo, ".agent-black-box", "sessions", ".pruning-session-interrupted");
+      await mkdir(interrupted);
+      await writeFile(path.join(interrupted, "preserve.txt"), "review before removing", "utf8");
+
+      const entries = await listSessionCatalog(repo, DEFAULT_CONFIG);
+      const plan = planSessionRetention(entries, "2026-01-04");
+      expect(plan.sessions.map((session) => session.id)).toEqual(["session-old"]);
+      expect(renderSessionRetentionPlan(plan)).toContain("1 session(s) eligible");
+      expect(
+        await readFile(path.join(repo, ".agent-black-box", "sessions", "session-old", "session.json"), "utf8")
+      ).toContain("session-old");
+      expect(entries.find((entry) => entry.id === "session-incomplete")?.state).toBe("incomplete");
+      expect(entries.find((entry) => entry.id === "session-corrupt")?.state).toBe("corrupt");
+
+      await applySessionRetention(repo, DEFAULT_CONFIG, plan);
+      expect((await listSessionCatalog(repo, DEFAULT_CONFIG)).map((entry) => entry.id)).toEqual([
+        "session-new",
+        "session-incomplete",
+        "session-corrupt",
+      ]);
+      expect(await readFile(path.join(interrupted, "preserve.txt"), "utf8")).toBe("review before removing");
+    } finally {
+      await removeTempDir(repo);
+    }
+  });
+
+  it("refuses changed history and active state before deletion", async () => {
+    const repo = await createTempDir("abb-retention-");
+    try {
+      await makeSession(repo, "session-old", "2026-01-01T00:00:00.000Z");
+      await makeSession(repo, "session-new", "2026-01-03T00:00:00.000Z");
+      const plan = planSessionRetention(await listSessionCatalog(repo, DEFAULT_CONFIG), "2026-01-04");
+      await writeFile(getActiveSessionPath(repo, DEFAULT_CONFIG), "{}", "utf8");
+      await expect(applySessionRetention(repo, DEFAULT_CONFIG, plan)).rejects.toThrow("active");
+      await rm(getActiveSessionPath(repo, DEFAULT_CONFIG));
+
+      await makeSession(repo, "session-middle", "2026-01-02T00:00:00.000Z");
+      await expect(applySessionRetention(repo, DEFAULT_CONFIG, plan)).rejects.toThrow("changed since the preview");
+      expect(
+        (await listSessionCatalog(repo, DEFAULT_CONFIG)).filter((entry) => entry.state === "complete")
+      ).toHaveLength(3);
+    } finally {
+      await removeTempDir(repo);
+    }
+  });
+
+  it("rejects invalid cutoffs and keep counts", () => {
+    expect(() => planSessionRetention([], "2026-02-30")).toThrow("valid date");
+    expect(() => planSessionRetention([], "2026-01-01", 0)).toThrow("positive integer");
+  });
+
+  it("refuses linked content and keeps external files", async () => {
+    const repo = await createTempDir("abb-retention-");
+    try {
+      await makeSession(repo, "session-old", "2026-01-01T00:00:00.000Z");
+      await makeSession(repo, "session-new", "2026-01-03T00:00:00.000Z");
+      const external = path.join(repo, "outside-session");
+      await mkdir(external);
+      await writeFile(path.join(external, "keep.txt"), "keep", "utf8");
+      await symlink(
+        external,
+        path.join(repo, ".agent-black-box", "sessions", "session-old", "linked"),
+        process.platform === "win32" ? "junction" : "dir"
+      );
+      const plan = planSessionRetention(await listSessionCatalog(repo, DEFAULT_CONFIG), "2026-01-04");
+      await expect(applySessionRetention(repo, DEFAULT_CONFIG, plan)).rejects.toThrow("linked or special file");
+      expect(await readFile(path.join(external, "keep.txt"), "utf8")).toBe("keep");
+    } finally {
+      await removeTempDir(repo);
+    }
+  });
+});
+
+async function makeSession(repoRoot: string, id: string, startedAt: string): Promise<void> {
+  const sessionDir = path.join(repoRoot, ".agent-black-box", "sessions", id);
+  const report = buildSessionReport(
+    { id, repoRoot, sessionDir, startedAt },
+    new Date(Date.parse(startedAt) + 60_000).toISOString(),
+    "test",
+    [],
+    [],
+    { repoRoot, branch: "main", statusText: "", diffSummaryText: "", changedFiles: [] },
+    [],
+    []
+  );
+  await writeReports(report);
+}

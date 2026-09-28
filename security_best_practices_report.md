@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-The Agent Black Box TypeScript CLI was reviewed for local data exposure, path traversal, subprocess handling, state integrity, resource exhaustion, dependency risk, and CI supply-chain controls. No known critical or high-severity finding remains after the changes in this audit. The runtime remains local-first and does not require network access.
+The current review and its limitations are recorded in [docs/AUDIT.md](docs/AUDIT.md). The findings below describe earlier hardening and must not be treated as a current guarantee that all security risks are resolved. The runtime remains local-first and does not require network access.
 
 ## Critical
 
@@ -28,11 +28,11 @@ Impact: A crash during a direct write could leave corrupted state or expose a pa
 
 ### SEC-003 — Incomplete command metadata redaction — Resolved
 
-Nested environment assignments, authorization-like headers, URL credentials, and sensitive query parameters are redacted in `src/commands/commandRecorder.ts:111`. Spawn failures no longer persist command-derived error text.
+Nested environment assignments, authorization-like headers (including hyphenated names), URL user information, sensitive query parameters, option-wrapped URLs, and JSON arguments with sensitive keys are redacted in `src/commands/commandRecorder.ts:111` and `:285-366`. Assignment-like labels and sensitive JSON metadata are covered at `src/commands/commandRecorder.ts:167`. The executed arguments are unchanged; only recorded metadata is masked. Regression tests are in `tests/commandRecorder.test.ts:22`, `:92`, and `:108`. Spawn failures do not persist command-derived error text. This remains heuristic for arbitrary free-form command syntax.
 
 ### SEC-004 — Unbounded session finalization resources — Resolved
 
-NDJSON input is streamed and bounded by line size, accepted record count, and warning count in `src/session/sessionManager.ts:31`. Git inspection and possible-secret scanning use deterministic bounded concurrency through `src/utils/concurrency.ts:1`.
+NDJSON input is streamed and bounded by line size, accepted record count, and warning count in `src/session/ndjson.ts`. Reports larger than 32 MiB use a verified replay sidecar; finalization explicitly refuses reports above 256 MiB while retaining raw logs (`src/reports/reportWriter.ts`). Git inspection and possible-secret scanning use deterministic bounded concurrency through `src/utils/concurrency.ts`.
 
 ### SEC-005 — Mutable GitHub Action references — Resolved
 
@@ -46,11 +46,11 @@ Repository-controlled `sessionDir` values must remain physically inside the repo
 
 ### SEC-007 — Dependency audit freshness — Resolved
 
-Fresh production and development dependency audits completed successfully after registry connectivity was restored. CI and release workflows continue to gate production dependency advisories with `pnpm audit --prod --audit-level high`.
+Fresh production and development dependency audits completed successfully after registry connectivity was restored. CI gates both production and development dependencies with `pnpm audit --audit-level high`; release validation separately checks production dependencies.
 
 ### SEC-008 — Unbounded JSON input — Resolved
 
-Configuration, active state, catalog metadata, and session report JSON are read with explicit byte limits before parsing. Oversized files fail closed with a diagnostic instead of being loaded wholesale into memory.
+Configuration, active state, catalog metadata, and inline session report JSON are read with explicit byte limits before parsing. Large reports use bounded replay metadata and log validation; the documented legacy fallback may parse up to 256 MiB for older reports without a sidecar. Oversized files fail with a diagnostic.
 
 ### SEC-009 — Release artifact provenance — Resolved
 

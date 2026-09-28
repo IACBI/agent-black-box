@@ -1,11 +1,13 @@
 import type { SessionCatalogEntry } from "../session/sessionCatalog.js";
 
-export function renderSessionCatalog(entries: SessionCatalogEntry[]): string {
+export function renderSessionCatalog(
+  entries: SessionCatalogEntry[],
+  latestCompleteId = entries.find((entry) => entry.state === "complete")?.id
+): string {
   if (entries.length === 0) {
     return "No Agent Black Box sessions were found.\n";
   }
 
-  const latestCompleteId = entries.find((entry) => entry.state === "complete")?.id;
   const lines = ["Agent Black Box Sessions", ""];
   for (const entry of entries) {
     const latest = entry.id === latestCompleteId ? ", latest" : "";
@@ -25,9 +27,9 @@ export function renderSessionCatalog(entries: SessionCatalogEntry[]): string {
 }
 
 export function toPublicSessionCatalog(
-  entries: SessionCatalogEntry[]
+  entries: SessionCatalogEntry[],
+  latestCompleteId = entries.find((entry) => entry.state === "complete")?.id
 ): Array<Omit<SessionCatalogEntry, "sessionDir"> & { latest: boolean }> {
-  const latestCompleteId = entries.find((entry) => entry.state === "complete")?.id;
   return entries.map(({ sessionDir: _sessionDir, ...entry }) => ({
     ...entry,
     latest: entry.id === latestCompleteId,

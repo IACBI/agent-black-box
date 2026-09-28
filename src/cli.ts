@@ -1,13 +1,22 @@
 #!/usr/bin/env node
-import { readFile, realpath } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { realpath } from "node:fs/promises";
 import path from "node:path";
+import { createInterface } from "node:readline/promises";
 import { Command } from "commander";
 import {
   analyzeChangedFiles,
   type AnalysisFinding,
+  type AnalysisCoverage,
   type AnalysisInputFile,
   type WatcherlessAnalysisResult,
 } from "./analyze/analyzer.js";
+import { compareAnalysisWithBaseline } from "./analyze/baseline.js";
+import {
+  collectBaselineAnalysisInputFiles,
+  collectStagedAnalysisInputFiles,
+  resolveBaselineCommit,
+} from "./analyze/staged.js";
 import { recordAndRunCommand } from "./commands/commandRecorder.js";
 import {
   createDefaultConfig,
@@ -23,7 +32,13 @@ import { collectGitSnapshot, requireRepositoryRoot, getRepositoryRoot } from "./
 import { generateSessionComparisonMarkdown } from "./reports/comparison.js";
 import { filterRiskFindings, generateRisksMarkdown, generateSummaryMarkdown } from "./reports/markdown.js";
 import { renderSessionCatalog, toPublicSessionCatalog } from "./reports/sessionCatalog.js";
-import { applyRollbackPlan, confirmRollback, createRollbackPlan, renderRollbackPlan } from "./rollback/rollback.js";
+import {
+  applyVerifiedRollbackPlan,
+  confirmRollback,
+  createRollbackPlan,
+  renderRollbackPlan,
+  verifyRollbackSafetyState,
+} from "./rollback/rollback.js";
 import {
   inspectSessionRecoveryState,
   isProcessRunning,
@@ -36,8 +51,12 @@ import {
   readCatalogSessionReport,
   resolveSession,
   resolveSessionEntry,
+  verifyCatalogSessionReportFile,
+  type SessionCatalogState,
 } from "./session/sessionCatalog.js";
 import { buildSessionComparison } from "./session/sessionComparison.js";
+import { applySessionRetention, planSessionRetention, renderSessionRetentionPlan } from "./session/sessionRetention.js";
+import { filterSessionCatalog } from "./session/sessionSearch.js";
 import { runWatcher } from "./watcher/watcher.js";
 import { pathExists } from "./utils/files.js";
 import { inspectTextFile } from "./utils/fileInspection.js";
@@ -191,17 +210,39 @@ program
 
 program
   .command("analyze")
-  .description("Analyze current working-tree changes without starting a watcher.")
+  .description("Analyze working-tree or staged changes without starting a watcher.")
   .option("--format <format>", "output format: text, json, or sarif", "text")
+  .option("--staged", "analyze staged Git blobs instead of working-tree contents")
+  .option("--baseline <ref>", "with --staged, report new content findings relative to a Git commit")
   .option("--fail-on <severity>", "exit with code 1 at or above low, medium, or high")
-  .action(async (options: { format: string; failOn?: string }) => {
+  .action(async (options: { format: string; staged?: boolean; baseline?: string; failOn?: string }) => {
+    if (options.baseline && !options.staged) {
+      throw new Error("--baseline requires --staged.");
+    }
     const repoRoot = await requireRepositoryRoot(process.cwd());
     const config = await loadRuntimeConfig(repoRoot);
     const format = parseAnalyzeFormat(options.format);
     const failOn = parseRiskSeverity(options.failOn);
-    const snapshot = await collectGitSnapshot(repoRoot, config.exclude);
-    const files = await collectAnalysisInputFiles(repoRoot, snapshot.changedFiles, config.maxFileSizeKb * 1024);
-    const result = analyzeChangedFiles(files);
+    const files = options.staged
+      ? await collectStagedAnalysisInputFiles(repoRoot, config)
+      : await collectAnalysisInputFiles(
+          repoRoot,
+          (await collectGitSnapshot(repoRoot, config.exclude)).changedFiles,
+          config.maxFileSizeKb * 1024
+        );
+    let result: WatcherlessAnalysisResult = {
+      ...analyzeChangedFiles(files),
+      coverage: summarizeAnalysisCoverage(files, options.staged ? "index" : "worktree"),
+    };
+    if (options.baseline) {
+      const commit = await resolveBaselineCommit(repoRoot, options.baseline);
+      const secretPaths = new Set(
+        result.findings.filter((finding) => finding.kind === "possible-secret").map((finding) => finding.path)
+      );
+      const comparedFiles = files.filter((file) => secretPaths.has(file.path));
+      const baselineFiles = await collectBaselineAnalysisInputFiles(repoRoot, comparedFiles, config, commit);
+      result = compareAnalysisWithBaseline(comparedFiles, baselineFiles, result, commit);
+    }
 
     console.log(renderAnalysis(result, format));
     if (failOn && meetsSeverityThreshold(result.summary.maxSeverity, failOn)) {
@@ -220,7 +261,7 @@ program
   .allowExcessArguments(true)
   .argument("<command...>", "command and arguments to run")
   .action(async (commandParts: string[], options: { cwd?: string; label?: string; group?: string; phase?: string }) => {
-    const exitCode = await recordAndRunCommand(commandParts, process.cwd(), options);
+    const exitCode = await recordAndRunCommand(commandParts, process.cwd(), { ...options, ...getConfigLoadOptions() });
     process.exitCode = exitCode;
   });
 
@@ -316,6 +357,9 @@ program
     }
     const report = await readCatalogSessionReport(selected);
     const plan = createRollbackPlan(report, options.file ?? []);
+    if (plan.restorableFiles.length > 0) {
+      await verifyRollbackSafetyState(repoRoot, selected.sessionDir, report, plan, config);
+    }
     console.log(renderRollbackPlan(plan));
 
     if (plan.restorableFiles.length === 0) {
@@ -327,7 +371,7 @@ program
       return;
     }
 
-    await applyRollbackPlan(repoRoot, plan);
+    await applyVerifiedRollbackPlan(repoRoot, selected.sessionDir, report, plan, config);
     console.log("Eligible files restored. Review `git status --short` before continuing.");
   });
 
@@ -375,13 +419,76 @@ sessionsCommand
   .command("list")
   .description("List complete, incomplete, and corrupt sessions.")
   .option("--json", "print structured JSON")
-  .action(async (options: { json?: boolean }) => {
+  .option("--state <state>", "only include complete, incomplete, or corrupt sessions")
+  .option("--since <date>", "only include sessions started on or after YYYY-MM-DD (UTC)")
+  .option("--min-severity <severity>", "only include sessions at or above low, medium, or high risk")
+  .option("--file <text>", "find session-relevant paths containing text")
+  .option("--command <text>", "find recorded redacted commands containing text")
+  .option("--category <text>", "find risk categories containing text")
+  .option("--limit <count>", "show at most this many matching sessions")
+  .action(
+    async (options: {
+      json?: boolean;
+      state?: string;
+      since?: string;
+      minSeverity?: string;
+      file?: string;
+      command?: string;
+      category?: string;
+      limit?: string;
+    }) => {
+      const repoRoot = await requireRepositoryRoot(process.cwd());
+      const config = await loadRuntimeConfig(repoRoot);
+      const entries = await listSessionCatalog(repoRoot, config);
+      const filtered = await filterSessionCatalog(entries, {
+        state: parseSessionState(options.state),
+        since: options.since,
+        minSeverity: parseRiskSeverity(options.minSeverity),
+        file: options.file,
+        command: options.command,
+        category: options.category,
+        limit: parseSessionListLimit(options.limit),
+      });
+      const latestCompleteId = entries.find((entry) => entry.state === "complete")?.id;
+      console.log(
+        options.json
+          ? JSON.stringify(toPublicSessionCatalog(filtered, latestCompleteId), null, 2)
+          : renderSessionCatalog(filtered, latestCompleteId)
+      );
+    }
+  );
+
+sessionsCommand
+  .command("prune")
+  .description("Preview deletion of older completed sessions; --apply requires interactive confirmation.")
+  .requiredOption("--before <date>", "only consider sessions started before YYYY-MM-DD (UTC)")
+  .option("--keep <count>", "keep at least this many newest completed sessions", "1")
+  .option("--apply", "delete eligible sessions after typed confirmation")
+  .action(async (options: { before: string; keep: string; apply?: boolean }) => {
     const repoRoot = await requireRepositoryRoot(process.cwd());
     const config = await loadRuntimeConfig(repoRoot);
-    const entries = await listSessionCatalog(repoRoot, config);
-    console.log(
-      options.json ? JSON.stringify(toPublicSessionCatalog(entries), null, 2) : renderSessionCatalog(entries)
-    );
+    const keep = parseSessionListLimit(options.keep, "--keep");
+    const plan = planSessionRetention(await listSessionCatalog(repoRoot, config), options.before, keep);
+    console.log(renderSessionRetentionPlan(plan));
+    if (!options.apply || plan.sessions.length === 0) {
+      return;
+    }
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+      throw new Error("Session deletion requires an interactive terminal.");
+    }
+    const confirmation = `delete ${plan.sessions.length} sessions`;
+    const prompt = createInterface({ input: process.stdin, output: process.stdout });
+    try {
+      const answer = await prompt.question(`Type "${confirmation}" to delete these sessions: `);
+      if (answer !== confirmation) {
+        console.log("Session deletion cancelled.");
+        return;
+      }
+    } finally {
+      prompt.close();
+    }
+    await applySessionRetention(repoRoot, config, plan);
+    console.log(`${plan.sessions.length} completed session(s) deleted.`);
   });
 
 sessionsCommand
@@ -415,13 +522,19 @@ async function printSessionReportFile(fileName: string, selector?: string): Prom
   const repoRoot = await requireRepositoryRoot(process.cwd());
   const config = await loadRuntimeConfig(repoRoot);
   const selected = await resolveSession(repoRoot, config, selector);
-  await readCatalogSessionReport(selected);
+  await verifyCatalogSessionReportFile(selected);
   const reportPath = path.join(selected.sessionDir, fileName);
   if (!(await pathExists(reportPath))) {
     throw new Error(`Session ${selected.id} does not contain ${fileName}.`);
   }
 
-  console.log(await readFile(reportPath, "utf8"));
+  await new Promise<void>((resolve, reject) => {
+    const source = createReadStream(reportPath);
+    source.once("error", reject);
+    source.once("end", resolve);
+    source.pipe(process.stdout, { end: false });
+  });
+  process.stdout.write("\n");
 }
 
 async function readSelectedSessionReport(repoRoot: string, selector?: string): Promise<SessionReport> {
@@ -495,6 +608,23 @@ function hasRiskOptions(options: { minSeverity?: string; category?: string; json
   return Boolean(options.minSeverity || options.category || options.json);
 }
 
+function parseSessionState(value: string | undefined): SessionCatalogState | undefined {
+  if (value === undefined || value === "complete" || value === "incomplete" || value === "corrupt") {
+    return value;
+  }
+  throw new Error("--state must be one of: complete, incomplete, corrupt.");
+}
+
+function parseSessionListLimit(value: string | undefined, optionName = "--limit"): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(Number(value))) {
+    throw new Error(`${optionName} must be a positive integer.`);
+  }
+  return Number(value);
+}
+
 type AnalyzeFormat = "text" | "json" | "sarif";
 
 function parseAnalyzeFormat(value: string): AnalyzeFormat {
@@ -520,13 +650,32 @@ async function collectAnalysisInputFiles(
       return file;
     }
 
-    const inspection = await inspectTextFile(absolutePath, safeMaxFileSizeBytes, safeMaxFileSizeBytes);
+    const inspection = await inspectTextFile(absolutePath, safeMaxFileSizeBytes, safeMaxFileSizeBytes, repoRoot);
     return {
       ...file,
       kind: inspection.kind,
+      ...(inspection.reason === undefined ? {} : { analysisSkipReason: inspection.reason }),
       ...(inspection.text === undefined ? {} : { content: inspection.text }),
     };
   });
+}
+
+function summarizeAnalysisCoverage(files: AnalysisInputFile[], source: AnalysisCoverage["source"]): AnalysisCoverage {
+  let scannedTextFiles = 0;
+  const skipped: AnalysisCoverage["skipped"] = [];
+  for (const file of files) {
+    if (file.status === "deleted") {
+      skipped.push({ path: file.path, reason: "Deleted files have no current content to scan." });
+    } else if (file.kind === "text" && file.content !== undefined) {
+      scannedTextFiles += 1;
+    } else {
+      skipped.push({
+        path: file.path,
+        reason: file.analysisSkipReason ?? "Text content was unavailable for this changed path.",
+      });
+    }
+  }
+  return { source, scannedTextFiles, skipped };
 }
 
 function renderAnalysis(result: WatcherlessAnalysisResult, format: AnalyzeFormat): string {
@@ -540,6 +689,25 @@ function renderAnalysis(result: WatcherlessAnalysisResult, format: AnalyzeFormat
   const lines = ["Agent Black Box Analysis", "", `Findings: ${result.summary.findingCount}`];
   lines.push(`Maximum severity: ${result.summary.maxSeverity}`);
   lines.push(`Score: ${result.summary.score}`);
+  if (result.coverage) {
+    lines.push(`Content scanned: ${result.coverage.scannedTextFiles} ${result.coverage.source} file(s).`);
+    lines.push(`Content skipped: ${result.coverage.skipped.length} file(s).`);
+    if (result.coverage.skipped.length > 0) {
+      lines.push(...result.coverage.skipped.slice(0, 20).map((file) => `- ${file.path}: ${file.reason}`));
+      if (result.coverage.skipped.length > 20) {
+        lines.push(`- ${result.coverage.skipped.length - 20} additional skipped file(s) omitted from text output.`);
+      }
+    }
+  }
+  if (result.baselineComparison) {
+    const comparison = result.baselineComparison;
+    lines.push(`Baseline commit: ${comparison.commit}`);
+    lines.push(`Existing secret findings suppressed: ${comparison.suppressedExistingSecrets}.`);
+    lines.push(`Baseline text scanned: ${comparison.scannedTextFiles} file(s).`);
+    lines.push(`Absent at baseline: ${comparison.absentFiles} file(s).`);
+    lines.push(`Baseline content skipped: ${comparison.skipped.length} file(s).`);
+    lines.push(...comparison.skipped.slice(0, 20).map((file) => `- ${file.path}: ${file.reason}`));
+  }
   if (result.findings.length > 0) {
     lines.push("");
     lines.push(...result.findings.map(renderAnalysisFinding));
@@ -558,6 +726,14 @@ function toSarif(result: WatcherlessAnalysisResult): Record<string, unknown> {
     $schema: "https://json.schemastore.org/sarif-2.1.0.json",
     runs: [
       {
+        ...(result.coverage || result.baselineComparison
+          ? {
+              properties: {
+                ...(result.coverage ? { analysisCoverage: result.coverage } : {}),
+                ...(result.baselineComparison ? { analysisBaselineComparison: result.baselineComparison } : {}),
+              },
+            }
+          : {}),
         tool: {
           driver: {
             name: "Agent Black Box",

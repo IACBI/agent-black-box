@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -12,6 +12,28 @@ import { DEFAULT_CONFIG } from "../src/config/defaults.js";
 import { createTempDir, removeTempDir } from "./testUtils.js";
 
 describe("config", () => {
+  it("validates the default storage path even without a config file", async () => {
+    const dir = await createTempDir();
+    const outside = await createTempDir();
+    try {
+      await symlink(outside, path.join(dir, ".agent-black-box"), process.platform === "win32" ? "junction" : "dir");
+      await expect(loadConfig(dir)).rejects.toThrow("must stay inside the repository");
+    } finally {
+      await removeTempDir(dir);
+      await removeTempDir(outside);
+    }
+  });
+
+  it("rejects storage at the repository root because state files would escape to its parent", async () => {
+    const dir = await createTempDir();
+    try {
+      await writeFile(getConfigPath(dir), JSON.stringify({ ...DEFAULT_CONFIG, sessionDir: "." }));
+      await expect(loadConfig(dir)).rejects.toThrow("must stay inside the repository");
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
   it("loads defaults when no config file exists", async () => {
     const dir = await createTempDir();
     try {

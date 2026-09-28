@@ -37,6 +37,7 @@ src/
 13. The session catalog resolves `latest`, exact IDs, and unique ID prefixes without converting user input directly into filesystem paths.
 14. `abb export` can bundle a selected session into Markdown or JSON.
 15. `abb analyze` performs bounded, watcherless analysis of current included working-tree changes and can emit text, JSON, or SARIF findings.
+16. `abb analyze --staged --baseline <ref>` compares staged blobs with a fixed commit, following Git-identified renames where safe and suppressing unchanged secret-like lines without exposing their contents.
 
 ## Session Files
 
@@ -52,6 +53,8 @@ During a session:
 Final reports:
 
 - `session.json`
+- `session-replay.json` for reports larger than 32 MiB
+- `session-search.json` when the bounded search index fits in 4 MiB
 - `timeline.md`
 - `summary.md`
 - `commands.md`
@@ -64,6 +67,10 @@ Malformed NDJSON event or command lines are skipped during finalization. Discard
 
 Catalog listing reads compact metadata in bounded batches. Sessions from older versions fall back to validated `session.json` data. Incomplete and corrupt session directories remain visible in `abb sessions list` but cannot be selected for reporting or comparison.
 
+History filters first use catalog metadata, then a bounded search index for file paths, redacted commands, and risk categories. Missing or invalid indices fall back to the validated report. Retention defaults to a preview; interactive apply rechecks eligible completed reports and rejects active state, linked entries, and changed catalog plans before moving each directory to a hidden quarantine name for deletion.
+
+Large reports keep the full `session.json` contract. A versioned replay sidecar stores a compact report body and content digests; structural commands reconstruct events and commands from the original NDJSON logs. Ready-made Markdown and JSON report files are streamed to stdout after verification. Legacy large reports can still be opened with a bounded direct parse.
+
 ## Safety Boundaries
 
 - No external API is required at runtime.
@@ -75,7 +82,7 @@ Catalog listing reads compact metadata in bounded batches. Sessions from older v
 - Files already changed at session start are never eligible for interactive rollback apply.
 - Direct AI-agent private APIs are not used.
 - Config and session state are validated before use with bounded string, date, process, and record constraints.
-- Config, state, metadata, and session-report JSON reads have explicit size limits; oversized local files fail closed instead of being fully parsed into memory.
+- Config, state, metadata, and inline session-report JSON reads have explicit size limits. Large reports use a bounded replay sidecar and a 256 MiB total report policy; over-budget finalization fails explicitly while raw logs remain available.
 - Session output paths must remain physically inside the repository by default. A command-scoped override is required for trusted local external storage, while UNC and network paths remain blocked.
 - Repository file inspection does not follow symbolic links, and command working directories cannot escape through links.
 - JSON state and finalized reports use same-directory temporary files followed by atomic rename.

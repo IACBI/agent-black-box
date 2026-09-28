@@ -85,7 +85,7 @@ export async function collectGitSnapshot(repoRoot: string, excludePatterns: stri
     const inspectionPath = resolveRepoPath(repoRoot, normalizedPath);
     const inspectionResult =
       (status === "added" || status === "modified") && inspectionPath
-        ? await inspectTextFile(inspectionPath, MAX_ESTIMATED_UNTRACKED_FILE_BYTES)
+        ? await inspectTextFile(inspectionPath, MAX_ESTIMATED_UNTRACKED_FILE_BYTES, undefined, repoRoot)
         : undefined;
     const estimated =
       summary?.insertions === undefined && status === "added"
@@ -151,6 +151,20 @@ export async function collectGitChangesBetween(
     ...(pathspecs.length > 0 ? ["--", ...pathspecs] : []),
   ]);
 
+  return parseNameStatus(output).filter((file) => !isPathExcluded(file.path, excludePatterns));
+}
+
+export async function collectStagedChanges(repoRoot: string, excludePatterns: string[] = []): Promise<ChangedFile[]> {
+  const git = simpleGit({ baseDir: repoRoot, binary: "git" });
+  const pathspecs = buildDiffPathspecs(excludePatterns);
+  const output = await git.raw([
+    "diff",
+    "--cached",
+    "--name-status",
+    "-z",
+    "--find-renames",
+    ...(pathspecs.length > 0 ? ["--", ...pathspecs] : []),
+  ]);
   return parseNameStatus(output).filter((file) => !isPathExcluded(file.path, excludePatterns));
 }
 
@@ -296,9 +310,13 @@ function countLines(content: string): number {
     return 0;
   }
 
-  const normalized = content.replace(/\r\n/g, "\n");
-  const trailingNewlineAdjustment = normalized.endsWith("\n") ? 1 : 0;
-  return normalized.split("\n").length - trailingNewlineAdjustment;
+  let lines = content.endsWith("\n") ? 0 : 1;
+  for (let index = 0; index < content.length; index += 1) {
+    if (content.charCodeAt(index) === 10) {
+      lines += 1;
+    }
+  }
+  return lines;
 }
 
 function formatDiffSummary(unstagedStat: string, stagedStat: string, changedFiles: ChangedFile[]): string {

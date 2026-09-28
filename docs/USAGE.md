@@ -107,7 +107,11 @@ Sensitive-looking assignments and flags are redacted before writing reports:
 API_TOKEN=<redacted>
 --password <redacted>
 --client-secret=<redacted>
+--header=X-Api-Key:<redacted>
+--data=<redacted>
 ```
+
+Credential-bearing URL user information and sensitive URL query parameters are also redacted, including URLs passed as option values. JSON arguments with sensitive-looking keys are masked as a whole. Labels, groups, and phases receive the same best-effort treatment. Review reports before sharing them: arbitrary command syntax cannot be guaranteed secret-free.
 
 ## Stop A Session
 
@@ -135,9 +139,11 @@ Use `analyze` in CI or before a review when a recording session is unnecessary:
 abb analyze
 abb analyze --format json
 abb analyze --format sarif --fail-on high
+abb analyze --staged --format json
+abb analyze --staged --baseline HEAD --format json
 ```
 
-It inspects included working-tree changes with bounded local reads. Findings contain locations and fixed descriptions only; they never include matched secret values.
+By default, it inspects included working-tree changes with bounded local reads. `--staged` inspects the Git index blobs instead, so unstaged edits cannot change the pre-commit result. Add `--baseline <ref>` to compare staged content against a fixed Git commit: identical existing secret-like lines are suppressed up to their baseline occurrence count, while metadata risks remain visible. When Git identifies a rename between that commit and the index, the old path supplies the baseline if the new path did not exist there. Excluded source paths and renames Git cannot establish remain visible as new content findings. Text output lists skipped paths; JSON includes `coverage` and `baselineComparison`, and SARIF includes the corresponding run properties. Findings contain locations and fixed descriptions only; they never include matched secret values.
 
 ## Review Reports
 
@@ -173,15 +179,22 @@ Reports are stored under:
 ```sh
 abb sessions list
 abb sessions list --json
+abb sessions list --state complete --since 2026-01-01 --min-severity medium
+abb sessions list --file src/auth --command test --category security --limit 20
 abb sessions show <session-id>
 abb sessions show <session-id> --json
 abb sessions compare <from-session> <to-session>
 abb sessions compare <from-session> <to-session> --json
+abb sessions prune --before 2026-01-01
 ```
 
 The catalog lists complete, incomplete, and corrupt sessions. Only completed sessions can be shown, compared, exported, or selected by report commands. `latest` resolves to the newest completed session, so an active incomplete session does not hide the latest usable report.
 
-Interactive `abb rollback --apply` is restricted to the latest completed session. Historical rollback reports remain readable with `--session`, but they cannot be applied to the current worktree.
+History filters are case-insensitive substring matches for session-relevant file paths, recorded redacted commands, and risk categories. Date filtering uses UTC. Content filters use a bounded search index for new sessions and fall back to the validated report for older sessions. A filtered result is marked `latest` only when it is also the newest completed session overall.
+
+`sessions prune` previews completed sessions started before the given UTC date and keeps at least the newest completed session (or `--keep <count>`). Incomplete and corrupt directories are never selected. To delete the previewed sessions, run the same command with `--apply` in an interactive terminal and type the requested confirmation. The command rechecks the catalog, report validity, active state, and directory links before deletion. If deletion is interrupted, a hidden `.pruning-*` directory may remain under the session root; inspect it manually before removing it.
+
+Interactive `abb rollback --apply` is restricted to the latest completed session. Historical rollback reports remain readable with `--session`, but they cannot be applied to the current worktree. Apply also checks that HEAD, the Git index, eligible path status, and eligible file contents still match the session's private rollback snapshot. If the snapshot is missing or anything differs, apply stops without restoring files.
 
 ## Recommended Workflow
 

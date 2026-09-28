@@ -45,13 +45,17 @@ export async function loadConfig(repoRoot: string, options?: ConfigLoadOptions):
 export async function loadConfigWithMeta(repoRoot: string, options?: ConfigLoadOptions): Promise<ConfigLoadResult> {
   const configPath = getConfigPath(repoRoot);
   if (!(await configExists(repoRoot))) {
+    const config = cloneDefaultConfig();
+    const errors: string[] = [];
+    const warnings: string[] = [];
+    await validateSessionDirectory(repoRoot, config.sessionDir, options, errors, warnings);
     return {
-      config: cloneDefaultConfig(),
+      config,
       configPath,
       exists: false,
       migrated: false,
-      errors: [],
-      warnings: [],
+      errors,
+      warnings,
     };
   }
 
@@ -109,7 +113,8 @@ async function validateSessionDirectory(
   const existingAncestor = await findExistingAncestor(resolvedSessionDir);
   const canonicalAncestor = await realpath(existingAncestor);
   const staysInsideRepository =
-    isPathInside(resolvedRepoRoot, resolvedSessionDir) && isPathInside(resolvedRepoRoot, canonicalAncestor);
+    isPathInside(resolvedRepoRoot, path.dirname(resolvedSessionDir)) &&
+    isPathInside(resolvedRepoRoot, canonicalAncestor);
 
   if (staysInsideRepository) {
     return;

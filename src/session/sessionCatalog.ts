@@ -1,4 +1,4 @@
-import { readdir } from "node:fs/promises";
+import { lstat, readdir } from "node:fs/promises";
 import path from "node:path";
 import type {
   AgentBlackBoxConfig,
@@ -13,6 +13,16 @@ import type {
 import { summarizeRisks } from "../risks/riskDetector.js";
 import { pathExists, readJsonFileLimited } from "../utils/files.js";
 import { buildChangeEvidence, selectSessionRelevantChanges } from "./changeEvidence.js";
+import { isCapturedCommandEvent, isCapturedFileEvent, readNdjsonRecords } from "./ndjson.js";
+import {
+  digestRecords,
+  digestRegularFile,
+  INLINE_REPORT_BYTES,
+  isReportReplay,
+  MAX_REPORT_BYTES,
+  REPORT_REPLAY_FILE,
+  type ReportReplay,
+} from "./reportStorage.js";
 
 export const SESSION_METADATA_FILE = "session-metadata.json";
 const SESSION_REPORT_FILE = "session.json";
@@ -20,7 +30,6 @@ const SESSION_START_FILE = "session-start.json";
 const SESSION_DIRECTORY_PATTERN = /^session-[A-Za-z0-9._-]+$/;
 const CATALOG_BATCH_SIZE = 32;
 const MAX_SESSION_METADATA_BYTES = 1024 * 1024;
-const MAX_SESSION_REPORT_BYTES = 32 * 1024 * 1024;
 
 export type SessionCatalogState = "complete" | "incomplete" | "corrupt";
 
@@ -135,12 +144,30 @@ export async function readCatalogSessionReport(entry: SessionCatalogEntry): Prom
     throw new Error(`Session ${entry.id} is not complete.`);
   }
 
-  const result = await readJsonUnknown(path.join(entry.sessionDir, SESSION_REPORT_FILE));
+  const result = await readStoredReportUnknown(entry.sessionDir, entry.id);
   const report = parseSessionReport(result.value);
   if (!report || report.id !== entry.id) {
-    throw new Error(`Session ${entry.id} contains an invalid session.json report.`);
+    throw new Error(
+      `Session ${entry.id} contains an invalid session.json report${result.error ? `: ${result.error}` : "."}`
+    );
   }
   return report;
+}
+
+export async function verifyCatalogSessionReportFile(entry: SessionCatalogEntry): Promise<void> {
+  if (entry.state !== "complete") {
+    throw new Error(`Session ${entry.id} is not complete.`);
+  }
+  const reportPath = path.join(entry.sessionDir, SESSION_REPORT_FILE);
+  const reportFile = await lstat(reportPath);
+  if (!reportFile.isFile() || reportFile.size > MAX_REPORT_BYTES) {
+    throw new Error(`Session ${entry.id} contains an unsupported session.json report.`);
+  }
+  if (reportFile.size <= INLINE_REPORT_BYTES || !(await pathExists(path.join(entry.sessionDir, REPORT_REPLAY_FILE)))) {
+    await readCatalogSessionReport(entry);
+    return;
+  }
+  await readLargeReplayCore(entry.sessionDir, entry.id, reportFile.size);
 }
 
 async function inspectSessionDirectory(directory: { id: string; sessionDir: string }): Promise<SessionCatalogEntry> {
@@ -152,14 +179,31 @@ async function inspectSessionDirectory(directory: { id: string; sessionDir: stri
     const metadataResult = await readJsonUnknown(metadataPath);
     if (metadataResult.value && isSessionMetadata(metadataResult.value) && metadataResult.value.id === directory.id) {
       if (await pathExists(reportPath)) {
-        return metadataToCatalogEntry(directory.sessionDir, metadataResult.value);
+        let reportFile;
+        try {
+          reportFile = await lstat(reportPath);
+        } catch (error) {
+          return corruptEntry(directory, (error as Error).message);
+        }
+        if (!reportFile.isFile() || reportFile.size > MAX_REPORT_BYTES) {
+          return corruptEntry(directory, "session.json is not a supported regular report file");
+        }
+        const legacyLargeReport =
+          reportFile.size > INLINE_REPORT_BYTES &&
+          !(await pathExists(path.join(directory.sessionDir, REPORT_REPLAY_FILE)));
+        return {
+          ...metadataToCatalogEntry(directory.sessionDir, metadataResult.value),
+          ...(legacyLargeReport
+            ? { warning: "Large report has no replay metadata; opening it requires more memory." }
+            : {}),
+        };
       }
       return corruptEntry(directory, "session-metadata.json exists but session.json is missing");
     }
   }
 
   if (await pathExists(reportPath)) {
-    const reportResult = await readJsonUnknown(reportPath);
+    const reportResult = await readStoredReportUnknown(directory.sessionDir, directory.id);
     const report = parseSessionReport(reportResult.value);
     if (report && report.id === directory.id) {
       return {
@@ -221,14 +265,90 @@ function compareCatalogEntries(left: SessionCatalogEntry, right: SessionCatalogE
   return rightTime - leftTime || right.id.localeCompare(left.id);
 }
 
-async function readJsonUnknown(filePath: string): Promise<{ value?: unknown; error?: string }> {
+async function readJsonUnknown(filePath: string, limitBytes?: number): Promise<{ value?: unknown; error?: string }> {
   try {
     const maxBytes =
-      path.basename(filePath) === SESSION_REPORT_FILE ? MAX_SESSION_REPORT_BYTES : MAX_SESSION_METADATA_BYTES;
+      limitBytes ??
+      (path.basename(filePath) === SESSION_REPORT_FILE ? INLINE_REPORT_BYTES : MAX_SESSION_METADATA_BYTES);
     return { value: await readJsonFileLimited<unknown>(filePath, maxBytes) };
   } catch (error) {
     return { error: sanitizeSingleLine((error as Error).message) };
   }
+}
+
+async function readStoredReportUnknown(sessionDir: string, id: string): Promise<{ value?: unknown; error?: string }> {
+  const reportPath = path.join(sessionDir, SESSION_REPORT_FILE);
+  try {
+    const reportFile = await lstat(reportPath);
+    if (!reportFile.isFile()) {
+      throw new Error("session.json is not a regular file.");
+    }
+    if (reportFile.size <= INLINE_REPORT_BYTES) {
+      return readJsonUnknown(reportPath);
+    }
+    if (reportFile.size > MAX_REPORT_BYTES) {
+      throw new Error(`session.json exceeds the ${MAX_REPORT_BYTES / 1024 / 1024} MiB size limit.`);
+    }
+
+    const replayPath = path.join(sessionDir, REPORT_REPLAY_FILE);
+    if (!(await pathExists(replayPath))) {
+      return readJsonUnknown(reportPath, MAX_REPORT_BYTES);
+    }
+    const { replay, core } = await readLargeReplayCore(sessionDir, id, reportFile.size);
+    const eventPath = path.join(sessionDir, "events.ndjson");
+    const commandPath = path.join(sessionDir, "commands.ndjson");
+    const [events, commands] = await Promise.all([
+      readNdjsonRecords(eventPath, isCapturedFileEvent, "file event"),
+      readNdjsonRecords(commandPath, isCapturedCommandEvent, "command event"),
+    ]);
+    if (
+      events.records.length !== replay.eventCount ||
+      commands.records.length !== replay.commandCount ||
+      digestRecords(events.records) !== replay.eventsDigest ||
+      digestRecords(commands.records) !== replay.commandsDigest ||
+      events.discardedLines !== core.integrity.discardedFileEventLines ||
+      commands.discardedLines !== core.integrity.discardedCommandEventLines
+    ) {
+      throw new Error("Large report event logs no longer match the finalized report.");
+    }
+    return { value: { ...replay.report, events: events.records, commands: commands.records } };
+  } catch (error) {
+    return { error: sanitizeSingleLine((error as Error).message) };
+  }
+}
+
+async function readLargeReplayCore(
+  sessionDir: string,
+  id: string,
+  reportBytes: number
+): Promise<{ replay: ReportReplay; core: SessionReport }> {
+  const value = await readJsonFileLimited<unknown>(path.join(sessionDir, REPORT_REPLAY_FILE), INLINE_REPORT_BYTES);
+  if (!isReportReplay(value) || value.id !== id || value.reportBytes !== reportBytes) {
+    throw new Error("Large report replay metadata is missing or invalid.");
+  }
+  const core = parseSessionReport(value.report);
+  if (!core || core.id !== id || core.events.length > 0 || core.commands.length > 0) {
+    throw new Error("Large report replay metadata has an invalid report body.");
+  }
+
+  const storedReport = await digestRegularFile(path.join(sessionDir, SESSION_REPORT_FILE));
+  if (storedReport.bytes !== value.reportBytes || storedReport.digest !== value.reportDigest) {
+    throw new Error("session.json changed after finalization.");
+  }
+
+  const [eventLog, commandLog] = await Promise.all([
+    lstat(path.join(sessionDir, "events.ndjson")),
+    lstat(path.join(sessionDir, "commands.ndjson")),
+  ]);
+  if (
+    !eventLog.isFile() ||
+    !commandLog.isFile() ||
+    eventLog.size !== value.eventLogBytes ||
+    commandLog.size !== value.commandLogBytes
+  ) {
+    throw new Error("Large report event logs changed after finalization.");
+  }
+  return { replay: value, core };
 }
 
 function isSessionMetadata(value: unknown): value is SessionMetadata {
@@ -303,7 +423,13 @@ export function parseSessionReport(value: unknown): SessionReport | null {
   const riskSummary = isRiskSummary(value.riskSummary) ? value.riskSummary : summarizeRisks(risks, possibleSecrets);
   const integrity = isSessionIntegrity(value.integrity)
     ? value.integrity
-    : { warnings: [], discardedFileEventLines: 0, discardedCommandEventLines: 0 };
+    : {
+        warnings: [],
+        discardedFileEventLines: 0,
+        discardedCommandEventLines: 0,
+        droppedFileEvents: 0,
+        failedFileEventWrites: 0,
+      };
   const commandCapture = isCommandCapture(value.commandCapture)
     ? value.commandCapture
     : {
@@ -470,7 +596,9 @@ function isSessionIntegrity(value: unknown): value is SessionReport["integrity"]
     Array.isArray(value.warnings) &&
     value.warnings.every((warning) => typeof warning === "string") &&
     isNonNegativeInteger(value.discardedFileEventLines) &&
-    isNonNegativeInteger(value.discardedCommandEventLines)
+    isNonNegativeInteger(value.discardedCommandEventLines) &&
+    (value.droppedFileEvents === undefined || isNonNegativeInteger(value.droppedFileEvents)) &&
+    (value.failedFileEventWrites === undefined || isNonNegativeInteger(value.failedFileEventWrites))
   );
 }
 
