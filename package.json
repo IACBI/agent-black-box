@@ -68,7 +68,7 @@
     "@types/node": "^20.19.17",
     "@vitest/coverage-v8": "4.1.11",
     "eslint": "10.8.0",
-    "knip": "6.31.0",
+    "knip": "6.38.0",
     "prettier": "3.9.6",
     "tsx": "^4.23.7",
     "typescript": "^5.9.3",
