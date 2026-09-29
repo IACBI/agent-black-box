@@ -1,6 +1,8 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   isPathExcluded,
+  isPathInside,
   normalizePath,
   pathMatchesPattern,
   resolveRepoPath,
@@ -19,6 +21,16 @@ describe("path utilities", () => {
     expect(isPathExcluded("src/index.ts", ["node_modules"])).toBe(false);
   });
 
+  it("matches single-segment patterns only on whole, case-insensitive segments", () => {
+    expect(isPathExcluded("Dist", ["dist"])).toBe(true);
+    expect(isPathExcluded("packages/app/DIST", ["dist"])).toBe(true);
+    expect(isPathExcluded("packages/dist/index.js", ["dist"])).toBe(true);
+    expect(isPathExcluded("packages/distribution/index.js", ["dist"])).toBe(false);
+    expect(isPathExcluded("packages/mydist", ["dist"])).toBe(false);
+    expect(isPathExcluded("src\\build\\out.js", ["build"])).toBe(true);
+    expect(isPathExcluded("src/index.ts", [""])).toBe(false);
+  });
+
   it("matches slash-separated risk patterns", () => {
     expect(pathMatchesPattern(".github/workflows/ci.yml", ".github/workflows")).toBe(true);
     expect(pathMatchesPattern("packages/app/.github/workflows/ci.yml", ".github/workflows")).toBe(true);
@@ -35,5 +47,14 @@ describe("path utilities", () => {
     expect(resolveRepoPath("/repo", "src/index.ts")).toBeDefined();
     expect(resolveRepoPath("/repo", "../outside.txt")).toBeNull();
     expect(resolveRepoPath("/repo", "/outside.txt")).toBeNull();
+  });
+
+  it("treats the parent and its descendants as inside, and siblings or ancestors as outside", () => {
+    const parent = path.resolve("repo");
+    expect(isPathInside(parent, parent)).toBe(true);
+    expect(isPathInside(parent, path.join(parent, "src", "index.ts"))).toBe(true);
+    expect(isPathInside(parent, path.join(parent, "..foo", "file"))).toBe(true);
+    expect(isPathInside(parent, path.resolve("repo-other", "file"))).toBe(false);
+    expect(isPathInside(parent, path.resolve(parent, ".."))).toBe(false);
   });
 });

@@ -96,7 +96,7 @@ export function detectSecretsInLine(relativePath: string, line: string, lineNumb
     }
   }
 
-  return dedupeSecretFindings(findings);
+  return findings;
 }
 
 function hasJwtLikeValue(line: string): boolean {
