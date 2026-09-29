@@ -66,6 +66,8 @@ jobs:
         run: pnpm format:check
       - name: Lint
         run: pnpm lint
+      - name: Typecheck source, tests, and scripts
+        run: pnpm typecheck
       - name: Check for dead code
         run: pnpm deadcode
       - name: Run coverage tests
@@ -87,8 +89,10 @@ jobs:
           cache: pnpm
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-      - name: Audit production dependencies
-        run: pnpm audit --prod --audit-level high
+      - name: Audit production and development dependencies
+        run: pnpm audit --audit-level high
+      - name: Build package
+        run: pnpm build
       - name: Verify package contents
         run: pnpm pack --dry-run
 

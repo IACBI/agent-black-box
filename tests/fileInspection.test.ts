@@ -54,4 +54,22 @@ describe("file inspection", () => {
       await removeTempDir(dir);
     }
   });
+
+  it("does not inspect files through an ancestor link outside the trusted repository", async () => {
+    const repo = await createTempDir();
+    const outside = await createTempDir();
+    try {
+      await writeFile(path.join(outside, "data.txt"), "external content", "utf8");
+      const linked = path.join(repo, "linked");
+      await symlink(outside, linked, process.platform === "win32" ? "junction" : "dir");
+
+      await expect(inspectTextFile(path.join(linked, "data.txt"), 1024, undefined, repo)).resolves.toMatchObject({
+        kind: "not-file",
+        reason: "Path resolves outside the repository.",
+      });
+    } finally {
+      await removeTempDir(repo);
+      await removeTempDir(outside);
+    }
+  });
 });

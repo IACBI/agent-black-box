@@ -14,6 +14,19 @@ It helps developers review what changed while using tools such as Codex, Claude 
 
 [English](#english) · [Türkçe](#turkce) · [Español](#espanol) · [Deutsch](#deutsch) · [Français](#francais) · [Português](#portugues) · [中文](#zhongwen) · [हिन्दी](#hindi) · [العربية](#arabic) · [Русский](#russkiy) · [日本語](#nihongo) · [Bahasa Indonesia](#bahasa-indonesia)
 
+## Documentation
+
+| Guide                                | Contents                                                             |
+| ------------------------------------ | -------------------------------------------------------------------- |
+| [Usage](docs/USAGE.md)               | Setup, recording, staged CI review, history, archiving, and recovery |
+| [Reports](docs/REPORTS.md)           | Report formats, evidence, and storage limits                         |
+| [Architecture](docs/ARCHITECTURE.md) | Modules, data flow, and safety boundaries                            |
+| [Contributing](CONTRIBUTING.md)      | Development workflow and quality checks                              |
+| [Security](SECURITY.md)              | Vulnerability reporting and security expectations                    |
+| [Audit](docs/AUDIT.md)               | Reviewed changes, validation, and remaining risks                    |
+| [Releasing](docs/RELEASING.md)       | Versioning and release verification                                  |
+| [Changelog](CHANGELOG.md)            | Changes by release                                                   |
+
 ## Why Use It
 
 AI coding agents can move quickly. Agent Black Box gives you a calm audit trail before you commit:
@@ -78,6 +91,8 @@ Reports are written to:
 | `abb status`                       | Show whether a session is active, stale, or absent.                                                          |
 | `abb analyze`                      | Analyze current working-tree changes without a watcher; supports JSON, SARIF, and severity exit thresholds.  |
 | `abb sessions list`                | List complete, incomplete, and corrupt sessions.                                                             |
+| `abb sessions browse`              | Browse filtered history interactively.                                                                       |
+| `abb sessions archive`             | Preview and copy older sessions to a local archive.                                                          |
 | `abb sessions show <id>`           | Show a selected session summary or normalized JSON report.                                                   |
 | `abb sessions compare <from> <to>` | Compare files, risks, commands, and HEAD revisions across two sessions.                                      |
 | `abb report`                       | Print the latest `session.json`.                                                                             |
@@ -273,6 +288,8 @@ Raporlar şu dizine yazılır:
 | `abb status`                       | Oturumun active, stale veya absent olup olmadığını gösterir.                                                         |
 | `abb analyze`                      | Watcher olmadan değişiklikleri analiz eder; JSON, SARIF ve önem eşiği çıkış kodu desteği sağlar.                     |
 | `abb sessions list`                | Tamamlanmış, eksik ve bozuk oturumları listeler.                                                                     |
+| `abb sessions browse`              | Filtrelenmiş geçmişi terminalde etkileşimli inceler.                                                                 |
+| `abb sessions archive`             | Eski oturumları yerel arşive kopyalamayı önizler.                                                                    |
 | `abb sessions show <id>`           | Seçilen oturumun özetini veya normalize JSON raporunu gösterir.                                                      |
 | `abb sessions compare <from> <to>` | İki oturumun dosya, risk, komut ve HEAD farklarını karşılaştırır.                                                    |
 | `abb report`                       | En son `session.json` çıktısını yazdırır.                                                                            |
@@ -465,6 +482,8 @@ Los reportes se escriben en:
 | `abb status`                       | Muestra si la sesión está active, stale o absent.                                                      |
 | `abb analyze`                      | Analiza cambios sin watcher; admite JSON, SARIF y umbrales de severidad para el código de salida.      |
 | `abb sessions list`                | Lista sesiones completas, incompletas y corruptas.                                                     |
+| `abb sessions browse`              | Explora el historial filtrado de forma interactiva.                                                    |
+| `abb sessions archive`             | Previsualiza y copia sesiones antiguas a un archivo local.                                             |
 | `abb sessions show <id>`           | Muestra el resumen o JSON normalizado de una sesión seleccionada.                                      |
 | `abb sessions compare <from> <to>` | Compara archivos, riesgos, comandos y revisiones HEAD entre dos sesiones.                              |
 | `abb report`                       | Imprime el último `session.json`.                                                                      |
@@ -657,6 +676,8 @@ Reports werden hier geschrieben:
 | `abb status`                       | Zeigt, ob eine Session active, stale oder absent ist.                                                                  |
 | `abb analyze`                      | Analysiert Änderungen ohne Watcher; unterstützt JSON, SARIF und Schweregrad-Schwellen für den Exit-Code.               |
 | `abb sessions list`                | Listet vollständige, unvollständige und beschädigte Sessions.                                                          |
+| `abb sessions browse`              | Durchsucht gefilterte Sitzungen interaktiv.                                                                            |
+| `abb sessions archive`             | Zeigt eine Vorschau und kopiert ältere Sitzungen in ein lokales Archiv.                                                |
 | `abb sessions show <id>`           | Zeigt Summary oder normalisiertes JSON einer gewählten Session.                                                        |
 | `abb sessions compare <from> <to>` | Vergleicht Dateien, Risiken, Befehle und HEAD-Stände zweier Sessions.                                                  |
 | `abb report`                       | Gibt das neueste `session.json` aus.                                                                                   |
@@ -849,6 +870,8 @@ Les rapports sont écrits dans :
 | `abb status`                       | Indique si une session est active, stale ou absent.                                                                  |
 | `abb analyze`                      | Analyse les changements sans watcher ; prend en charge JSON, SARIF et les seuils de sévérité du code de sortie.      |
 | `abb sessions list`                | Liste les sessions terminées, incomplètes et corrompues.                                                             |
+| `abb sessions browse`              | Parcourt l'historique filtré de façon interactive.                                                                   |
+| `abb sessions archive`             | Prévisualise et copie les anciennes sessions dans une archive locale.                                                |
 | `abb sessions show <id>`           | Affiche le résumé ou le JSON normalisé d'une session choisie.                                                        |
 | `abb sessions compare <from> <to>` | Compare fichiers, risques, commandes et révisions HEAD de deux sessions.                                             |
 | `abb report`                       | Affiche le dernier `session.json`.                                                                                   |
@@ -1041,6 +1064,8 @@ Os relatórios são gravados em:
 | `abb status`                       | Mostra se a sessão está active, stale ou absent.                                                       |
 | `abb analyze`                      | Analisa mudanças sem watcher; suporta JSON, SARIF e limites de severidade para o código de saída.      |
 | `abb sessions list`                | Lista sessões completas, incompletas e corrompidas.                                                    |
+| `abb sessions browse`              | Explora o histórico filtrado de forma interativa.                                                      |
+| `abb sessions archive`             | Pré-visualiza e copia sessões antigas para um arquivo local.                                           |
 | `abb sessions show <id>`           | Mostra o resumo ou JSON normalizado de uma sessão selecionada.                                         |
 | `abb sessions compare <from> <to>` | Compara arquivos, riscos, comandos e revisões HEAD entre duas sessões.                                 |
 | `abb report`                       | Imprime o último `session.json`.                                                                       |
@@ -1233,6 +1258,8 @@ pnpm dev rollback
 | `abb status`                       | 显示会话是 active、stale 还是 absent。                                      |
 | `abb analyze`                      | 无需 watcher 即可分析变更；支持 JSON、SARIF 和严重性阈值退出码。            |
 | `abb sessions list`                | 列出已完成、不完整和损坏的会话。                                            |
+| `abb sessions browse`              | 在终端中交互式浏览筛选后的历史。                                            |
+| `abb sessions archive`             | 预览并将较旧会话复制到本地归档。                                            |
 | `abb sessions show <id>`           | 显示所选会话的摘要或规范化 JSON 报告。                                      |
 | `abb sessions compare <from> <to>` | 比较两个会话的文件、风险、命令和 HEAD 修订。                                |
 | `abb report`                       | 打印最新的 `session.json`。                                                 |
@@ -1425,6 +1452,8 @@ Reports यहां लिखे जाते हैं:
 | `abb status`                       | session active, stale या absent है यह दिखाता है।                                                                            |
 | `abb analyze`                      | watcher के बिना changes analyze करता है; JSON, SARIF और severity-threshold exit code समर्थित हैं।                           |
 | `abb sessions list`                | complete, incomplete और corrupt sessions list करता है।                                                                      |
+| `abb sessions browse`              | फ़िल्टर किए गए इतिहास को इंटरैक्टिव रूप से दिखाता है।                                                                       |
+| `abb sessions archive`             | पुराने sessions को स्थानीय archive में कॉपी करने का पूर्वावलोकन देता है।                                                    |
 | `abb sessions show <id>`           | selected session का summary या normalized JSON report दिखाता है।                                                            |
 | `abb sessions compare <from> <to>` | दो sessions के files, risks, commands और HEAD revisions compare करता है।                                                    |
 | `abb report`                       | latest `session.json` print करता है।                                                                                        |
@@ -1617,6 +1646,8 @@ pnpm dev rollback
 | `abb status`                       | يعرض ما إذا كانت الجلسة active أو stale أو absent.                                   |
 | `abb analyze`                      | يحلل التغييرات دون watcher؛ يدعم JSON و SARIF وحدود الشدة لرمز الخروج.               |
 | `abb sessions list`                | يسرد الجلسات المكتملة وغير المكتملة والتالفة.                                        |
+| `abb sessions browse`              | يستعرض السجل المصفّى تفاعليًا.                                                       |
+| `abb sessions archive`             | يعاين وينسخ الجلسات القديمة إلى أرشيف محلي.                                          |
 | `abb sessions show <id>`           | يعرض ملخص الجلسة المحددة أو تقرير JSON المنظم.                                       |
 | `abb sessions compare <from> <to>` | يقارن الملفات والمخاطر والأوامر ومراجعات HEAD بين جلستين.                            |
 | `abb report`                       | يطبع أحدث `session.json`.                                                            |
@@ -1809,6 +1840,8 @@ pnpm dev rollback
 | `abb status`                       | Показывает, является ли session active, stale или absent.                                                   |
 | `abb analyze`                      | Анализирует изменения без watcher; поддерживает JSON, SARIF и пороги серьёзности для кода выхода.           |
 | `abb sessions list`                | Показывает завершенные, незавершенные и поврежденные sessions.                                              |
+| `abb sessions browse`              | Интерактивно просматривает отфильтрованную историю.                                                         |
+| `abb sessions archive`             | Предпросмотр и копирование старых сессий в локальный архив.                                                 |
 | `abb sessions show <id>`           | Показывает summary или нормализованный JSON выбранной session.                                              |
 | `abb sessions compare <from> <to>` | Сравнивает файлы, риски, команды и HEAD revisions двух sessions.                                            |
 | `abb report`                       | Печатает последний `session.json`.                                                                          |
@@ -2001,6 +2034,8 @@ Reports は以下に書き込まれます:
 | `abb status`                       | session が active、stale、absent のどれかを表示します。                                                               |
 | `abb analyze`                      | watcher なしで changes を分析し、JSON、SARIF、severity threshold による exit code をサポートします。                  |
 | `abb sessions list`                | 完了、未完了、破損した sessions を一覧表示します。                                                                    |
+| `abb sessions browse`              | 絞り込んだ履歴を対話的に閲覧します。                                                                                  |
+| `abb sessions archive`             | 古いセッションをローカルアーカイブにコピーする前に確認します。                                                        |
 | `abb sessions show <id>`           | 選択した session の summary または normalized JSON を表示します。                                                     |
 | `abb sessions compare <from> <to>` | 2つの sessions の files、risks、commands、HEAD revisions を比較します。                                               |
 | `abb report`                       | 最新の `session.json` を表示します。                                                                                  |
@@ -2193,6 +2228,8 @@ Laporan ditulis ke:
 | `abb status`                       | Menampilkan apakah session active, stale, atau absent.                                                             |
 | `abb analyze`                      | Menganalisis perubahan tanpa watcher; mendukung JSON, SARIF, dan ambang severity untuk exit code.                  |
 | `abb sessions list`                | Menampilkan session complete, incomplete, dan corrupt.                                                             |
+| `abb sessions browse`              | Menjelajahi riwayat terfilter secara interaktif.                                                                   |
+| `abb sessions archive`             | Meninjau lalu menyalin sesi lama ke arsip lokal.                                                                   |
 | `abb sessions show <id>`           | Menampilkan summary atau normalized JSON untuk session terpilih.                                                   |
 | `abb sessions compare <from> <to>` | Membandingkan files, risks, commands, dan HEAD revisions dua session.                                              |
 | `abb report`                       | Mencetak `session.json` terbaru.                                                                                   |

@@ -1,16 +1,19 @@
 import path from "node:path";
-import { mkdir } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_CONFIG } from "../src/config/defaults.js";
 import { buildSessionReport } from "../src/reports/markdown.js";
+import { writeReports } from "../src/reports/reportWriter.js";
 import {
   buildSessionMetadata,
   listSessionCatalog,
   readCatalogSessionReport,
   resolveSessionEntry,
   SESSION_METADATA_FILE,
+  verifyCatalogSessionReportFile,
 } from "../src/session/sessionCatalog.js";
 import { writeJsonFile } from "../src/utils/files.js";
+import { INLINE_REPORT_BYTES, REPORT_REPLAY_FILE } from "../src/session/reportStorage.js";
 import { createTempDir, removeTempDir } from "./testUtils.js";
 
 describe("session catalog", () => {
@@ -93,6 +96,59 @@ describe("session catalog", () => {
       await removeTempDir(repo);
     }
   });
+
+  it("reopens a report larger than the inline read limit without changing session.json", async () => {
+    const repo = await createTempDir("abb-large-catalog-");
+    try {
+      const id = "session-2026-01-06T00-00-00-000Z";
+      const sessionDir = path.join(repo, DEFAULT_CONFIG.sessionDir, id);
+      const report = makeReport(repo, sessionDir, id, "2026-01-06T00:00:00.000Z");
+      const event = {
+        timestamp: "2026-01-06T00:00:01.000Z",
+        eventType: "change" as const,
+        path: `src/${"x".repeat(30_000)}.ts`,
+      };
+      report.events = Array.from({ length: 1_200 }, () => event);
+      report.integrity.discardedFileEventLines = 1;
+      report.integrity.warnings.push("Discarded malformed file event on line 1.");
+      await mkdir(sessionDir, { recursive: true });
+      const eventPath = path.join(sessionDir, "events.ndjson");
+      const invalidEvent = JSON.stringify({ ...event, timestamp: "invalid" });
+      await writeFile(eventPath, `${invalidEvent}\n${report.events.map((item) => JSON.stringify(item)).join("\n")}\n`);
+      await writeFile(path.join(sessionDir, "commands.ndjson"), "");
+
+      await writeReports(report);
+      expect((await stat(path.join(sessionDir, "session.json"))).size).toBeGreaterThan(INLINE_REPORT_BYTES);
+      expect((await stat(path.join(sessionDir, REPORT_REPLAY_FILE))).size).toBeLessThan(INLINE_REPORT_BYTES);
+
+      const [entry] = await listSessionCatalog(repo, DEFAULT_CONFIG);
+      expect(entry.state).toBe("complete");
+      const reopened = await readCatalogSessionReport(entry);
+      expect(reopened.events).toHaveLength(1_200);
+      expect(reopened.events[0]).toEqual(event);
+      expect(reopened.integrity.discardedFileEventLines).toBe(1);
+      await expect(verifyCatalogSessionReportFile(entry)).resolves.toBeUndefined();
+
+      const replayPath = path.join(sessionDir, REPORT_REPLAY_FILE);
+      const replayContents = await readFile(replayPath);
+      await rm(replayPath);
+      const [legacy] = await listSessionCatalog(repo, DEFAULT_CONFIG);
+      expect(legacy.warning).toContain("requires more memory");
+      expect((await readCatalogSessionReport(legacy)).events).toHaveLength(1_200);
+      await writeFile(replayPath, replayContents);
+
+      await writeJsonFile(path.join(sessionDir, SESSION_METADATA_FILE), { metadataVersion: 999 });
+      const [fallback] = await listSessionCatalog(repo, DEFAULT_CONFIG);
+      expect(fallback.state).toBe("complete");
+      expect(fallback.warning).toContain("derived from session.json");
+
+      await appendFile(eventPath, "\n");
+      await expect(verifyCatalogSessionReportFile(fallback)).rejects.toThrow("event logs changed");
+      await expect(readCatalogSessionReport(fallback)).rejects.toThrow("event logs changed");
+    } finally {
+      await removeTempDir(repo);
+    }
+  }, 120_000);
 });
 
 function makeReport(repoRoot: string, sessionDir: string, id: string, startedAt: string) {

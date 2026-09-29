@@ -4,6 +4,9 @@ export default defineConfig({
   test: {
     environment: "node",
     globals: false,
+    // Concurrent Git subprocesses and filesystem fixtures contend heavily on Windows.
+    maxWorkers: process.platform === "win32" ? 1 : undefined,
+    testTimeout: process.platform === "win32" ? 15_000 : undefined,
     include: ["tests/**/*.test.ts"],
     coverage: {
       provider: "v8",

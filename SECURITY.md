@@ -34,4 +34,4 @@ Do not include real secrets in reports. Use redacted values or clearly fake exam
 - State and finalized report writes must not expose partially written files as complete sessions.
 - Production dependency audits and CodeQL analysis run in CI; runtime operation remains network-independent.
 
-The latest repository-level review is recorded in [security_best_practices_report.md](security_best_practices_report.md).
+The latest repository-level review is recorded in [the project audit](docs/AUDIT.md).

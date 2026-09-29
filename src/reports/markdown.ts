@@ -24,6 +24,7 @@ import {
   markdownTableCode,
 } from "../utils/markdown.js";
 import { shellQuotePath } from "../utils/paths.js";
+import { toLiteralGitPathspec } from "../rollback/rollback.js";
 
 const COMMAND_CAPTURE_NOTE =
   "Only commands run through `abb run -- <command>` are recorded. Shell history, terminal output, prompts, and agent reasoning are not captured.";
@@ -380,7 +381,7 @@ export function generateRollbackMarkdown(report: SessionReport, _config?: AgentB
   const evidenceByPath = indexFileChangeEvidence(report.changeEvidence);
   const suggestions = report.git.changedFiles
     .map((file) => {
-      const quotedPath = shellQuotePath(file.path);
+      const quotedPath = shellQuotePath(toLiteralGitPathspec(file.path));
       const evidence = evidenceByPath.get(file.path);
       if (file.status === "added") {
         return `### ${markdownInlineCode(file.path)}
@@ -606,7 +607,9 @@ function formatIntegrity(report: SessionReport): string {
   if (
     report.integrity.warnings.length === 0 &&
     report.integrity.discardedFileEventLines === 0 &&
-    report.integrity.discardedCommandEventLines === 0
+    report.integrity.discardedCommandEventLines === 0 &&
+    (report.integrity.droppedFileEvents ?? 0) === 0 &&
+    (report.integrity.failedFileEventWrites ?? 0) === 0
   ) {
     return "No malformed session event records were detected.";
   }
@@ -614,6 +617,8 @@ function formatIntegrity(report: SessionReport): string {
   return [
     `- Discarded file event lines: ${report.integrity.discardedFileEventLines}`,
     `- Discarded command event lines: ${report.integrity.discardedCommandEventLines}`,
+    `- Dropped watcher file events: ${report.integrity.droppedFileEvents ?? 0}`,
+    `- Failed file event writes: ${report.integrity.failedFileEventWrites ?? 0}`,
     ...report.integrity.warnings.slice(0, 8).map((warning) => `- ${escapeMarkdownText(warning)}`),
   ].join("\n");
 }

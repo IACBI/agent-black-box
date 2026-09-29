@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { appendFile, open, realpath, writeFile } from "node:fs/promises";
-import { createReadStream } from "node:fs";
+import { appendFile, open, readdir, realpath, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type {
   ActiveSession,
@@ -15,25 +14,30 @@ import type {
 import { collectGitChangesBetween, collectGitSnapshot } from "../git/git.js";
 import { detectRisks } from "../risks/riskDetector.js";
 import { detectPossibleSecrets } from "../risks/secretDetector.js";
+import { writeRollbackSafetyState } from "../rollback/rollback.js";
 import { buildSessionReport } from "../reports/markdown.js";
 import { writeReports } from "../reports/reportWriter.js";
 import { ensureDir, pathExists, readJsonFileLimited, removeFileIfExists, writeJsonFile } from "../utils/files.js";
 import { buildChangeEvidence, selectSessionRelevantChanges } from "./changeEvidence.js";
 import { listSessionCatalog, resolveSessionEntry } from "./sessionCatalog.js";
+import { isCapturedCommandEvent, isCapturedFileEvent, readNdjsonRecords, type NdjsonReadResult } from "./ndjson.js";
 
 const ACTIVE_SESSION_FILE = "active-session.json";
 const STOP_REQUEST_FILE = "stop-request.json";
 const SESSION_LOCK_FILE = "session.lock";
 const EVENTS_FILE = "events.ndjson";
 const COMMANDS_FILE = "commands.ndjson";
+const COMMAND_CLOSING_FILE = "commands-closing";
+const INFLIGHT_COMMAND_PATTERN = /^command-inflight-(\d+)-[0-9a-f-]+$/;
+const CAPTURE_LOSS_MARKERS = {
+  overflow: "capture-loss-overflow",
+  writeFailure: "capture-loss-write-failure",
+  watcherError: "capture-loss-watcher-error",
+} as const;
 const SESSION_START_FILE = "session-start.json";
 const GIT_BASELINE_FILE = "git-start.json";
-const MAX_NDJSON_LINE_BYTES = 1024 * 1024;
-const MAX_NDJSON_RECORDS = 1_000_000;
-const MAX_INTEGRITY_WARNINGS = 100;
 const MAX_PATH_LENGTH = 32_768;
 const MAX_COMMAND_LENGTH = 32_768;
-const MAX_METADATA_LENGTH = 80;
 const MAX_STATE_FILE_BYTES = 1024 * 1024;
 
 export interface SessionLock {
@@ -57,12 +61,6 @@ interface StateReadResult<T> {
   value: T | null;
   corrupted: boolean;
   error?: string;
-}
-
-interface NdjsonReadResult<T> {
-  records: T[];
-  discardedLines: number;
-  warnings: string[];
 }
 
 export function getSessionRoot(repoRoot: string, config: AgentBlackBoxConfig): string {
@@ -295,8 +293,38 @@ export async function appendFileEvent(session: ActiveSession, event: FileEvent):
   await appendFile(getEventsPath(session.sessionDir), `${JSON.stringify(event)}\n`, "utf8");
 }
 
+export async function markCaptureLoss(session: ActiveSession, kind: keyof typeof CAPTURE_LOSS_MARKERS): Promise<void> {
+  try {
+    const handle = await open(path.join(session.sessionDir, CAPTURE_LOSS_MARKERS[kind]), "wx");
+    await handle.close();
+  } catch (error) {
+    if (!isFileExistsError(error)) {
+      throw error;
+    }
+  }
+}
+
 export async function appendCommandEvent(session: ActiveSession, event: CommandEvent): Promise<void> {
   await appendFile(getCommandsPath(session.sessionDir), `${JSON.stringify(event)}\n`, "utf8");
+}
+
+export async function registerInFlightCommand(session: ActiveSession): Promise<string> {
+  const closingPath = path.join(session.sessionDir, COMMAND_CLOSING_FILE);
+  if (await fileExistsStrict(closingPath)) {
+    throw new Error("Session is closing; no new commands can be recorded.");
+  }
+
+  const markerPath = path.join(session.sessionDir, `command-inflight-${process.pid}-${randomUUID()}`);
+  const handle = await open(markerPath, "wx");
+  await handle.close();
+
+  // A finalizer may have started between the first check and marker creation.
+  if (await fileExistsStrict(closingPath)) {
+    await removeFileIfExists(markerPath);
+    throw new Error("Session is closing; no new commands can be recorded.");
+  }
+
+  return markerPath;
 }
 
 export async function readFileEvents(sessionDir: string): Promise<FileEvent[]> {
@@ -312,18 +340,27 @@ export async function readSessionBaseline(sessionDir: string): Promise<SessionBa
 }
 
 export async function readFileEventsWithDiagnostics(sessionDir: string): Promise<NdjsonReadResult<FileEvent>> {
-  return readNdjsonRecords(getEventsPath(sessionDir), isFileEvent, "file event");
+  return readNdjsonRecords(getEventsPath(sessionDir), isCapturedFileEvent, "file event");
 }
 
 export async function readCommandEventsWithDiagnostics(sessionDir: string): Promise<NdjsonReadResult<CommandEvent>> {
-  return readNdjsonRecords(getCommandsPath(sessionDir), isCommandEvent, "command event");
+  return readNdjsonRecords(getCommandsPath(sessionDir), isCapturedCommandEvent, "command event");
 }
 
 export async function finalizeSession(
   active: ActiveSession,
   config: AgentBlackBoxConfig,
-  finalizedBy: string
+  finalizedBy: string,
+  captureLoss: { droppedFileEvents: number; failedFileEventWrites: number } = {
+    droppedFileEvents: 0,
+    failedFileEventWrites: 0,
+  }
 ): Promise<SessionReport> {
+  await markCommandsClosing(active.sessionDir);
+  const commandWarnings = await waitForInFlightCommands(active.sessionDir);
+  const captureLossMarkers = await Promise.all(
+    Object.values(CAPTURE_LOSS_MARKERS).map((name) => fileExistsStrict(path.join(active.sessionDir, name)))
+  );
   const endedAt = new Date().toISOString();
   const fileEvents = await readFileEventsWithDiagnostics(active.sessionDir);
   const commandEvents = await readCommandEventsWithDiagnostics(active.sessionDir);
@@ -353,20 +390,84 @@ export async function finalizeSession(
     risks,
     possibleSecrets,
     {
-      warnings: [...fileEvents.warnings, ...commandEvents.warnings, ...baselineWarnings],
+      warnings: [
+        ...fileEvents.warnings,
+        ...commandEvents.warnings,
+        ...baselineWarnings,
+        ...commandWarnings,
+        ...(captureLoss.droppedFileEvents > 0
+          ? [`Dropped ${captureLoss.droppedFileEvents} file event(s) because the watcher queue was full.`]
+          : []),
+        ...(captureLoss.failedFileEventWrites > 0
+          ? [`Failed to persist ${captureLoss.failedFileEventWrites} file event(s).`]
+          : []),
+        ...(captureLossMarkers[0] && captureLoss.droppedFileEvents === 0
+          ? ["Watcher queue overflowed; the number of dropped file events is unknown after recovery."]
+          : []),
+        ...(captureLossMarkers[1] && captureLoss.failedFileEventWrites === 0
+          ? ["File event writes failed; the number of lost events is unknown after recovery."]
+          : []),
+        ...(captureLossMarkers[2] ? ["The watcher reported an error before finalization."] : []),
+      ],
       discardedFileEventLines: fileEvents.discardedLines,
       discardedCommandEventLines: commandEvents.discardedLines,
+      droppedFileEvents: captureLoss.droppedFileEvents,
+      failedFileEventWrites: captureLoss.failedFileEventWrites,
     },
     baselineState.value,
     committedChanges
   );
 
+  try {
+    await writeRollbackSafetyState(report);
+  } catch {
+    report.integrity.warnings.push("Rollback safety snapshot could not be saved; automatic restore is unavailable.");
+  }
   await writeReports(report);
   await removeFileIfExists(getActiveSessionPath(active.repoRoot, config));
   await removeFileIfExists(getStopRequestPath(active.repoRoot, config));
   await releaseSessionLock(active.repoRoot, config, active);
 
   return report;
+}
+
+async function markCommandsClosing(sessionDir: string): Promise<void> {
+  try {
+    const handle = await open(path.join(sessionDir, COMMAND_CLOSING_FILE), "wx");
+    await handle.close();
+  } catch (error) {
+    if (!isFileExistsError(error)) {
+      throw error;
+    }
+  }
+}
+
+async function fileExistsStrict(filePath: string): Promise<boolean> {
+  try {
+    await stat(filePath);
+    return true;
+  } catch (error) {
+    if (isRecord(error) && error.code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+}
+
+async function waitForInFlightCommands(sessionDir: string): Promise<string[]> {
+  while (true) {
+    const markerNames = (await readdir(sessionDir)).filter((name) => INFLIGHT_COMMAND_PATTERN.test(name));
+    const liveMarkers = markerNames.filter((name) => {
+      const pid = Number(INFLIGHT_COMMAND_PATTERN.exec(name)?.[1]);
+      return isProcessRunning(pid);
+    });
+    if (liveMarkers.length === 0) {
+      return markerNames.length > 0
+        ? [`${markerNames.length} wrapped command(s) ended before their completion could be recorded.`]
+        : [];
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
 }
 
 export async function getLatestSessionDir(repoRoot: string, config: AgentBlackBoxConfig): Promise<string | null> {
@@ -385,8 +486,9 @@ export function isProcessRunning(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    // Permission denial is not proof that the process has exited.
+    return isRecord(error) && error.code === "EPERM";
   }
 }
 
@@ -455,110 +557,6 @@ async function readStateFile<T>(filePath: string, guard: (value: unknown) => val
   }
 }
 
-async function readNdjsonRecords<T>(
-  filePath: string,
-  guard: (value: unknown) => value is T,
-  label: string
-): Promise<NdjsonReadResult<T>> {
-  if (!(await pathExists(filePath))) {
-    return { records: [], discardedLines: 0, warnings: [] };
-  }
-
-  const records: T[] = [];
-  const warnings: string[] = [];
-  let discardedLines = 0;
-  let lineNumber = 0;
-  let warningOverflowRecorded = false;
-  const input = createReadStream(filePath);
-  let lineParts: Buffer[] = [];
-  let lineLength = 0;
-  let discardingOversizedLine = false;
-
-  const addWarning = (warning: string): void => {
-    if (warnings.length < MAX_INTEGRITY_WARNINGS) {
-      warnings.push(warning);
-    } else if (!warningOverflowRecorded) {
-      warnings.push(`Additional malformed ${label} warnings were omitted.`);
-      warningOverflowRecorded = true;
-    }
-  };
-
-  const processLine = (line: Buffer, oversized: boolean): void => {
-    lineNumber += 1;
-    const normalized = line.length > 0 && line[line.length - 1] === 13 ? line.subarray(0, -1) : line;
-    if (oversized) {
-      discardedLines += 1;
-      addWarning(`Discarded oversized ${label} on line ${lineNumber}.`);
-      return;
-    }
-
-    if (normalized.length === 0) {
-      return;
-    }
-
-    if (records.length >= MAX_NDJSON_RECORDS) {
-      discardedLines += 1;
-      addWarning(`Discarded ${label} beyond the ${MAX_NDJSON_RECORDS} record limit.`);
-      return;
-    }
-
-    try {
-      const parsed = JSON.parse(normalized.toString("utf8")) as unknown;
-      if (guard(parsed)) {
-        records.push(parsed);
-        return;
-      }
-      discardedLines += 1;
-      addWarning(`Discarded malformed ${label} on line ${lineNumber}.`);
-    } catch {
-      discardedLines += 1;
-      addWarning(`Discarded unreadable ${label} on line ${lineNumber}.`);
-    }
-  };
-
-  for await (const chunk of input) {
-    let offset = 0;
-    while (offset < chunk.length) {
-      const newline = chunk.indexOf(10, offset);
-      const segmentEnd = newline === -1 ? chunk.length : newline;
-      const segment = chunk.subarray(offset, segmentEnd);
-
-      if (!discardingOversizedLine) {
-        if (lineLength + segment.length > MAX_NDJSON_LINE_BYTES) {
-          lineParts = [];
-          lineLength = 0;
-          discardingOversizedLine = true;
-        } else if (segment.length > 0) {
-          lineParts.push(segment);
-          lineLength += segment.length;
-        }
-      }
-
-      if (newline === -1) {
-        break;
-      }
-
-      processLine(
-        discardingOversizedLine ? Buffer.alloc(0) : Buffer.concat(lineParts, lineLength),
-        discardingOversizedLine
-      );
-      lineParts = [];
-      lineLength = 0;
-      discardingOversizedLine = false;
-      offset = newline + 1;
-    }
-  }
-
-  if (discardingOversizedLine || lineLength > 0) {
-    processLine(
-      discardingOversizedLine ? Buffer.alloc(0) : Buffer.concat(lineParts, lineLength),
-      discardingOversizedLine
-    );
-  }
-
-  return { records, discardedLines, warnings };
-}
-
 function isActiveSession(value: unknown): value is ActiveSession {
   if (!isRecord(value)) {
     return false;
@@ -594,37 +592,6 @@ function isStopRequest(value: unknown): value is StopRequest {
   }
 
   return isSessionId(value.sessionId) && isIsoDate(value.requestedAt);
-}
-
-function isFileEvent(value: unknown): value is FileEvent {
-  if (!isRecord(value)) {
-    return false;
-  }
-
-  return (
-    isIsoDate(value.timestamp) &&
-    isBoundedString(value.path, MAX_PATH_LENGTH) &&
-    (value.eventType === "add" || value.eventType === "change" || value.eventType === "unlink")
-  );
-}
-
-function isCommandEvent(value: unknown): value is CommandEvent {
-  if (!isRecord(value)) {
-    return false;
-  }
-
-  return (
-    isIsoDate(value.startedAt) &&
-    isIsoDate(value.endedAt) &&
-    isBoundedString(value.command, MAX_COMMAND_LENGTH) &&
-    isBoundedString(value.cwd, MAX_PATH_LENGTH) &&
-    isOptionalBoundedString(value.label, MAX_METADATA_LENGTH) &&
-    isOptionalBoundedString(value.group, MAX_METADATA_LENGTH) &&
-    isOptionalBoundedString(value.phase, MAX_METADATA_LENGTH) &&
-    (isInteger(value.exitCode) || value.exitCode === null) &&
-    isNonNegativeFiniteNumber(value.durationMs) &&
-    isOptionalBoundedString(value.error, MAX_COMMAND_LENGTH)
-  );
 }
 
 function isSessionBaseline(value: unknown): value is SessionBaseline {
@@ -725,10 +692,6 @@ function isInteger(value: unknown): value is number {
 
 function isPositiveInteger(value: unknown): value is number {
   return isInteger(value) && value > 0;
-}
-
-function isNonNegativeFiniteNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
 function isFileExistsError(error: unknown): boolean {

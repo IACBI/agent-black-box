@@ -2,6 +2,8 @@
 
 Agent Black Box generates Markdown reports for humans and `session.json` for tools.
 
+The full `session.json` format remains the same for large sessions. When it exceeds 32 MiB, a small versioned `session-replay.json` lets the CLI reopen it from the original event logs without parsing the entire JSON file. The CLI verifies the full report digest, log sizes, and reconstructed event contents. Reports larger than 256 MiB are refused during finalization with an explicit error; raw event logs remain in the session directory. Older large reports without replay metadata remain readable through a bounded, higher-memory fallback.
+
 Full localized README documentation is available in the language section: [Languages](../README.md#languages).
 
 ## `session.json`
@@ -19,11 +21,19 @@ Structured session output containing:
 - Risk findings.
 - Risk score, maximum severity, severity counts, and possible-secret count.
 - Possible secret findings with redacted values.
-- Integrity metadata for malformed event or command records skipped during recovery.
+- Integrity metadata for malformed event or command records skipped during recovery, watcher queue overflow, and failed event writes. After recovery, a capture-loss warning remains even if the exact event count is unavailable.
 
 ## `session-metadata.json`
 
 Compact, versioned history metadata containing session times, change and command counts, risk score, possible-secret count, branch, and start/end HEAD values. It is written after the full report set and allows `abb sessions list` to avoid loading large event arrays.
+
+## `session-search.json`
+
+This bounded, derived index contains session-relevant paths, risk categories, and recorded redacted command strings for history filtering. An index above 4 MiB is omitted; missing or invalid indices cause search to use the validated full report. It is written before final metadata and can be regenerated from `session.json`.
+
+## `rollback-state.json`
+
+A private safety snapshot records the end-state HEAD, index fingerprint, and content identity of files eligible for automatic restore. `abb rollback --apply` checks this snapshot before confirmation and again immediately before Git restore. A missing or mismatched snapshot disables automatic apply for that session; manual rollback guidance remains available.
 
 ## `summary.md`
 

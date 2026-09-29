@@ -1,13 +1,18 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { DEFAULT_CONFIG } from "../src/config/defaults.js";
+import { collectGitSnapshot } from "../src/git/git.js";
 import {
   applyRollbackPlan,
+  applyVerifiedRollbackPlan,
   createRollbackPlan,
   getConfirmationText,
   renderRollbackPlan,
   toLiteralGitPathspec,
+  verifyRollbackSafetyState,
+  writeRollbackSafetyState,
 } from "../src/rollback/rollback.js";
 import type { SessionReport } from "../src/types.js";
 import { createTempDir, initGitRepo, removeTempDir } from "./testUtils.js";
@@ -116,6 +121,15 @@ describe("rollback planner", () => {
     expect(toLiteralGitPathspec("src\\index.ts")).toBe(":(top,literal)src/index.ts");
   });
 
+  it("uses literal pathspecs in the copyable restore preview", () => {
+    const preview = renderRollbackPlan({
+      requestedFiles: [],
+      restorableFiles: [{ path: "src/[special].ts", status: "modified" }],
+      skippedFiles: [],
+    });
+    expect(preview).toContain("-- ':(top,literal)src/[special].ts'");
+  });
+
   it("applies a literal rollback pathspec to the intended tracked file", async () => {
     const repo = await createTempDir("abb-rollback-");
     try {
@@ -141,4 +155,73 @@ describe("rollback planner", () => {
       await removeTempDir(repo);
     }
   });
+
+  it("refuses automatic restore when file contents changed after the session", async () => {
+    const repo = await createTempDir("abb-rollback-safety-");
+    try {
+      initGitRepo(repo);
+      execFileSync("git", ["config", "user.email", "tests@example.invalid"], { cwd: repo });
+      execFileSync("git", ["config", "user.name", "Agent Black Box Tests"], { cwd: repo });
+      const filePath = path.join(repo, "src", "index.txt");
+      await mkdir(path.dirname(filePath), { recursive: true });
+      await writeFile(filePath, "original\n", "utf8");
+      execFileSync("git", ["add", "."], { cwd: repo });
+      execFileSync("git", ["commit", "-m", "initial"], { cwd: repo });
+      await writeFile(filePath, "changed!\n", "utf8");
+
+      const sessionDir = path.join(repo, ".agent-black-box", "sessions", "session-test");
+      await mkdir(sessionDir, { recursive: true });
+      const sessionReport: SessionReport = {
+        ...report,
+        repoRoot: repo,
+        sessionDir,
+        git: await collectGitSnapshot(repo, DEFAULT_CONFIG.exclude),
+        changeEvidence: {
+          ...report.changeEvidence,
+          files: [
+            {
+              path: "src/index.txt",
+              atStart: false,
+              observedDuringSession: true,
+              atEnd: true,
+              gitMetadataChanged: true,
+            },
+          ],
+        },
+      };
+      const plan = createRollbackPlan(sessionReport);
+      expect(plan.restorableFiles.map((file) => file.path)).toEqual(["src/index.txt"]);
+      await writeRollbackSafetyState(sessionReport);
+      await expect(
+        verifyRollbackSafetyState(repo, sessionDir, sessionReport, plan, DEFAULT_CONFIG)
+      ).resolves.toBeUndefined();
+
+      await applyVerifiedRollbackPlan(repo, sessionDir, sessionReport, plan, DEFAULT_CONFIG);
+      expect((await readFile(filePath, "utf8")).replace(/\r\n/g, "\n")).toBe("original\n");
+      await writeFile(filePath, "changed!\n", "utf8");
+
+      await writeFile(path.join(repo, "other.txt"), "new staged file\n", "utf8");
+      execFileSync("git", ["add", "other.txt"], { cwd: repo });
+      await expect(verifyRollbackSafetyState(repo, sessionDir, sessionReport, plan, DEFAULT_CONFIG)).rejects.toThrow(
+        "HEAD or staged changes differ"
+      );
+      execFileSync("git", ["reset", "-q", "HEAD", "--", "other.txt"], { cwd: repo });
+
+      await writeFile(filePath, "swapped!\n", "utf8");
+      await expect(verifyRollbackSafetyState(repo, sessionDir, sessionReport, plan, DEFAULT_CONFIG)).rejects.toThrow(
+        "changed since the session"
+      );
+      await expect(applyVerifiedRollbackPlan(repo, sessionDir, sessionReport, plan, DEFAULT_CONFIG)).rejects.toThrow(
+        "changed since the session"
+      );
+      expect(await readFile(filePath, "utf8")).toBe("swapped!\n");
+
+      await rm(path.join(sessionDir, "rollback-state.json"));
+      await expect(verifyRollbackSafetyState(repo, sessionDir, sessionReport, plan, DEFAULT_CONFIG)).rejects.toThrow(
+        "no readable rollback safety snapshot"
+      );
+    } finally {
+      await removeTempDir(repo);
+    }
+  }, 15_000);
 });

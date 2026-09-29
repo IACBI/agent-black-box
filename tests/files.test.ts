@@ -1,8 +1,54 @@
-import { readFile, readdir } from "node:fs/promises";
+import * as fs from "node:fs/promises";
+import { readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { writeJsonFile, writeTextFileAtomic } from "../src/utils/files.js";
+import { describe, expect, it, vi } from "vitest";
+import { readTextFileLimited, writeJsonFile, writeTextFileAtomic } from "../src/utils/files.js";
 import { createTempDir, removeTempDir } from "./testUtils.js";
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, open: vi.fn(actual.open) };
+});
+
+describe("bounded file reads", () => {
+  it("accepts exact UTF-8 byte limits and empty files", async () => {
+    const dir = await createTempDir();
+    try {
+      const filePath = path.join(dir, "text.txt");
+      await writeFile(filePath, "é");
+      await expect(readTextFileLimited(filePath, 2)).resolves.toBe("é");
+      await expect(readTextFileLimited(filePath, 1)).rejects.toThrow("size limit");
+      await writeFile(filePath, "");
+      await expect(readTextFileLimited(filePath, 0)).resolves.toBe("");
+      await expect(readTextFileLimited(filePath, -1)).rejects.toThrow("non-negative safe integer");
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
+  it("bounds actual reads even when the reported size is stale", async () => {
+    const dir = await createTempDir();
+    try {
+      const filePath = path.join(dir, "growing.txt");
+      await writeFile(filePath, "a".repeat(1024));
+      const handle = await fs.open(filePath, "r");
+      const details = await handle.stat();
+      details.size = 0;
+      vi.spyOn(handle, "stat").mockResolvedValue(details);
+      const read = vi.spyOn(handle, "read");
+      const close = vi.spyOn(handle, "close");
+      vi.mocked(fs.open).mockResolvedValueOnce(handle);
+
+      await expect(readTextFileLimited(filePath, 16)).rejects.toThrow("16 bytes size limit");
+      expect(read).toHaveBeenCalledTimes(1);
+      expect(read.mock.calls[0][0]).toHaveLength(17);
+      expect(close).toHaveBeenCalledOnce();
+    } finally {
+      vi.restoreAllMocks();
+      await removeTempDir(dir);
+    }
+  });
+});
 
 describe("atomic file writes", () => {
   it("replaces text and JSON files without leaving temporary files", async () => {

@@ -26,16 +26,39 @@ export async function readJsonFileLimited<T>(filePath: string, maxBytes: number)
 }
 
 export async function readTextFileLimited(filePath: string, maxBytes: number): Promise<string> {
-  const details = await stat(filePath);
-  if (details.size > maxBytes) {
-    throw new Error(`${path.basename(filePath)} exceeds the ${formatByteLimit(maxBytes)} size limit.`);
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
+    throw new Error("File size limit must be a non-negative safe integer.");
   }
 
-  const raw = await readFile(filePath, "utf8");
-  if (Buffer.byteLength(raw, "utf8") > maxBytes) {
-    throw new Error(`${path.basename(filePath)} exceeds the ${formatByteLimit(maxBytes)} size limit.`);
+  const sizeError = () => new Error(`${path.basename(filePath)} exceeds the ${formatByteLimit(maxBytes)} size limit.`);
+  const handle = await open(filePath, "r");
+  try {
+    const details = await handle.stat();
+    if (!details.isFile()) {
+      throw new Error(`${path.basename(filePath)} is not a regular file.`);
+    }
+    if (details.size > maxBytes) {
+      throw sizeError();
+    }
+
+    // Bound the reads themselves: the file can grow after stat().
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    while (true) {
+      const buffer = Buffer.alloc(Math.min(64 * 1024, maxBytes - totalBytes + 1));
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
+      if (bytesRead === 0) {
+        return Buffer.concat(chunks, totalBytes).toString("utf8");
+      }
+      totalBytes += bytesRead;
+      if (totalBytes > maxBytes) {
+        throw sizeError();
+      }
+      chunks.push(buffer.subarray(0, bytesRead));
+    }
+  } finally {
+    await handle.close();
   }
-  return raw;
 }
 
 export async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
