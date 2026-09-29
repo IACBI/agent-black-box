@@ -44,6 +44,7 @@ This document consolidates the security review and completed professionalization
 | -------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | Medium   | Reports above 256 MiB cannot be finalized. Even bounded legacy parsing can consume substantial memory.          | Preserve raw logs. Introduce streaming or paged APIs only when a real workload justifies changing readers and all report writers together. |
 | Medium   | A hostile local process with the same filesystem access can race path checks and subsequent operations.         | Treat repository and session storage as locally trusted. Preflight checks reduce accidental races but are not an atomic security boundary. |
+| Medium   | Two CodeQL findings remain open for dynamic command construction in the Windows batch fallback.                 | See the command review below. Keep the findings visible and independently review Windows quoting before claiming they are false positives. |
 | Low      | Command redaction and secret detection are heuristic. Free-form syntax and false negatives remain possible.     | Review reports and archives before sharing. Findings are not proof of a vulnerability; absence of findings is not proof of safety.         |
 | Low      | Batch scripts may reinterpret arguments internally. Manual rollback snippets use POSIX shell syntax.            | Prefer native executables for arbitrary arguments and use a compatible shell for manual snippets.                                          |
 | Low      | The exported applyRollbackPlan helper retains its existing API and does not perform the CLI snapshot preflight. | Callers must enforce appropriate validation before invoking it.                                                                            |
@@ -95,6 +96,18 @@ The 0.8.1 preflight passed locally on Windows with Node.js 24.12.0 and pnpm 10.3
 - Performance budgets passed: 100,000 NDJSON events took 149 ms with a 5.4 MiB measured heap delta; two adversarial 256 KiB analyzer inputs took 2 ms. Report generation, legacy catalog fallback, and large-repository analysis also stayed within their budgets.
 
 These measurements describe this local run. Hosted checks verify the supported operating systems and Node.js versions separately, including the POSIX linked-report regression.
+
+### Open CodeQL findings
+
+After the 0.8.1 release, the repository alert API still reported [alert #4](https://github.com/IACBI/agent-black-box/security/code-scanning/4) (`js/shell-command-constructed-from-input`) and [alert #5](https://github.com/IACBI/agent-black-box/security/code-scanning/5) (`js/shell-command-injection-from-environment`) at medium severity. A successful CodeQL workflow means analysis completed; it does not mean no alerts exist.
+
+Both findings point to `src/commands/commandRecorder.ts`. Native executables receive an argument array with `shell: false`. Windows `.cmd` and `.bat` files use a `cmd.exe /d /v:off /s /c` wrapper: AutoRun commands and delayed environment expansion are disabled, as described in the [Microsoft command reference](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/cmd). The wrapper rejects percent signs, line breaks, and null characters before execution and quotes argument values. Alert #5's displayed environment sources include test calls using `process.execPath`; those calls normally take the native executable branch.
+
+The Windows integration fixture was expanded with empty arguments, embedded quotes, parentheses, tabs, caret/pipe/redirection characters, and attempted injected commands. All values arrived unchanged and the injection marker was absent. A second integration test verifies native execution through a path containing spaces, `&`, and parentheses, with argument values preserved. All 18 command-recorder tests passed locally on Windows. These tests establish the checked cases, not correctness for every Windows parser combination or for how an arbitrary batch script reinterprets its arguments.
+
+The alerts remain open. No queries were excluded, findings suppressed, or runtime behavior rewritten merely to make the scanner quiet. An independent review of Windows quoting is still recommended. CodeQL's [library-input query guidance](https://codeql.github.com/codeql-query-help/javascript/js-shell-command-constructed-from-input/) and [environment-input query guidance](https://codeql.github.com/codeql-query-help/javascript/js-shell-command-injection-from-environment/) explain the underlying risk; a generic POSIX quoting library would not establish Windows safety.
+
+The exported `recordAndRunCommand` function executes the caller's selected executable and arguments. Programmatic callers must authorize that command before invoking it; recording and redaction do not provide a command sandbox.
 
 ### Follow-up review limitation
 

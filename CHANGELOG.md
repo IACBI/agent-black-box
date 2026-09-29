@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Expanded real Windows command-wrapper and native executable tests; documented two open CodeQL findings and the command execution trust boundary.
+
 ## 0.8.1
 
 - Fixed costly assignment matching on whitespace-heavy analyzer input and detected sensitive assignments after earlier values on the same line.

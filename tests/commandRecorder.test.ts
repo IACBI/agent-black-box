@@ -186,6 +186,18 @@ describe("command recorder", () => {
           'a"b',
           'literal" & echo injected>injected.txt & "text',
           "path with spaces\\",
+          "",
+          '"',
+          '""',
+          "(group)",
+          "a(b)c",
+          "[]{}",
+          "a=b;c,d",
+          "a\tb",
+          "^&|<>",
+          "!unexpanded_variable!",
+          '"& echo injected>injected.txt &"',
+          '"| echo injected>injected.txt |"',
         ];
         expect(await recordAndRunCommand([scriptPath, ...args], dir)).toBe(0);
         expect(JSON.parse(await readFile(outputPath, "utf8"))).toEqual(args);
@@ -206,6 +218,27 @@ describe("command recorder", () => {
 
       await expect(resolveRunCwd(dir, "packages/app")).resolves.toContain("packages");
       await expect(resolveRunCwd(dir, "../outside")).rejects.toThrow("inside the repository");
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
+  it("runs native executables through paths with shell metacharacters without interpreting arguments", async () => {
+    const dir = await createTempDir();
+    try {
+      initGitRepo(dir);
+      const session = await createSession(dir, DEFAULT_CONFIG);
+      const executableDir = path.join(dir, "bin & tools (test)");
+      await symlink(path.dirname(process.execPath), executableDir, process.platform === "win32" ? "junction" : "dir");
+      const executable = path.join(executableDir, path.basename(process.execPath));
+      const outputPath = path.join(dir, "args.json");
+      const args = ["& echo injected>injected.txt", '"quoted"', "a b"];
+      const script = 'require("node:fs").writeFileSync(process.argv[1], JSON.stringify(process.argv.slice(2)))';
+
+      expect(await recordAndRunCommand([executable, "-e", script, outputPath, ...args], dir)).toBe(0);
+      expect(JSON.parse(await readFile(outputPath, "utf8"))).toEqual(args);
+      await expect(readFile(path.join(dir, "injected.txt"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await readCommandEvents(session.sessionDir)).toHaveLength(1);
     } finally {
       await removeTempDir(dir);
     }
