@@ -33,6 +33,8 @@ const SENSITIVE_KEY_NAMES =
 const TOKEN_VALUE =
   /(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{16,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,})/;
 const PRIVATE_KEY_HEADER = /-----BEGIN(?: [A-Z0-9]+)? PRIVATE KEY-----/;
+// Start at each key's boundary rather than retrying a whitespace prefix at every character.
+const ASSIGNMENT_PATTERN = /(?:^|[,{;\s])["']?([A-Za-z][\w.-]*)["']?\s*(?::|=)\s*["']?([^"'`\s,;]+)/gi;
 
 export interface AnalysisInputFile extends ChangedFile {
   content?: string;
@@ -288,15 +290,12 @@ function looksLikeSecret(line: string): boolean {
     return true;
   }
 
-  const assignment =
-    /(?:^|[,{;\s])(?:export\s+)?(?:const|let|var)?\s*["']?([A-Za-z][\w.-]*)["']?\s*(?::|=)\s*["']?([^"'`\s,;]+)/i.exec(
-      line
-    );
-  if (!assignment || !SENSITIVE_KEY_NAMES.test(assignment[1])) {
-    return false;
+  for (const assignment of line.matchAll(ASSIGNMENT_PATTERN)) {
+    if (SENSITIVE_KEY_NAMES.test(assignment[1]) && isPlausibleCredentialValue(assignment[2])) {
+      return true;
+    }
   }
-
-  return isPlausibleCredentialValue(assignment[2]);
+  return false;
 }
 
 function isPlausibleCredentialValue(value: string): boolean {

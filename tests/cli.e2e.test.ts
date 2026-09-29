@@ -1,12 +1,20 @@
 import { execFile, execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTempDir, initGitRepo, removeTempDir } from "./testUtils.js";
 import { DEFAULT_CONFIG } from "../src/config/defaults.js";
-import { createSession, readCommandEvents } from "../src/session/sessionManager.js";
+import {
+  createSession,
+  getActiveSessionPath,
+  getSessionLockPath,
+  getStopRequestPath,
+  finalizeSession,
+  readCommandEvents,
+} from "../src/session/sessionManager.js";
+import { pathExists } from "../src/utils/files.js";
 
 const require = createRequire(import.meta.url);
 const tsxLoader = pathToFileURL(require.resolve("tsx")).href;
@@ -17,6 +25,97 @@ const spawnedProcesses: ChildProcessWithoutNullStreams[] = [];
 describe("CLI end-to-end", () => {
   afterEach(async () => {
     await Promise.all(spawnedProcesses.splice(0).map((child) => stopChild(child)));
+  });
+
+  it("refuses to send a stop request when live session ownership does not match", async () => {
+    const repo = await createTempDir("abb-stop-ownership-");
+    try {
+      initGitRepo(repo);
+      const session = await createSession(repo, DEFAULT_CONFIG);
+      const lockPath = getSessionLockPath(repo, DEFAULT_CONFIG);
+      const lock = JSON.parse(await readFile(lockPath, "utf8")) as Record<string, unknown>;
+      await writeFile(lockPath, JSON.stringify({ ...lock, ownerToken: "00000000-0000-4000-8000-000000000000" }));
+
+      const stopped = await runCli(repo, ["stop"]);
+      expect(stopped.exitCode).toBe(1);
+      expect(stopped.stderr).toContain("do not have the same owner");
+      expect(await pathExists(getStopRequestPath(repo, DEFAULT_CONFIG))).toBe(false);
+      expect(await readFile(getActiveSessionPath(repo, DEFAULT_CONFIG), "utf8")).toContain(session.id);
+    } finally {
+      await removeTempDir(repo);
+    }
+  });
+
+  it("reports corrupt active state instead of treating it as no active session", async () => {
+    const repo = await createTempDir("abb-stop-corrupt-");
+    try {
+      initGitRepo(repo);
+      await mkdir(path.dirname(getActiveSessionPath(repo, DEFAULT_CONFIG)), { recursive: true });
+      await writeFile(getActiveSessionPath(repo, DEFAULT_CONFIG), "{not-json}");
+
+      const stopped = await runCli(repo, ["stop"]);
+      expect(stopped.exitCode).toBe(1);
+      expect(stopped.stderr).toContain("unreadable");
+      expect(await pathExists(getStopRequestPath(repo, DEFAULT_CONFIG))).toBe(false);
+    } finally {
+      await removeTempDir(repo);
+    }
+  });
+
+  it("emits one SARIF rule per finding type and encodes reserved filename characters", async () => {
+    const repo = await createTempDir("abb-sarif-");
+    try {
+      initGitRepo(repo);
+      await writeFile(
+        path.join(repo, "settings #1%.ts"),
+        [
+          'const apiKey = "test_credential_value_987654321";',
+          'const password = "test_credential_value_987654321";',
+        ].join("\n")
+      );
+      const sarif = await runCli(repo, ["analyze", "--format", "sarif"]);
+      expect(sarif.exitCode).toBe(0);
+      const run = JSON.parse(sarif.stdout).runs[0] as {
+        tool: { driver: { rules: Array<{ id: string }> } };
+        results: Array<{
+          ruleId: string;
+          locations: Array<{ physicalLocation: { artifactLocation: { uri: string } } }>;
+        }>;
+      };
+      expect(run.tool.driver.rules).toEqual([{ id: "possible-secret:Possible secret" }]);
+      expect(run.results).toHaveLength(2);
+      for (const result of run.results) {
+        expect(result.ruleId).toBe("possible-secret:Possible secret");
+        expect(result.locations[0]?.physicalLocation.artifactLocation.uri).toBe("settings%20%231%25.ts");
+      }
+    } finally {
+      await removeTempDir(repo);
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("refuses to stream a report replaced by a symbolic link", async () => {
+    const repo = await createTempDir("abb-linked-report-");
+    const outside = await createTempDir("abb-outside-report-");
+    try {
+      initGitRepo(repo);
+      const session = await createSession(repo, DEFAULT_CONFIG);
+      await finalizeSession(session, DEFAULT_CONFIG, "test");
+      const target = path.join(outside, "private.txt");
+      const content = "external content must not be printed";
+      await writeFile(target, content);
+      const summary = path.join(session.sessionDir, "summary.md");
+      await rm(summary);
+      await symlink(target, summary, "file");
+
+      const result = await runCli(repo, ["summary"]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("regular file");
+      expect(result.stdout).not.toContain(content);
+      expect(await readFile(target, "utf8")).toBe(content);
+    } finally {
+      await removeTempDir(repo);
+      await removeTempDir(outside);
+    }
   });
 
   it("reports staged scan coverage and ignores a different working-tree value", async () => {

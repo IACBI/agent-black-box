@@ -110,6 +110,34 @@ try {
   if (analysisDuration > 30_000) {
     throw new Error(`Large-repository analysis budget exceeded: ${Math.round(analysisDuration)}ms > 30000ms.`);
   }
+  const adversarialCharacters = 256 * 1024;
+  const adversarialStarted = performance.now();
+  const adversarial = analyzeChangedFiles([
+    { path: "src/padded.ts", status: "modified", content: " ".repeat(adversarialCharacters - 1) + "!" },
+    { path: "src/identifier.ts", status: "modified", content: "a".repeat(adversarialCharacters - 1) + "!" },
+  ]);
+  const adversarialDuration = performance.now() - adversarialStarted;
+  if (adversarial.findings.length !== 0) {
+    throw new Error("Adversarial content analysis produced unexpected findings.");
+  }
+  if (adversarialDuration > MAX_DURATION_MS) {
+    throw new Error(
+      `Adversarial analysis budget exceeded: ${Math.round(adversarialDuration)}ms > ${MAX_DURATION_MS}ms.`
+    );
+  }
+  console.log(
+    JSON.stringify(
+      {
+        scenario: "analyze-adversarial-content",
+        charactersPerFile: adversarialCharacters,
+        files: 2,
+        durationMs: Math.round(adversarialDuration),
+        maxDurationMs: MAX_DURATION_MS,
+      },
+      null,
+      2
+    )
+  );
   console.log(
     JSON.stringify(
       {

@@ -2,6 +2,8 @@
 
 Agent Black Box generates Markdown reports for humans and `session.json` for tools.
 
+Session IDs are opaque identifiers. New IDs have a random suffix to avoid timestamp collisions; older timestamp-only IDs remain supported. Report commands reject symbolic links and check file identity before streaming a selected report.
+
 The full `session.json` format remains the same for large sessions. When it exceeds 32 MiB, a small versioned `session-replay.json` lets the CLI reopen it from the original event logs without parsing the entire JSON file. The CLI verifies the full report digest, log sizes, and reconstructed event contents. Reports larger than 256 MiB are refused during finalization with an explicit error; raw event logs remain in the session directory. Older large reports without replay metadata remain readable through a bounded, higher-memory fallback.
 
 The README is available in [English](../README.md#english) and [Türkçe](../README.md#turkce).
@@ -64,7 +66,7 @@ Command metadata explicitly recorded through `abb run`:
 - Exit code.
 - Timestamp.
 
-Terminal output is not captured.
+Command durations use a monotonic clock. Start and end timestamps reflect system time and can appear out of order if the clock is adjusted during execution. Terminal output is not captured.
 
 ## `timeline.md`
 
