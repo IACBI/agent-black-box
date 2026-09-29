@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.8.1
+
+- Fixed costly assignment matching on whitespace-heavy analyzer input and detected sensitive assignments after earlier values on the same line.
+- Validated session ownership before sending stop requests and preserved corrupt state for diagnosis.
+- Verified completed reports before cleaning stale session state, rather than trusting completion metadata alone.
+- Added random session ID suffixes and exclusive directory creation to prevent overwriting evidence when timestamps repeat; existing IDs remain selectable.
+- Rejected linked report files and checked file identity before streaming their contents.
+- Removed duplicate SARIF rule descriptors and encoded file locations as URI references.
+- Measured command duration with a monotonic clock so system time adjustments cannot discard valid command records.
+- Added regression coverage and an adversarial analyzer performance budget; updated usage, architecture, report, and audit documentation.
+
 ## 0.8.0
 
 ### Review and history

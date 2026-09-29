@@ -80,6 +80,8 @@ abb start
 
 `abb start` runs as a foreground watcher. Leave it open while your editor, scripts, or coding agent changes files.
 
+New session IDs combine a timestamp and a random suffix. Treat IDs as opaque values obtained from `abb sessions list`; full IDs and unique prefixes continue to work, including IDs created by earlier versions. Session creation never reuses an existing session directory.
+
 Before watcher observations begin, Agent Black Box stores a Git baseline. Starting from a clean or understood worktree gives the clearest attribution, but a dirty worktree is supported and its existing changes are marked as pre-existing.
 
 ## Record Commands
@@ -103,7 +105,7 @@ Only metadata is recorded:
 - Duration.
 - Exit code.
 
-Terminal output is not captured.
+Terminal output is not captured. Duration uses a monotonic clock, while start and end timestamps use system time; a clock adjustment can move timestamps backwards without losing the command record.
 
 Pass the executable and arguments directly after `--`. Native executables run without a shell. On Windows, `.cmd` and `.bat` shims require a `cmd.exe` wrapper; arguments containing percent signs or line breaks are rejected because the command interpreter can expand or reinterpret them.
 
@@ -131,7 +133,7 @@ From another terminal:
 abb stop
 ```
 
-The foreground watcher receives a stop request, flushes pending file events, captures Git state, writes reports, and clears active session state.
+`abb stop` validates the active repository, session directory, and lock owner before writing a stop request. Corrupt or inconsistent state produces an error and remains available for diagnosis. The foreground watcher receives a valid stop request, flushes pending file events, captures Git state, writes reports, and clears active session state.
 
 If the watcher process is stale, recover it explicitly from the current Git state:
 
@@ -139,7 +141,7 @@ If the watcher process is stale, recover it explicitly from the current Git stat
 abb recover
 ```
 
-Recovery only runs when active state and lock ownership agree. For a diagnosis and safe repair in one command, use `abb doctor --repair`.
+Recovery only runs when active state and lock ownership agree. Completion metadata alone is insufficient to remove stale state: the completed report must also be valid. For a diagnosis and safe repair in one command, use `abb doctor --repair`.
 
 ## Analyze Current Changes Without A Watcher
 
@@ -157,6 +159,8 @@ abb analyze --staged --baseline HEAD --policy new-secrets --format sarif
 By default, it inspects included working-tree changes with bounded local reads. `--staged` inspects the Git index blobs instead, so unstaged edits cannot change the pre-commit result. Add `--baseline <ref>` to compare staged content against a fixed Git commit: identical existing secret-like lines are suppressed up to their baseline occurrence count, while metadata risks remain visible. When Git identifies a rename between that commit and the index, the old path supplies the baseline if the new path did not exist there. Excluded source paths and renames Git cannot establish remain visible as new content findings. Text output lists skipped paths and rename sources; JSON includes `coverage` and `baselineComparison.renameSources` with destination, source, and suppression count, and SARIF includes the corresponding run properties. Findings contain locations and fixed descriptions only; they never include matched secret values.
 
 For CI, `--policy new-secrets` exits with code 1 only when staged content contains a possible secret not found at the selected baseline. `--policy complete-review` also fails when non-deleted staged content or needed baseline content could not be scanned. Both require `--staged --baseline`; the chosen profile and counts appear in text, JSON, and SARIF output. `--fail-on` remains available and, when combined with a policy, either rule can fail the command.
+
+Assignment checks consider each supported assignment on a line, including values after a benign assignment, and retain one secret finding per line. SARIF output shares rule descriptors across matching findings and percent-encodes file URI components, preserving paths containing spaces, `#`, or `%`.
 
 ## Review Reports
 

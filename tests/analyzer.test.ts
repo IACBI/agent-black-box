@@ -57,6 +57,26 @@ describe("watcherless analysis core", () => {
     expect(result.findings.some((finding) => finding.category === "Possible secret")).toBe(false);
   });
 
+  it("inspects later assignments on a line after ordinary settings or environment references", () => {
+    const rawValue = "test_credential_value_987654321";
+    const result = analyzeChangedFiles([
+      {
+        path: "src/settings.ts",
+        status: "modified",
+        content: [
+          `const port = 8080; const password = "${rawValue}";`,
+          `{"url": "https://example.invalid", "clientSecret": "${rawValue}"}`,
+          `const apiKey = process.env.API_KEY; const password = "${rawValue}";`,
+        ].join("\n"),
+      },
+    ]);
+
+    expect(
+      result.findings.filter((finding) => finding.kind === "possible-secret").map((finding) => finding.line)
+    ).toEqual([1, 2, 3]);
+    expect(JSON.stringify(result)).not.toContain(rawValue);
+  });
+
   it("rejects unsafe paths without reflecting them in output", () => {
     const unsafePath = "../outside/credential-value";
     const result = analyzeChangedFiles([{ path: unsafePath, status: "added" }]);

@@ -260,4 +260,31 @@ describe("command recorder", () => {
       await removeTempDir(dir);
     }
   }, 15_000);
+
+  it("preserves command records when the system clock moves backwards", async () => {
+    const dir = await createTempDir();
+    let running: Promise<number> | undefined;
+    try {
+      initGitRepo(dir);
+      const session = await createSession(dir, DEFAULT_CONFIG);
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-01-01T01:00:00.000Z"));
+      running = recordAndRunCommand([process.execPath, "-e", "setTimeout(() => process.exit(0), 500)"], dir);
+      await vi.waitFor(async () => {
+        expect((await readdir(session.sessionDir)).some((name) => name.startsWith("command-inflight-"))).toBe(true);
+      });
+      vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+
+      expect(await running).toBe(0);
+      const commands = await readCommandEvents(session.sessionDir);
+      expect(commands).toHaveLength(1);
+      expect(Date.parse(commands[0]!.endedAt)).toBeLessThan(Date.parse(commands[0]!.startedAt));
+      expect(commands[0]?.durationMs).toBeGreaterThanOrEqual(0);
+      expect(commands[0]?.durationMs).toBeLessThan(60_000);
+    } finally {
+      await running;
+      vi.useRealTimers();
+      await removeTempDir(dir);
+    }
+  }, 15_000);
 });

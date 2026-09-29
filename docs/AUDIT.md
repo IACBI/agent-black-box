@@ -1,10 +1,10 @@
 # Project audit
 
-Reviewed on 2026-09-27; updated on 2026-09-28.
+Baseline reviewed on 2026-09-27; follow-up updated on 2026-09-29.
 
 ## Scope and outcome
 
-The review covered the CLI, configuration, Git inspection, command capture, session lifecycle, evidence attribution, reports, exports, rollback, file watching, dependencies, tests, and CI/release configuration. Public exports and the full session JSON contract were preserved. No runtime dependency was added or removed.
+The baseline review covered the CLI, configuration, Git inspection, command capture, session lifecycle, evidence attribution, reports, exports, rollback, file watching, dependencies, tests, and CI/release configuration. The follow-up below records additional defects reproduced against 0.8.0 and their fixes for 0.8.1. Public exports and the full session JSON contract were preserved. No runtime dependency was added or removed.
 
 This document consolidates the security review and completed professionalization plan. It records verified work and remaining limitations; it is not a guarantee that the project is free of vulnerabilities. See [Usage](USAGE.md) for commands, [Reports](REPORTS.md) for formats, and [Security policy](../SECURITY.md) for vulnerability reporting.
 
@@ -69,6 +69,36 @@ Prettier 3.9.9 and typescript-eslint 8.71.0 are compatible updates. Node.js type
 Major upgrades remain separate work: Commander 15 and Vitest 5 require at least Node 22.12 while the package currently promises Node 22 generally. TypeScript 7 is outside typescript-eslint 8.71.0's declared peer range. Vitest 5 and its coverage package must move together. Chokidar 5 and simple-git 4 need focused watcher and Git compatibility testing before changing runtime dependencies. Using Node 26 type definitions would allow APIs newer than the supported runtime baseline.
 
 The 0.8.0 release preflight passed on Windows with Node.js 24.12.0 and pnpm 10.30.3: formatting, lint, type checks, dead-code checks, build, 153 tests (one Windows file-symlink test skipped), package dry run, production audit, and release metadata validation. Coverage was 86.65% statements, 79.85% branches, 92.35% functions, and 86.35% lines. A full dependency audit found no known advisories across 286 packages, and the large-session performance budgets passed. These results describe the local preflight; hosted CI and release artifacts must be verified separately.
+
+## Security and reliability follow-up for 0.8.1
+
+| ID     | Priority | Reproduced issue                                                                                                 | Change and regression evidence                                                                                                        |
+| ------ | -------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| ABB-01 | Medium   | Assignment scanning retried whitespace prefixes, causing quadratic work on long padded lines.                    | Start at key boundaries. Two 256 KiB adversarial inputs are checked by the performance budget.                                        |
+| ABB-02 | Medium   | A benign or environment-based assignment could hide a later credential-like assignment on one line.              | Inspect every supported assignment while retaining one secret finding per line. Tests cover code, compact JSON, and environment use.  |
+| ABB-03 | Medium   | Stop requests could be sent when active state and lock ownership did not match.                                  | Validate recovery state before writing a request. End-to-end tests reject mismatched owners and corrupt state without altering them.  |
+| ABB-04 | Medium   | Completion metadata could trigger stale-state cleanup when the completed report was missing or corrupt.          | Verify the completed report first. Tests preserve invalid state and verify cleanup for a valid report.                                |
+| ABB-05 | Medium   | Repeated timestamps could reuse a session directory and truncate its original event logs.                        | Add a random ID suffix and create directories exclusively. A fixed-clock test verifies distinct IDs and preserved original evidence.  |
+| ABB-06 | Medium   | A Markdown report replaced by a symbolic link could stream a file outside the selected session.                  | Reject non-regular files and compare identity with the opened handle. A POSIX end-to-end test checks refusal and target preservation. |
+| ABB-07 | Low      | SARIF emitted duplicate identical rule descriptors and unencoded file URI components.                            | Share descriptors and encode URI components. An end-to-end test retains both findings for a path containing spaces, `#`, and `%`.     |
+| ABB-08 | Low      | A backwards system-clock adjustment created a negative command duration, causing a valid record to be discarded. | Use a monotonic duration while preserving wall-clock timestamps. A regression test moves system time backwards during a real command. |
+
+The SARIF changes follow the [OASIS SARIF 2.1.0 specification](https://docs.oasis-open.org/sarif/sarif/v2.1.0/os/sarif-v2.1.0-os.html): rule descriptor objects must be unique and file locations must be valid URI references.
+
+### Follow-up validation
+
+The 0.8.1 preflight passed locally on Windows with Node.js 24.12.0 and pnpm 10.30.3:
+
+- Formatting, ESLint, TypeScript, reachability analysis, Knip, production build, production dependency audit, package dry run, and release metadata validation passed.
+- All 27 test files passed: 162 tests passed and two file-symlink tests were skipped on Windows. Coverage was 87.10% statements, 80.72% branches, 92.73% functions, and 86.81% lines.
+- A full dependency audit found no known advisories across 286 packages on 2026-09-29.
+- Performance budgets passed: 100,000 NDJSON events took 149 ms with a 5.4 MiB measured heap delta; two adversarial 256 KiB analyzer inputs took 2 ms. Report generation, legacy catalog fallback, and large-repository analysis also stayed within their budgets.
+
+These measurements describe this local run. Hosted checks verify the supported operating systems and Node.js versions separately, including the POSIX linked-report regression.
+
+### Follow-up review limitation
+
+A local tool policy prevented re-reading `src/risks/secretDetector.ts` and `tests/secretDetector.test.ts` during this follow-up. Their automated tests still ran, but that does not replace a current source review. The 0.8.1 findings are verified improvements to the reviewed modules, not a claim that a new unrestricted audit of every source file was completed. Removing this review limitation requires access to those two source files through the normal tooling.
 
 ## Recommended next work
 

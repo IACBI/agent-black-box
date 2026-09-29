@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { loadConfig, type ConfigLoadOptions } from "../config/config.js";
 import { requireRepositoryRoot } from "../git/git.js";
 import { appendCommandEvent, inspectSessionRecoveryState, registerInFlightCommand } from "../session/sessionManager.js";
@@ -44,6 +45,7 @@ export async function recordAndRunCommand(
   }
 
   const runCwd = await resolveRunCwd(repoRoot, options.cwd);
+  const startedAtMonotonic = performance.now();
   const startedAtDate = new Date();
   const startedAt = startedAtDate.toISOString();
   const redactedCommand = formatCommand(redactCommandParts(normalizedCommandParts));
@@ -63,7 +65,7 @@ export async function recordAndRunCommand(
       ...optionalMetadata("group", options.group),
       ...optionalMetadata("phase", options.phase),
       exitCode: result.exitCode,
-      durationMs: endedAtDate.getTime() - startedAtDate.getTime(),
+      durationMs: Math.round(performance.now() - startedAtMonotonic),
       ...(result.error ? { error: result.error } : {}),
     });
     recorded = true;

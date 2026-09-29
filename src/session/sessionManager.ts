@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { appendFile, open, readdir, realpath, stat, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, open, readdir, realpath, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type {
   ActiveSession,
@@ -19,7 +19,7 @@ import { buildSessionReport } from "../reports/markdown.js";
 import { writeReports } from "../reports/reportWriter.js";
 import { ensureDir, pathExists, readJsonFileLimited, removeFileIfExists, writeJsonFile } from "../utils/files.js";
 import { buildChangeEvidence, selectSessionRelevantChanges } from "./changeEvidence.js";
-import { listSessionCatalog, resolveSessionEntry } from "./sessionCatalog.js";
+import { listSessionCatalog, resolveSessionEntry, verifyCatalogSessionReportFile } from "./sessionCatalog.js";
 import { isCapturedCommandEvent, isCapturedFileEvent, readNdjsonRecords, type NdjsonReadResult } from "./ndjson.js";
 
 const ACTIVE_SESSION_FILE = "active-session.json";
@@ -138,7 +138,8 @@ export async function createSession(repoRoot: string, config: AgentBlackBoxConfi
       );
     }
 
-    await ensureDir(sessionDir);
+    await ensureDir(getSessionRoot(repoRoot, config));
+    await mkdir(sessionDir, { mode: 0o700 });
     await writeFile(getEventsPath(sessionDir), "", "utf8");
     await writeFile(getCommandsPath(sessionDir), "", "utf8");
     await writeJsonFile(getGitBaselinePath(sessionDir), baseline);
@@ -228,6 +229,15 @@ export async function inspectSessionRecoveryState(
   }
 
   if (await pathExists(path.join(active.sessionDir, "session-metadata.json"))) {
+    try {
+      await verifyCatalogSessionReportFile({ id: active.id, sessionDir: active.sessionDir, state: "complete" });
+    } catch {
+      return {
+        status: "corrupt",
+        message: `Session ${active.id} has completion metadata but no valid completed report; state was left untouched.`,
+        active,
+      };
+    }
     return {
       status: "already-complete",
       message: `Session ${active.id} has completed reports but stale state files.`,
@@ -494,7 +504,7 @@ export function isProcessRunning(pid: number): boolean {
 
 function createSessionId(startedAt: string): string {
   const safeTimestamp = startedAt.replace(/[:.]/g, "-");
-  return `session-${safeTimestamp}`;
+  return `session-${safeTimestamp}-${randomUUID()}`;
 }
 
 async function acquireSessionLock(repoRoot: string, config: AgentBlackBoxConfig, lock: SessionLock): Promise<void> {

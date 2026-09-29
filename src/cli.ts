@@ -1,6 +1,5 @@
 #!/usr/bin/env node
-import { createReadStream } from "node:fs";
-import { realpath } from "node:fs/promises";
+import { lstat, open, realpath } from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { Command } from "commander";
@@ -42,7 +41,6 @@ import {
 } from "./rollback/rollback.js";
 import {
   inspectSessionRecoveryState,
-  isProcessRunning,
   readActiveSession,
   recoverActiveSession,
   writeStopRequest,
@@ -78,7 +76,7 @@ const program = new Command();
 program
   .name("abb")
   .description("Record and explain observable repository changes during AI coding sessions.")
-  .version("0.8.0")
+  .version("0.8.1")
   .option(
     "--allow-external-session-dir",
     "allow a trusted local sessionDir outside the repository; network and UNC paths remain blocked"
@@ -132,14 +130,16 @@ program
   .action(async () => {
     const repoRoot = await requireRepositoryRoot(process.cwd());
     const config = await loadRuntimeConfig(repoRoot);
-    const active = await readActiveSession(repoRoot, config);
-
-    if (!active) {
+    const state = await inspectSessionRecoveryState(repoRoot, config);
+    if (state.status === "no-active-session") {
       console.log("No active Agent Black Box session was found.");
       return;
     }
-
-    if (isProcessRunning(active.pid)) {
+    if (state.status === "corrupt" || state.status === "inconsistent" || !state.active) {
+      throw new Error(state.message);
+    }
+    const active = state.active;
+    if (state.status === "active") {
       await writeStopRequest(repoRoot, config, active.id);
       const completed = await waitForSessionToFinalize(repoRoot, config, active.sessionDir);
       if (completed) {
@@ -642,12 +642,31 @@ async function printSessionReportFile(fileName: string, selector?: string): Prom
     throw new Error(`Session ${selected.id} does not contain ${fileName}.`);
   }
 
-  await new Promise<void>((resolve, reject) => {
-    const source = createReadStream(reportPath);
-    source.once("error", reject);
-    source.once("end", resolve);
-    source.pipe(process.stdout, { end: false });
-  });
+  const details = await lstat(reportPath);
+  if (!details.isFile()) {
+    throw new Error(`${fileName} is not a regular file.`);
+  }
+  const handle = await open(reportPath, "r");
+  try {
+    const opened = await handle.stat();
+    if (
+      !opened.isFile() ||
+      opened.dev !== details.dev ||
+      opened.ino !== details.ino ||
+      opened.size !== details.size ||
+      opened.mtimeMs !== details.mtimeMs
+    ) {
+      throw new Error(`${fileName} changed before it could be opened.`);
+    }
+    await new Promise<void>((resolve, reject) => {
+      const source = handle.createReadStream({ autoClose: false });
+      source.once("error", reject);
+      source.once("end", resolve);
+      source.pipe(process.stdout, { end: false });
+    });
+  } finally {
+    await handle.close();
+  }
   process.stdout.write("\n");
 }
 
@@ -868,7 +887,9 @@ function toSarif(result: WatcherlessAnalysisResult): Record<string, unknown> {
           driver: {
             name: "Agent Black Box",
             informationUri: "https://github.com/IACBI/agent-black-box",
-            rules: result.findings.map((finding) => ({ id: `${finding.kind}:${finding.category}` })),
+            rules: [...new Set(result.findings.map((finding) => `${finding.kind}:${finding.category}`))].map((id) => ({
+              id,
+            })),
           },
         },
         results: result.findings.map((finding) => ({
@@ -878,7 +899,7 @@ function toSarif(result: WatcherlessAnalysisResult): Record<string, unknown> {
           locations: [
             {
               physicalLocation: {
-                artifactLocation: { uri: finding.path },
+                artifactLocation: { uri: finding.path.split("/").map(encodeURIComponent).join("/") },
                 ...(finding.line === undefined ? {} : { region: { startLine: finding.line } }),
               },
             },

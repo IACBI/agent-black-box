@@ -1,4 +1,4 @@
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONFIG } from "../src/config/defaults.js";
@@ -62,6 +62,50 @@ describe("session manager", () => {
       await expect(readSessionBaseline(session.sessionDir)).resolves.toMatchObject({
         git: { repoRoot: dir },
       });
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
+  it("preserves completed sessions when the system clock repeats a timestamp", async () => {
+    const dir = await createTempDir();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    try {
+      initGitRepo(dir);
+      const first = await createSession(dir, DEFAULT_CONFIG);
+      await appendFileEvent(first, { timestamp: first.startedAt, eventType: "change", path: "src/first.ts" });
+      await finalizeSession(first, DEFAULT_CONFIG, "test");
+      const eventsBefore = await readFile(getEventsPath(first.sessionDir), "utf8");
+
+      const second = await createSession(dir, DEFAULT_CONFIG);
+      expect(second.id).not.toBe(first.id);
+      expect(second.sessionDir).not.toBe(first.sessionDir);
+      expect(await readFile(getEventsPath(first.sessionDir), "utf8")).toBe(eventsBefore);
+      expect(await pathExists(path.join(first.sessionDir, "session-metadata.json"))).toBe(true);
+    } finally {
+      vi.useRealTimers();
+      await removeTempDir(dir);
+    }
+  });
+
+  it("cleans stale ownership state only after verifying the completed report", async () => {
+    const dir = await createTempDir();
+    try {
+      initGitRepo(dir);
+      const session = await createSession(dir, DEFAULT_CONFIG);
+      const lock = await readSessionLock(dir, DEFAULT_CONFIG);
+      await finalizeSession(session, DEFAULT_CONFIG, "test");
+      await writeFile(getActiveSessionPath(dir, DEFAULT_CONFIG), JSON.stringify({ ...session, pid: 999_999 }));
+      await writeFile(getSessionLockPath(dir, DEFAULT_CONFIG), JSON.stringify({ ...lock, pid: 999_999 }));
+
+      await expect(inspectSessionRecoveryState(dir, DEFAULT_CONFIG)).resolves.toMatchObject({
+        status: "already-complete",
+      });
+      await expect(recoverActiveSession(dir, DEFAULT_CONFIG)).resolves.toEqual({ state: "already-complete" });
+      expect(await pathExists(getActiveSessionPath(dir, DEFAULT_CONFIG))).toBe(false);
+      expect(await pathExists(getSessionLockPath(dir, DEFAULT_CONFIG))).toBe(false);
+      expect(await pathExists(path.join(session.sessionDir, "session.json"))).toBe(true);
     } finally {
       await removeTempDir(dir);
     }
@@ -311,6 +355,28 @@ describe("session manager", () => {
       await expect(recoverActiveSession(dir, DEFAULT_CONFIG)).rejects.toThrow("do not have the same owner");
       await expect(readActiveSession(dir, DEFAULT_CONFIG)).resolves.toMatchObject({ id: session.id });
       await expect(pathExists(getSessionLockPath(dir, DEFAULT_CONFIG))).resolves.toBe(true);
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
+  it.each(["missing", "corrupt"])("retains stale state when completion metadata has a %s report", async (kind) => {
+    const dir = await createTempDir();
+    try {
+      initGitRepo(dir);
+      const session = await createSession(dir, DEFAULT_CONFIG);
+      const lock = await readSessionLock(dir, DEFAULT_CONFIG);
+      await writeFile(getActiveSessionPath(dir, DEFAULT_CONFIG), JSON.stringify({ ...session, pid: 999_999 }));
+      await writeFile(getSessionLockPath(dir, DEFAULT_CONFIG), JSON.stringify({ ...lock, pid: 999_999 }));
+      await writeFile(path.join(session.sessionDir, "session-metadata.json"), JSON.stringify({ id: session.id }));
+      if (kind === "corrupt") {
+        await writeFile(path.join(session.sessionDir, "session.json"), "{not-json}");
+      }
+
+      await expect(inspectSessionRecoveryState(dir, DEFAULT_CONFIG)).resolves.toMatchObject({ status: "corrupt" });
+      await expect(recoverActiveSession(dir, DEFAULT_CONFIG)).rejects.toThrow("completed report");
+      expect(await pathExists(getActiveSessionPath(dir, DEFAULT_CONFIG))).toBe(true);
+      expect(await pathExists(getSessionLockPath(dir, DEFAULT_CONFIG))).toBe(true);
     } finally {
       await removeTempDir(dir);
     }
