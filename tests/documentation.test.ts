@@ -1,20 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
-const LANGUAGE_ANCHORS = [
-  "english",
-  "turkce",
-  "espanol",
-  "deutsch",
-  "francais",
-  "portugues",
-  "zhongwen",
-  "hindi",
-  "arabic",
-  "russkiy",
-  "nihongo",
-  "bahasa-indonesia",
-];
+const LANGUAGE_ANCHORS = ["english", "turkce"];
 
 const REQUIRED_COMMANDS = [
   "abb init",
@@ -52,10 +39,11 @@ const REQUIRED_REPORTS = [
   "rollback.md",
 ];
 
-describe("multilingual README", () => {
-  it("keeps every language section aligned with the documented CLI and report surface", async () => {
+describe("bilingual README", () => {
+  it("keeps only English and Turkish sections aligned with the documented CLI and report surface", async () => {
     const readme = await readFile("README.md", "utf8");
     expect(readme).not.toContain("pnpm dev -- ");
+    expect([...readme.matchAll(/<a id="([^"]+)"><\/a>/g)].map((match) => match[1])).toEqual(LANGUAGE_ANCHORS);
 
     for (const [index, anchor] of LANGUAGE_ANCHORS.entries()) {
       const startMarker = `<a id="${anchor}"></a>`;
