@@ -1,159 +1,47 @@
-# Report Reference
+# Report reference
 
-Agent Black Box generates Markdown reports for humans and `session.json` for tools.
+Reports default to `.agent-black-box/sessions/<session-id>/`. `session.json` is the structured contract; Markdown presents observable evidence for review. See [Usage](USAGE.md) for commands.
 
-Session IDs are opaque identifiers. New IDs have a random suffix to avoid timestamp collisions; older timestamp-only IDs remain supported. Report commands reject symbolic links and check file identity before streaming a selected report.
+## Files and fields
 
-The full `session.json` format remains the same for large sessions. When it exceeds 32 MiB, a small versioned `session-replay.json` lets the CLI reopen it from the original event logs without parsing the entire JSON file. The CLI verifies the full report digest, log sizes, and reconstructed event contents. Reports larger than 256 MiB are refused during finalization with an explicit error; raw event logs remain in the session directory. Older large reports without replay metadata remain readable through a bounded, higher-memory fallback.
+| File                                   | Contents and role                                                                  |
+| -------------------------------------- | ---------------------------------------------------------------------------------- |
+| `session.json`                         | Identity/times/finalization, capture, Git/evidence, risks and integrity.           |
+| `session-start.json`, `git-start.json` | Initial identity; capture time, HEAD/branch/index and pre-existing changes.        |
+| `events.ndjson`                        | Append-only timestamp, relative path and add/change/unlink event.                  |
+| `commands.ndjson`, `commands.md`       | Redacted command/cwd, label/group/phase, exit status, timestamps and duration.     |
+| `session-metadata.json`                | Versioned times, counts, severity/score, secret count, branch/HEADs; written last. |
+| `session-search.json`                  | Derived relevant paths, redacted commands and risk categories.                     |
+| `session-replay.json`                  | Compact report body, sizes, counts and digests for reconstruction.                 |
+| `rollback-state.json`                  | Private end-state HEAD/index and file identities for restore preflight.            |
+| `summary.md`                           | Counts, score/priority, notable changes, attribution and integrity warnings.       |
+| `timeline.md`                          | File/command chronology, final changes and net HEAD changes.                       |
+| `diff-summary.md`                      | Git status/stat text, paths, kinds/sizes, line counts and skipped-stat notes.      |
+| `risks.md`                             | Path categories, severity/score/reason and redacted possible-secret locations.     |
+| `rollback.md`                          | Manual Git inspection/restore guidance and eligible-file apply instructions.       |
 
-The README is available in [English](../README.md#english) and [Türkçe](../README.md#turkce).
+## Evidence and interpretation
 
-## `session.json`
+Evidence separates pre-existing paths, observations, final changes and Git metadata changes. Net HEAD changes retain committed work with a clean worktree. Risk analysis excludes unchanged pre-existing paths when attribution permits; missing baselines or changed index state conservatively include final changes.
 
-Structured session output containing:
+Tracked counts describe unstaged changes; staged-only changes may lack counts despite staged stat text. Small untracked text uses estimates; binary/large/missing/non-regular paths record skipped statistics.
 
-- Session ID, repository root, session path, start time, end time, and finalization reason.
-- Git start baseline with capture time, HEAD, branch, index fingerprint, and pre-existing changed paths.
-- Per-path evidence showing whether a path was changed at start, observed during the session, present at the end, or changed in Git metadata.
-- Net file changes between the start and end HEAD so committed work remains visible with a clean final worktree.
-- File events observed by the watcher.
-- Commands explicitly run through `abb run`.
-- Git branch, status, diff summary, and changed files.
-- File kind, size, and line-stat source where available.
-- Risk findings.
-- Risk score, maximum severity, severity counts, and possible-secret count.
-- Possible secret findings with redacted values.
-- Integrity metadata for malformed event or command records skipped during recovery, watcher queue overflow, and failed event writes. After recovery, a capture-loss warning remains even if the exact event count is unavailable.
+Scores are deterministic 0–100 review signals, not vulnerability proof. Supported command patterns and detected values are redacted; false positives/missed secrets remain possible. Recorded/watcherless heuristics differ. Review shared artifacts.
 
-## `session-metadata.json`
+Terminal output is not captured. Durations are monotonic; wall-clock timestamps can reorder after clock changes. Integrity preserves discarded-record counts, overflow, write failures and recovery warnings even when exact losses are unknown.
 
-Compact, versioned history metadata containing session times, change and command counts, risk score, possible-secret count, branch, and start/end HEAD values. It is written after the full report set and allows `abb sessions list` to avoid loading large event arrays.
+## Selection and exports
 
-## `session-search.json`
+Report/export selection uses `--session <id>`: `latest`, a full ID or unique prefix. New and legacy IDs work; incomplete/corrupt sessions cannot be selected. History uses metadata/search indices with validated-report fallback. Comparison covers relevant files, risks, commands and HEADs.
 
-This bounded, derived index contains session-relevant paths, risk categories, and recorded redacted command strings for history filtering. An index above 4 MiB is omitted; missing or invalid indices cause search to use the validated full report. It is written before final metadata and can be regenerated from `session.json`.
+`abb risks` and Markdown exports accept `--min-severity`/`--category`; these narrow risk findings only. JSON exports preserve the full report; Markdown bundles the six review reports. Ordinary exports use exclusive creation. `--force` atomically replaces the destination after writing succeeds; a destination link is replaced without changing its target.
 
-## `rollback-state.json`
+CLI rollback apply requires the latest completed session, eligible tracked modified/deleted files and typed confirmation. Restore targets HEAD; pre-existing changes are excluded. Snapshots are checked before confirmation and immediately before restore; missing/mismatched snapshots disable apply. Manual snippets use POSIX syntax. See [Security](../SECURITY.md) for library boundaries.
 
-A private safety snapshot records the end-state HEAD, index fingerprint, and content identity of files eligible for automatic restore. `abb rollback --apply` checks this snapshot before confirmation and again immediately before Git restore. A missing or mismatched snapshot disables automatic apply for that session; manual rollback guidance remains available.
+## Limits and verification
 
-## `summary.md`
+Inline JSON reads stop at 32 MiB. Larger reports retain full JSON and reconstruct from bounded replay/original logs. Above 256 MiB or a 32 MiB replay body, finalization fails and raw logs remain. Legacy large reports use bounded direct parsing with higher memory. Search indices above 4 MiB are omitted.
 
-Short review-first summary:
+Structural reads/pruning validate reconstructed record counts/digests and discarded-line counts. Large-report streaming, completed-state recovery and archive preflight check the report digest/log sizes without replaying records. Streamed files must be regular and match their opened identity. Catalog metadata is not a full integrity scan.
 
-- Session metadata.
-- Changed file count.
-- Recorded command count.
-- Possible secret count.
-- Risk severity counts.
-- Risk score.
-- Review priority.
-- Notable changed files.
-- Top risk signals.
-- Report integrity status.
-- Baseline availability, HEAD/branch/index changes, pre-existing path count, watcher-observed path count, and session-relevant final change count.
-
-Use this report when you need the fastest overview.
-
-## `commands.md`
-
-Command metadata explicitly recorded through `abb run`:
-
-- Redacted command line.
-- Optional label.
-- Optional group and phase.
-- Repository-relative working directory.
-- Exit code.
-- Timestamp.
-
-Command durations use a monotonic clock. Start and end timestamps reflect system time and can appear out of order if the clock is adjusted during execution. Terminal output is not captured.
-
-## `timeline.md`
-
-Chronological view of observable activity:
-
-- Session metadata.
-- Wrapped command metadata.
-- File add/change/delete events.
-- Combined chronological timeline.
-- Net start-to-end HEAD changes.
-- Files added, modified, deleted, renamed, or otherwise detected by Git.
-
-Use this report first when you want to understand the shape of a session.
-
-## `diff-summary.md`
-
-Git-focused summary:
-
-- Current Git status.
-- Tracked Git diff summary.
-- Changed file table with line counts where available.
-- File kind, byte size, line-stat source, and skipped-estimation notes.
-- Estimated added-line counts for small untracked text files.
-- Notable risk categories.
-
-Line counts for untracked files are best-effort estimates. Large files, binary-like files, missing files, and non-regular files are explicitly marked as skipped instead of being reported as zero-line text changes.
-
-## `risks.md`
-
-Review signals based on path patterns and changed files:
-
-- Environment files.
-- Dependency and lock files.
-- CI/CD files.
-- Docker files.
-- Migrations.
-- Auth and security paths.
-- Config files.
-- Possible secret-like values.
-
-Findings are not proof of a vulnerability. They are prompts for human review.
-
-When a valid start baseline exists, risk and possible-secret analysis excludes unchanged pre-existing paths. If the Git index changes without reliable per-file watcher attribution, all final changes remain in scope as a cautious fallback. If the baseline is missing or unreadable, all final Git changes also remain in scope and the report records limited attribution confidence.
-
-Each risk includes a deterministic score from 0 to 100. Scores are derived from severity, change size, and file status. Possible secret findings raise the overall session risk score but still require human validation.
-
-Filter latest risk output:
-
-```sh
-abb risks --min-severity high
-abb risks --category "CI/CD file"
-abb risks --json --min-severity medium
-```
-
-## Exports
-
-`abb export` creates a single review artifact from the selected session, defaulting to the latest completed session:
-
-- Markdown export bundles `summary.md`, `commands.md`, `timeline.md`, `diff-summary.md`, `risks.md`, and `rollback.md`.
-- JSON export emits the structured `session.json`.
-- Risk filters can be applied to Markdown exports.
-- Existing output files are not overwritten unless `--force` is provided.
-
-All report and export commands accept `--session <id>`. The selector can be `latest`, a full session ID, or a unique session ID prefix.
-
-## Session comparison
-
-`abb sessions compare <from> <to>` compares session-relevant files, reported file metadata, risk findings and scores, command frequencies and failures, and start/end HEAD values. Use `--json` for structured automation output.
-
-## `rollback.md`
-
-Manual rollback guidance:
-
-- Current Git status.
-- `git status --short`.
-- `git diff`.
-- File-level `git diff -- <file>` suggestions.
-- `git restore -- <file>` and `git checkout -- <file>` suggestions for modified tracked files.
-- Optional interactive apply mode for eligible tracked modified/deleted files.
-- Automatic exclusion of paths that already had changes at session start.
-
-Agent Black Box never automatically reverts changes.
-
-Interactive apply restores to `HEAD`, not to the session baseline. Excluding pre-existing changes prevents the command from discarding work that predates the session.
-
-## Redaction
-
-Reports redact possible secret values. Command metadata also redacts sensitive-looking arguments before writing them to disk.
-
-The tool is heuristic. It can miss real secrets and can produce false positives. Treat reports as review aids, not security proof.
+Pruning rereads eligible reports before deletion. Archiving verifies copied bytes with streaming checksums, marks completion and keeps originals. Inspect interrupted quarantine/partial-archive directories before cleanup. [Audit](AUDIT.md) records resource and filesystem-race limitations.

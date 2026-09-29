@@ -1,286 +1,172 @@
-# Usage Guide
+# Usage
 
-This guide walks through the normal Agent Black Box workflow from setup to report review.
+See the [English/Türkçe overview](../README.md), [report reference](REPORTS.md), and [architecture](ARCHITECTURE.md).
 
-The README is available in [English](../README.md#english) and [Türkçe](../README.md#turkce).
+## Setup and configuration
 
-## Requirements
-
-- Node.js 22 or newer. Node.js 20 reached end of life and is no longer supported.
-- pnpm 10.30.3, as pinned in `package.json`.
-- A Git repository.
-
-Agent Black Box relies on Git status and diffs, so `abb start`, `abb stop`, and report commands must run inside a Git repository.
-
-## Install From Source
+Requires Node.js 22 or newer, Git on PATH, and pnpm 10.30.3 as pinned in `package.json`. From a source checkout:
 
 ```sh
-pnpm install
+pnpm install --frozen-lockfile
 pnpm build
 ```
 
-During development, use:
+Examples use `abb`; substitute `pnpm dev` or `node dist/cli.js`. Use `abb --help` or `abb <command> --help` for help and `abb --version` for the version. Recording, analysis, history, and report commands require a Git repository; initialization and config validation/migration can run outside one.
 
 ```sh
-pnpm dev <command>
-```
-
-After building, use:
-
-```sh
-node dist/cli.js <command>
-```
-
-The examples below use `abb` as shorthand. For a source checkout without a globally installed executable, replace `abb` with `pnpm dev` or `node dist/cli.js`.
-
-## Initialize
-
-```sh
-abb init
-```
-
-This creates `.agentblackbox.json` with defaults for session output, ignored paths, risk patterns, and maximum file size for secret scanning.
-
-The generated file includes a `configVersion` and `$schema` reference for editor validation.
-
-Validate or migrate config:
-
-```sh
+abb init # Only when .agentblackbox.json does not exist
 abb config validate
 abb config migrate
+abb doctor
 ```
 
-Legacy config files without `configVersion` still load in memory. Use `abb config migrate` when you want the file rewritten with the current schema.
+`init` creates configuration without replacing an existing file, including concurrent creation. Exclusive atomic publication requires filesystem hard-link support and fails visibly when unavailable. Legacy configuration without `configVersion` loads in memory; `config migrate` rewrites it with the current schema.
 
-Optional retention defaults can be added without changing the config version:
+| Setting                            | Default and contract                                                             |
+| ---------------------------------- | -------------------------------------------------------------------------------- |
+| `configVersion`, `$schema`         | Version `1` and an editor-validation schema reference                            |
+| `sessionDir`                       | `.agent-black-box/sessions`; physically inside the repository by default         |
+| `exclude`                          | `node_modules`, `.git`, `dist`, `build`, `coverage`, `.next`, `.agent-black-box` |
+| `riskPatterns`                     | Built-in sensitive paths                                                         |
+| `maxFileSizeKb`                    | `500`; integer from 1 to 102400, measured in 1024-byte units                     |
+| `retention.days`, `retention.keep` | Optional integers from 1 to 100000                                               |
+| `retention.archiveDir`             | Optional trusted local archive destination                                       |
+
+Non-empty custom `exclude` and `riskPatterns` arrays replace defaults; empty arrays fall back to defaults. See [default risk patterns](https://github.com/IACBI/agent-black-box/blob/main/src/config/defaults.ts). Matching is case-insensitive and uses path components/segments, not glob expressions. If you move storage to another repository directory, add its parent to `exclude` to avoid recording its output.
+
+Optional retention defaults do not trigger automatic copying or deletion:
 
 ```json
 { "retention": { "days": 30, "keep": 2, "archiveDir": ".agent-black-box/archive" } }
 ```
 
-These values set the default UTC cutoff, minimum newest-session count, and local archive destination for `sessions prune` and `sessions archive`. No deletion or copying runs automatically.
-
-## Session Output Location
-
-`sessionDir` is resolved from the repository root and must remain inside that repository by default. This prevents repository-controlled configuration from silently sending session evidence to another local or network location. UNC and network paths are always rejected.
-
-If you intentionally use a trusted local directory outside the repository, explicitly opt in for the command that needs it:
+To intentionally use trusted local session storage outside the repository, pass the global `--allow-external-session-dir` option on every relevant command:
 
 ```sh
 abb --allow-external-session-dir start
 ```
 
-Use this only for a location you control. The override is not stored in `.agentblackbox.json`, so a cloned repository cannot silently reuse the permission.
+The override is not saved in configuration. UNC/network storage is rejected.
 
-## Start A Session
+## Record and finalize
+
+Start the foreground watcher and leave it running while editing:
 
 ```sh
 abb start
 ```
 
-`abb start` runs as a foreground watcher. Leave it open while your editor, scripts, or coding agent changes files.
-
-New session IDs combine a timestamp and a random suffix. Treat IDs as opaque values obtained from `abb sessions list`; full IDs and unique prefixes continue to work, including IDs created by earlier versions. Session creation never reuses an existing session directory.
-
-Before watcher observations begin, Agent Black Box stores a Git baseline. Starting from a clean or understood worktree gives the clearest attribution, but a dirty worktree is supported and its existing changes are marked as pre-existing.
-
-## Record Commands
-
-Command recording is opt-in:
+In another terminal:
 
 ```sh
 abb run -- pnpm test
-abb run -- git status --short
-abb run --cwd packages/app --label unit-tests -- pnpm test
-abb run --group validation --phase test -- pnpm test
-```
-
-Only metadata is recorded:
-
-- Redacted command line.
-- Working directory.
-- Optional label.
-- Optional group and phase.
-- Start and end time.
-- Duration.
-- Exit code.
-
-Terminal output is not captured. Duration uses a monotonic clock, while start and end timestamps use system time; a clock adjustment can move timestamps backwards without losing the command record.
-
-Pass the executable and arguments directly after `--`. Native executables run without a shell. On Windows, `.cmd` and `.bat` shims require a `cmd.exe` wrapper; arguments containing percent signs or line breaks are rejected because the command interpreter can expand or reinterpret them.
-
-`--cwd` must resolve physically inside the repository. Paths that escape through a symbolic link or junction are rejected.
-
-Use `--group` for related command batches such as `validation`, `release`, or `database`. Use `--phase` for workflow stages such as `setup`, `test`, `build`, or `deploy`.
-
-Sensitive-looking assignments and flags are redacted before writing reports:
-
-```text
-API_TOKEN=<redacted>
---password <redacted>
---client-secret=<redacted>
---header=X-Api-Key:<redacted>
---data=<redacted>
-```
-
-Credential-bearing URL user information and sensitive URL query parameters are also redacted, including URLs passed as option values. JSON arguments with sensitive-looking keys are masked as a whole. Labels, groups, and phases receive the same best-effort treatment. Review reports before sharing them: arbitrary command syntax cannot be guaranteed secret-free.
-
-## Stop A Session
-
-From another terminal:
-
-```sh
+abb run --cwd packages/app --label unit-tests --group validation --phase test -- pnpm test
+abb status
 abb stop
+abb summary
+abb risks
 ```
 
-`abb stop` validates the active repository, session directory, and lock owner before writing a stop request. Corrupt or inconsistent state produces an error and remains available for diagnosis. The foreground watcher receives a valid stop request, flushes pending file events, captures Git state, writes reports, and clears active session state.
+A session stores the starting Git baseline, so an understood dirty worktree is supported and existing changes are marked as pre-existing. Session IDs are opaque; obtain them from history rather than constructing timestamp-based IDs.
 
-If the watcher process is stale, recover it explicitly from the current Git state:
+`run` accepts `--cwd`, `--label`, `--group`, and `--phase`. Pass executable arguments after `--`; native executables run without a shell. The working directory must remain physically inside the repository, including through symlinks/junctions. Standard input/output are inherited, not stored. The child exit code is propagated; startup failure returns 1 and is recorded. Durations use a monotonic clock; timestamps use system time.
 
-```sh
-abb recover
-```
+On Windows, `.cmd`/`.bat` shims use a `cmd.exe` wrapper. Batch arguments containing percent signs, line breaks, or NUL are rejected. Bare `.cmd` names resolve through PATH; bare `.bat` resolution remains limited, so use an explicit path such as `abb run -- .\scripts\task.bat`. Compound shell syntax is not interpreted for native executables.
 
-Recovery only runs when active state and lock ownership agree. Completion metadata alone is insufficient to remove stale state: the completed report must also be valid. For a diagnosis and safe repair in one command, use `abb doctor --repair`.
+Command metadata is redacted before writing. Supported forms include sensitive assignments/flags, headers, JSON arguments with sensitive keys, URL credentials, and sensitive query parameters. Labels, groups, and phases receive the same best-effort redaction. Arbitrary command syntax is not guaranteed secret-free.
 
-## Analyze Current Changes Without A Watcher
+`stop` verifies active state and lock ownership, requests finalization, and waits for the watcher. In-flight recorded commands delay finalization. After roughly ten seconds the CLI can report that finalization is pending; the watcher continues. Use `status` to check progress.
 
-Use `analyze` in CI or before a review when a recording session is unnecessary:
+For a dead watcher, use `abb recover` or `abb doctor --repair`. Repair requires verified stale ownership or valid completed reports backing the state. Corrupt/inconsistent state remains available for diagnosis; do not delete evidence merely to silence an error.
+
+## Analyze without recording
 
 ```sh
 abb analyze
 abb analyze --format json
 abb analyze --format sarif --fail-on high
-abb analyze --staged --format json
-abb analyze --staged --baseline HEAD --format json
-abb analyze --staged --baseline HEAD --policy new-secrets --format sarif
+abb analyze --staged --baseline HEAD --policy complete-review --format sarif
 ```
 
-By default, it inspects included working-tree changes with bounded local reads. `--staged` inspects the Git index blobs instead, so unstaged edits cannot change the pre-commit result. Add `--baseline <ref>` to compare staged content against a fixed Git commit: identical existing secret-like lines are suppressed up to their baseline occurrence count, while metadata risks remain visible. When Git identifies a rename between that commit and the index, the old path supplies the baseline if the new path did not exist there. Excluded source paths and renames Git cannot establish remain visible as new content findings. Text output lists skipped paths and rename sources; JSON includes `coverage` and `baselineComparison.renameSources` with destination, source, and suppression count, and SARIF includes the corresponding run properties. Findings contain locations and fixed descriptions only; they never include matched secret values.
+| Option                 | Behavior                                                           |
+| ---------------------- | ------------------------------------------------------------------ |
+| `--format <format>`    | `text` (default), `json`, or `sarif`                               |
+| `--staged`             | Read index blobs instead of working-tree content                   |
+| `--baseline <ref>`     | With `--staged`, compare against a resolved Git commit             |
+| `--fail-on <severity>` | Exit 1 for a finding at or above `low`, `medium`, or `high`        |
+| `--policy <profile>`   | `new-secrets` or `complete-review`; requires `--staged --baseline` |
 
-For CI, `--policy new-secrets` exits with code 1 only when staged content contains a possible secret not found at the selected baseline. `--policy complete-review` also fails when non-deleted staged content or needed baseline content could not be scanned. Both require `--staged --baseline`; the chosen profile and counts appear in text, JSON, and SARIF output. `--fail-on` remains available and, when combined with a policy, either rule can fail the command.
+Baseline comparison suppresses identical existing secret-like lines up to their baseline occurrence count. Git-verified renames can use the previous path as the baseline. Metadata risks remain visible; excluded baseline paths and unverified rename relationships do not suppress content findings.
 
-Assignment checks consider each supported assignment on a line, including values after a benign assignment, and retain one secret finding per line. SARIF output shares rule descriptors across matching findings and percent-encodes file URI components, preserving paths containing spaces, `#`, or `%`.
+`new-secrets` fails on newly detected possible secrets. `complete-review` also fails when non-deleted staged content or needed baseline content could not be scanned. Combining `--fail-on` and a policy fails when either condition applies. Operational errors return 1; findings alone do not fail the command without a threshold/policy.
 
-## Review Reports
+Worktree, staged, and baseline CLI reads are capped at the smaller of `maxFileSizeKb` and 256 KiB. Deleted, binary, oversized, unsafe, or unavailable content is reported as skipped. Text summarizes coverage; JSON and SARIF retain structured coverage, policy, and rename-comparison details. Findings contain locations and fixed descriptions, not matched values.
+
+Recorded-session detection and `analyze` use different heuristics. For example, recording can flag an environment-variable password assignment that analysis excludes, while analysis recognizes some token/private-key forms absent from the recording detector. Neither is a comprehensive security scanner; see [Audit](AUDIT.md).
+
+## Read and export reports
+
+All commands below accept `--session <id>`: full ID, unique prefix, or `latest` (default).
+
+| Command        | Result / additional options                                                                                       |
+| -------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `abb report`   | Full stored session JSON                                                                                          |
+| `abb summary`  | Review summary                                                                                                    |
+| `abb commands` | Recorded command metadata                                                                                         |
+| `abb timeline` | File events and commands                                                                                          |
+| `abb risks`    | Risk report; `--min-severity low\|medium\|high`, `--category <category>`, `--json`                                |
+| `abb rollback` | Advisory restore plan; interactive options below                                                                  |
+| `abb export`   | Bundled Markdown (default) or full JSON via `--format markdown\|json`; `--output <path>`, `--force`, risk filters |
+
+Risk category filtering matches an exact category case-insensitively. Severity/category filters narrow risk findings, not overall summaries or the separate possible-secret list. Export filters apply only to the Markdown risk section; JSON remains a full report.
 
 ```sh
-abb report
-abb summary
-abb commands
-abb timeline
-abb risks
-abb risks --min-severity high
-abb risks --category "CI/CD file" --json
-abb rollback
-abb export --output abb-session.md
-abb export --format json --output abb-session.json
+abb risks --session latest --min-severity high --json
+abb export --session latest --output review.md
+abb export --format json --output review.json
 ```
 
-Select a specific completed session with a full ID, unique prefix, or `latest`:
+Exports write to stdout unless `--output` is supplied. Existing destinations require `--force`, which atomically replaces the destination file; a destination leaf symlink is replaced rather than writing through to its target. File formats, evidence fields, integrity verification, and storage limits are defined in [Reports](REPORTS.md).
 
-```sh
-abb summary --session session-2026-06-19
-abb risks --session session-2026-06-19 --min-severity high
-abb export --session session-2026-06-19 --output selected-session.md
-```
-
-Reports are stored under:
-
-```text
-.agent-black-box/sessions/<session-id>/
-```
-
-## Session History And Comparison
-
-```sh
-abb sessions list
-abb sessions list --json
-abb sessions list --state complete --since 2026-01-01 --min-severity medium
-abb sessions list --file src/auth --command test --category security --limit 20
-abb sessions browse --state complete --page-size 10
-abb sessions show <session-id>
-abb sessions show <session-id> --json
-abb sessions compare <from-session> <to-session>
-abb sessions compare <from-session> <to-session> --json
-abb sessions prune --before 2026-01-01
-abb sessions archive --before 2026-01-01 --to .agent-black-box/archive
-```
-
-The catalog lists complete, incomplete, and corrupt sessions. Only completed sessions can be shown, compared, exported, or selected by report commands. `latest` resolves to the newest completed session, so an active incomplete session does not hide the latest usable report.
-
-History filters are case-insensitive substring matches for session-relevant file paths, recorded redacted commands, and risk categories. Date filtering uses UTC. Content filters use a bounded search index for new sessions and fall back to the validated report for older sessions. A filtered result is marked `latest` only when it is also the newest completed session overall.
-
-`sessions browse` supports the state, date, severity, file, command, and category filters in an interactive terminal. Enter a number to read a completed session summary, `n` or `p` to change pages, and `q` to quit. Incomplete and corrupt sessions remain visible but cannot be opened. Page size is limited to 1–50 to keep terminal output bounded.
-
-`sessions prune` previews completed sessions started before the given UTC date and keeps at least the newest completed session (or `--keep <count>`). Incomplete and corrupt directories are never selected. To delete the previewed sessions, run the same command with `--apply` in an interactive terminal and type the requested confirmation. The command rechecks the catalog, report validity, active state, and directory links before deletion. If deletion is interrupted, a hidden `.pruning-*` directory may remain under the session root; inspect it manually before removing it.
-
-`sessions archive` uses the same selection policy, previews the destination, and copies eligible sessions only after `--apply` and typed confirmation. It streams file checksums to verify each copy and writes `.abb-archive-complete.json` after verification. Original sessions remain in place; use the separate `prune` preview if you later choose to delete them. An interrupted copy leaves an archive directory without the completion marker for manual inspection. Archives contain the same potentially sensitive reports as the originals, so choose a trusted local destination. The archive cannot be inside the session root, and an existing session ID at the destination is never overwritten.
-
-Interactive `abb rollback --apply` is restricted to the latest completed session. Historical rollback reports remain readable with `--session`, but they cannot be applied to the current worktree. Apply also checks that HEAD, the Git index, eligible path status, and eligible file contents still match the session's private rollback snapshot. If the snapshot is missing or anything differs, apply stops without restoring files.
-
-## Recommended Workflow
-
-1. Start from a clean or understood Git state.
-2. Run `abb start`.
-3. Let your AI coding agent or editor make changes.
-4. Run important commands through `abb run -- <command>`.
-5. Run `abb stop`.
-6. Read `timeline.md`, `risks.md`, and `rollback.md`.
-7. Review `git diff` before committing.
-
-## Doctor
-
-Use `doctor` when setup or session state looks wrong:
-
-```sh
-abb doctor
-abb doctor --repair
-```
-
-It checks Node.js, Git repository detection, config, write access, session directory, and validated session ownership. `--repair` only finalizes a safely identified stale session or removes state already backed by completed reports.
-
-## Safe Rollback Apply
-
-Rollback is advisory by default. To restore eligible tracked modified/deleted files, use explicit interactive mode:
+### Rollback
 
 ```sh
 abb rollback --apply --file src/example.ts
 ```
 
-Agent Black Box prints a plan and requires typed confirmation before running `git restore`. Added or untracked files are never removed automatically.
+Without `--apply`, rollback only prints guidance. Apply requires an interactive terminal, a preview, and typed confirmation. `--file <path...>` narrows the plan; only eligible tracked modified/deleted files from the latest completed session can be restored. Added/untracked files are not deleted, and paths changed before recording are excluded.
 
-Files that already had changes at session start are not eligible for interactive restore. `git restore --source=HEAD` cannot preserve their pre-session state, so applying it would risk data loss.
+Before restore, HEAD, index fingerprint, selected path status, contents, and location must still match the private session-end snapshot. Missing or changed evidence refuses apply. Restore uses `HEAD`, not a backup of the pre-session worktree. Manual report snippets use POSIX shell quoting; on Windows use CLI apply for eligible files or adapt commands deliberately.
 
-## Export
-
-Use `export` when you want a single artifact for review, issue attachments, or archival:
+## History and retention
 
 ```sh
-abb export --output abb-session.md
-abb export --format json --output abb-session.json
+abb sessions list --state complete --since 2026-01-01 --min-severity medium --limit 20
+abb sessions browse --file src/auth --command test --category security --page-size 10
+abb sessions show <id> --json
+abb sessions compare <from> <to> --json
 ```
 
-Existing files are not overwritten unless `--force` is supplied.
+`list` and `browse` support `--state complete|incomplete|corrupt`, `--since YYYY-MM-DD` (UTC, inclusive), `--min-severity`, `--file <text>`, `--command <text>`, and `--category <text>`. Text filters are case-insensitive substring matches. `list` also supports `--json` and positive-integer `--limit`. `browse` requires an interactive terminal; `--page-size` defaults to 10 and accepts 1–50. Select a number, `n`/`p` for pages, or `q` to quit. Incomplete/corrupt entries remain visible but cannot be opened.
 
-Markdown exports bundle the summary, commands, timeline, diff summary, risks, and rollback hints. JSON exports preserve the full `session.json` structure.
-
-## Common Problems
-
-### Not inside a Git repository
-
-Run Agent Black Box from a Git repository root or subdirectory.
-
-### Session is stale
-
-If the watcher was killed, run:
+`show` and `compare` accept full IDs, unique prefixes, or `latest`; both support `--json`. Comparison summarizes path, risk, command-frequency, and HEAD differences. Content history filters use a bounded metadata search index, with validated-report fallback for older sessions.
 
 ```sh
-abb recover
+abb sessions archive --before 2026-01-01 --keep 2 --to .agent-black-box/archive
+abb sessions prune --before 2026-01-01 --keep 2
 ```
 
-Agent Black Box finalizes from current Git state only when the state and lock owner match. Inconsistent or unreadable state is left untouched for manual review.
+These commands preview completed sessions started before the UTC cutoff (exclusive). Use `--before` or configure `retention.days`; `--keep` defaults to `retention.keep` or 1. Both require `--apply`, an interactive terminal, and typed confirmation to execute. Incomplete/corrupt sessions are excluded and active state, links, and the preview are rechecked before mutation.
 
-### No command history appears
+Archive requires `--to` or `retention.archiveDir`, outside the session root. It verifies copied files with checksums, never overwrites an existing session ID, and writes `.abb-archive-complete.json` only after verification. Originals remain in place. Prune validates full replay-record integrity before deletion. An interrupted prune can leave `.pruning-*` under the session root; an interrupted archive can lack its completion marker. Inspect these remnants before removing them.
 
-Only commands run through `abb run -- <command>` are recorded. Shell history is not inspected.
+## Troubleshooting
+
+| Symptom                               | Action                                                                                        |
+| ------------------------------------- | --------------------------------------------------------------------------------------------- |
+| No repository / invalid configuration | Run inside a Git repository; use `abb config validate` and `abb doctor`                       |
+| Stale session                         | Use `abb recover` or `abb doctor --repair`; preserve inconsistent state                       |
+| No command history                    | Record commands explicitly through `abb run`; shell history is not read                       |
+| Skipped analysis content              | Read coverage reasons; use `complete-review` when a partial CI review must fail               |
+| Refused rollback                      | Review changes since finalization and the eligible-file list; restore manually if appropriate |
+| Bare Windows `.bat` fails             | Pass its explicit repository-relative or absolute path                                        |
