@@ -2,7 +2,7 @@
 
 Agent Black Box releases are tag-driven.
 
-Full localized README documentation is available in the language section: [Languages](../README.md#languages).
+The README is available in [English](../README.md#english) and [Türkçe](../README.md#turkce).
 
 ## Preflight
 
@@ -28,6 +28,14 @@ Before pushing a release tag, include the intended tag in the same preflight:
 RELEASE_TAG=vX.Y.Z pnpm release:check
 ```
 
+In PowerShell, set the variable for that command and remove it afterward:
+
+```powershell
+$env:RELEASE_TAG = "vX.Y.Z"
+pnpm release:check
+Remove-Item Env:RELEASE_TAG
+```
+
 The command rejects a tag that does not match `package.json`. The release workflow always sets `RELEASE_TAG` from the pushed tag, so it also enforces tag, package, and changelog alignment.
 
 ## Versioning
@@ -38,20 +46,20 @@ Update these together:
 - `src/cli.ts`
 - `CHANGELOG.md`
 
-Use semver:
-
-- Patch for fixes.
-- Minor for compatible features.
-- Major for breaking behavior or runtime support changes.
+While the project remains at `0.x`, use a patch for fixes and a minor release for features or documented compatibility changes. After `1.0`, breaking behavior or runtime support changes require a major release.
 
 ## Create A Release
 
 After merging to `main` and confirming CI is green:
 
 ```sh
+git switch main
+git pull --ff-only origin main
 git tag vX.Y.Z
 git push origin vX.Y.Z
 ```
+
+Tag the verified `main` commit. After the workflow finishes, confirm that the GitHub Release contains the tarball, `SHA256SUMS`, and an attestation. The tag and package version must match.
 
 The release workflow builds, tests, audits production dependencies, validates version alignment, packs the npm tarball, writes `SHA256SUMS`, generates a signed GitHub build-provenance attestation, and creates a GitHub Release with the artifacts attached.
 

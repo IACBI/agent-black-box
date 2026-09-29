@@ -58,9 +58,17 @@ The implementation baseline at commit 690353f was validated on Windows with Node
 - 27 test files passed: 153 tests passed and one Windows file-symlink test was skipped. Coverage was 86.65% statements, 79.85% branches, 92.35% functions, and 86.35% lines.
 - The dependency audit reported no known advisories across 279 dependencies at the time of the check. Package dry run, release metadata validation, and performance budgets passed.
 - A real terminal run verified history pagination, summary opening, and exit.
-- [Draft PR #50](https://github.com/IACBI/agent-black-box/pull/50) passed all 12 hosted checks at that baseline, including CodeQL and Node.js 22/24 on Linux, macOS, and Windows.
+- [PR #50](https://github.com/IACBI/agent-black-box/pull/50) passed all 12 hosted checks at that baseline, including CodeQL and Node.js 22/24 on Linux, macOS, and Windows, and was merged.
 
 These results describe that revision and date. They do not establish the status of later changes or future dependency advisories. Performance checks are regression budgets, not cross-platform latency guarantees.
+
+## Dependency review for 0.8.0
+
+Prettier 3.9.9 and typescript-eslint 8.71.0 are compatible updates. Node.js type definitions now target Node 22, the project's minimum supported runtime, instead of Node 20. The CodeQL Action steps were updated together to v4.38.2 because mixing versions made individual Dependabot PRs fail.
+
+Major upgrades remain separate work: Commander 15 and Vitest 5 require at least Node 22.12 while the package currently promises Node 22 generally. TypeScript 7 is outside typescript-eslint 8.71.0's declared peer range. Vitest 5 and its coverage package must move together. Chokidar 5 and simple-git 4 need focused watcher and Git compatibility testing before changing runtime dependencies. Using Node 26 type definitions would allow APIs newer than the supported runtime baseline.
+
+The 0.8.0 release preflight passed on Windows with Node.js 24.12.0 and pnpm 10.30.3: formatting, lint, type checks, dead-code checks, build, 153 tests (one Windows file-symlink test skipped), package dry run, production audit, and release metadata validation. Coverage was 86.65% statements, 79.85% branches, 92.35% functions, and 86.35% lines. A full dependency audit found no known advisories across 286 packages, and the large-session performance budgets passed. These results describe the local preflight; hosted CI and release artifacts must be verified separately.
 
 ## Recommended next work
 

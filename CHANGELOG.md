@@ -2,21 +2,30 @@
 
 ## Unreleased
 
-- Updated the pinned CodeQL Action steps together to v4.38.2 and refreshed ESLint, typescript-eslint, Knip, and tsx development tooling.
+## 0.8.0
+
+### Review and history
+
 - Added staged analysis with fixed-commit baselines, count-aware secret suppression, and Git rename-source provenance in text, JSON, and SARIF.
 - Added `new-secrets` and `complete-review` CI policies, including explicit scan-coverage diagnostics.
 - Added filtered session history, interactive browsing, retention previews, and verified copy-only archives with optional configuration defaults.
 - Preserved full JSON reports with verified replay above 32 MiB and an explicit 256 MiB finalization limit that retains raw logs.
+
+### Safety and reliability
+
 - Added rollback end-state checks, command-finalization coordination, and persistent watcher capture-loss warnings.
 - Fixed adversarial JWT scanning cost, Unicode entropy calculation, header redaction, literal rollback path handling, and Windows batch argument quoting.
-- Consolidated audit documentation and updated usage, architecture, and contributor guidance.
-
-- Raised the supported runtime baseline to Node.js 22 and added a Node.js 22/24 Linux, Windows, and macOS CI matrix.
 - Added atomic state/report writes, physical repository containment for command working directories, and no-follow file inspection.
 - Expanded command metadata redaction for nested assignments, headers, URL credentials, and sensitive query parameters.
 - Streamed NDJSON finalization with bounded records, line sizes, and diagnostics.
+
+### Maintenance and documentation
+
+- Raised the supported runtime baseline to Node.js 22 and added a Node.js 22/24 Linux, Windows, and macOS CI matrix.
+- Updated the pinned CodeQL Action steps together to v4.38.2 and refreshed development tooling and Node.js type definitions.
 - Added deterministic bounded concurrency for Git file inspection and possible-secret scanning.
 - Added large-session performance budgets, release version checks, production dependency audits, and release checksums.
+- Focused the README on English and Turkish; consolidated the audit and updated usage, architecture, contributor, and release guidance.
 
 ## 0.7.0
 

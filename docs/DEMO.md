@@ -1,8 +1,8 @@
 # Demo
 
-This transcript shows the intended local workflow without relying on any cloud service.
+This walkthrough shows the local workflow without relying on any cloud service. The commands use an installed `abb` executable; in a source checkout, use `pnpm dev` instead.
 
-Full localized README documentation is available in the language section: [Languages](../README.md#languages).
+The README is available in [English](../README.md#english) and [Türkçe](../README.md#turkce).
 
 ```sh
 abb init
@@ -38,10 +38,26 @@ Inspect and compare history:
 
 ```sh
 abb sessions list
+abb sessions browse --state complete
 abb sessions show <session-id>
 abb sessions compare <older-session> <newer-session>
 abb summary --session <session-id>
 ```
+
+For a CI review without recording a session, inspect the Git index against a fixed commit:
+
+```sh
+abb analyze --staged --baseline HEAD --policy complete-review --format sarif
+```
+
+To manage older reports, preview eligible sessions before applying either action:
+
+```sh
+abb sessions archive --before 2026-01-01 --to .agent-black-box/archive
+abb sessions prune --before 2026-01-01
+```
+
+Archiving copies and verifies reports while preserving the originals. Pruning deletes only after explicit interactive confirmation.
 
 Rollback remains explicit:
 

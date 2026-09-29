@@ -4,7 +4,7 @@ Agent Black Box generates Markdown reports for humans and `session.json` for too
 
 The full `session.json` format remains the same for large sessions. When it exceeds 32 MiB, a small versioned `session-replay.json` lets the CLI reopen it from the original event logs without parsing the entire JSON file. The CLI verifies the full report digest, log sizes, and reconstructed event contents. Reports larger than 256 MiB are refused during finalization with an explicit error; raw event logs remain in the session directory. Older large reports without replay metadata remain readable through a bounded, higher-memory fallback.
 
-Full localized README documentation is available in the language section: [Languages](../README.md#languages).
+The README is available in [English](../README.md#english) and [Türkçe](../README.md#turkce).
 
 ## `session.json`
 

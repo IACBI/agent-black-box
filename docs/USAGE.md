@@ -2,7 +2,7 @@
 
 This guide walks through the normal Agent Black Box workflow from setup to report review.
 
-Full localized README documentation is available in the language section: [Languages](../README.md#languages).
+The README is available in [English](../README.md#english) and [Türkçe](../README.md#turkce).
 
 ## Requirements
 

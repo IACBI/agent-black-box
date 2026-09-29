@@ -1,7 +1,7 @@
 {
   "name": "agent-black-box",
-  "version": "0.7.0",
-  "description": "Local-first CLI that records and explains observable repository changes during AI coding sessions.",
+  "version": "0.8.0",
+  "description": "Local-first CLI for reviewing repository changes and risk signals during AI-assisted coding.",
   "type": "module",
   "packageManager": "pnpm@10.30.3",
   "pnpm": {
@@ -16,7 +16,7 @@
   "bugs": {
     "url": "https://github.com/IACBI/agent-black-box/issues"
   },
-  "homepage": "https://github.com/IACBI/agent-black-box#readme",
+  "homepage": "https://github.com/IACBI/agent-black-box/blob/main/docs/USAGE.md",
   "bin": {
     "abb": "dist/cli.js"
   },
@@ -65,14 +65,14 @@
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
-    "@types/node": "^20.19.17",
+    "@types/node": "^22.20.4",
     "@vitest/coverage-v8": "4.1.11",
     "eslint": "10.11.0",
     "knip": "6.38.0",
-    "prettier": "3.9.6",
+    "prettier": "3.9.9",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3",
-    "typescript-eslint": "8.70.1",
+    "typescript-eslint": "8.71.0",
     "vitest": "^4.1.11"
   }
 }

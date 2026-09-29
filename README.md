@@ -119,7 +119,7 @@ CI ortamında Git'e eklenmiş değişiklikleri sabit bir commit ile karşılaşt
 abb analyze --staged --baseline HEAD --policy complete-review --format sarif
 ```
 
-`new-secrets` ilk kez görülen olası gizli değerlerde başarısız olur. `complete-review`, incelenmesi gereken staged veya başlangıç içeriği taranamadığında da başarısız olur. İki politika da `--staged --baseline` gerektirir. Metin, JSON ve SARIF çıktıları atlanan dosyaları ve Git'in doğruladığı yeniden adlandırma kaynaklarını gösterir; eşleşen gizli değerleri yazdırmaz. Bulgular, kesin güvenlik açığı tespiti değil, inceleme işaretleridir.
+`new-secrets`, karşılaştırılan commit'te bulunmayan olası gizli değerler saptandığında işlemi başarısız sayar. `complete-review`, Git'e eklenmiş dosyalar veya karşılaştırma için gereken başlangıç dosyaları taranamadığında da başarısız olur. İki politika da `--staged --baseline` gerektirir. Metin, JSON ve SARIF çıktıları atlanan dosyaları ve Git'in doğruladığı yeniden adlandırma kaynaklarını gösterir; eşleşen gizli değerleri yazdırmaz. Bulgular, kesin güvenlik açığı tespiti değil, inceleme işaretleridir.
 
 Tamamlanmış oturumları `abb sessions browse` ile etkileşimli inceleyebilirsiniz. Tam kimlik, benzersiz ön ek veya `latest` seçimi için `--session <id>` kullanılır. Arşivleme önce önizleme gösterir, ardından doğrulanmış kopyalar oluşturur; asıl oturumları silmez. Eski oturumları silme işlemi de önce önizlenir ve uygulanması için yazılı onay gerekir. Bu işlemler kendiliğinden çalışmaz.
 
