@@ -35,7 +35,7 @@ Hosted CI covers Node.js 22/24 on Linux, Windows and macOS, including POSIX regr
 
 ## Remaining limits and next work
 
-- [CodeQL #4](https://github.com/IACBI/agent-black-box/security/code-scanning/4) and [#5](https://github.com/IACBI/agent-black-box/security/code-scanning/5) were open at medium severity on 2026-09-30 for Windows command construction. No findings were suppressed; independent parser review is recommended.
+- Baseline `91624bf` had medium CodeQL [#4](https://github.com/IACBI/agent-black-box/security/code-scanning/4) and [#5](https://github.com/IACBI/agent-black-box/security/code-scanning/5) for Windows command construction. PR #57 reports [#6](https://github.com/IACBI/agent-black-box/security/code-scanning/6) for the same environment-derived execution rule at the relocated spawn call. These findings were not dismissed or suppressed; independent parser review remains recommended. Check [current alerts](https://github.com/IACBI/agent-black-box/security/code-scanning) for active identities after reanalysis.
 - Bare `.bat`-only Windows commands can fail in the `.cmd` fallback. Use explicit `.bat` paths; fix PATH/PATHEXT without retrying failed scripts.
 - Structured counts remain unstaged counts. Define staged/worktree/net semantics before extending statistics/scoring.
 - Init requires hard-link support and fails safely without it. Windows pending-deletion EPERM remains a visible permission error.
