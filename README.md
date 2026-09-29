@@ -26,7 +26,7 @@ Agent Black Box records file events, Git evidence, and the commands you run thro
 - Redacted command history through `abb run`.
 - Risk and possible-secret findings, plus watcherless and staged analysis with text, JSON, and SARIF output.
 - CI policies (`new-secrets`, `complete-review`) that compare staged content against a fixed commit.
-- Session history, comparison, verified archives, and guarded pruning and rollback.
+- Session history, comparison, integrity verification, verified archives, and guarded pruning and rollback.
 
 ### Requirements
 
@@ -57,14 +57,14 @@ pnpm dev summary
 pnpm dev risks
 ```
 
-| Purpose               | Commands                                                                                                 |
-| --------------------- | -------------------------------------------------------------------------------------------------------- |
-| Setup and diagnostics | `abb init`, `abb config validate`, `abb config migrate`, `abb doctor`, `abb status`                      |
-| Recording             | `abb start`, `abb run -- <command>`, `abb stop`, `abb recover`                                           |
-| Independent analysis  | `abb analyze`                                                                                            |
-| History               | `abb sessions list`, `abb sessions browse`, `abb sessions show <id>`, `abb sessions compare <from> <to>` |
-| Retention             | `abb sessions archive`, `abb sessions prune`                                                             |
-| Reports               | `abb report`, `abb summary`, `abb commands`, `abb timeline`, `abb risks`, `abb export`, `abb rollback`   |
+| Purpose               | Commands                                                                                                                        |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Setup and diagnostics | `abb init`, `abb config validate`, `abb config migrate`, `abb doctor`, `abb status`                                             |
+| Recording             | `abb start`, `abb run -- <command>`, `abb stop`, `abb recover`                                                                  |
+| Independent analysis  | `abb analyze`                                                                                                                   |
+| History               | `abb sessions list`, `abb sessions browse`, `abb sessions show <id>`, `abb sessions compare <from> <to>`, `abb sessions verify` |
+| Retention             | `abb sessions archive`, `abb sessions prune`                                                                                    |
+| Reports               | `abb report`, `abb summary`, `abb commands`, `abb timeline`, `abb risks`, `abb export`, `abb rollback`                          |
 
 Completed sessions are stored in `.agent-black-box/sessions/<session-id>/` as `session.json`, `session-metadata.json`, `summary.md`, `commands.md`, `timeline.md`, `diff-summary.md`, `risks.md`, and `rollback.md`. Select one with `--session <id>` using a full ID, a unique prefix, or `latest`. Reports separate pre-existing changes, watcher observations, and final Git evidence, including commits made between the starting and ending HEAD.
 
@@ -110,7 +110,7 @@ Agent Black Box; dosya olaylarını, Git verilerini ve kendi üzerinden çalış
 - `abb run` ile maskelenmiş komut geçmişi.
 - Risk ve olası gizli değer bulguları; izleyicisiz ve staged analiz (metin, JSON, SARIF çıktısı).
 - Staged içeriği sabit bir commit ile karşılaştıran CI politikaları (`new-secrets`, `complete-review`).
-- Oturum geçmişi, karşılaştırma, doğrulanmış arşiv ile onaylı silme ve geri alma.
+- Oturum geçmişi, karşılaştırma, bütünlük doğrulaması, doğrulanmış arşiv ile onaylı silme ve geri alma.
 
 ### Gereksinimler
 
@@ -141,14 +141,14 @@ pnpm dev summary
 pnpm dev risks
 ```
 
-| Amaç                | Komutlar                                                                                                 |
-| ------------------- | -------------------------------------------------------------------------------------------------------- |
-| Kurulum ve tanılama | `abb init`, `abb config validate`, `abb config migrate`, `abb doctor`, `abb status`                      |
-| Kayıt               | `abb start`, `abb run -- <command>`, `abb stop`, `abb recover`                                           |
-| Bağımsız analiz     | `abb analyze`                                                                                            |
-| Geçmiş              | `abb sessions list`, `abb sessions browse`, `abb sessions show <id>`, `abb sessions compare <from> <to>` |
-| Saklama             | `abb sessions archive`, `abb sessions prune`                                                             |
-| Raporlar            | `abb report`, `abb summary`, `abb commands`, `abb timeline`, `abb risks`, `abb export`, `abb rollback`   |
+| Amaç                | Komutlar                                                                                                                        |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Kurulum ve tanılama | `abb init`, `abb config validate`, `abb config migrate`, `abb doctor`, `abb status`                                             |
+| Kayıt               | `abb start`, `abb run -- <command>`, `abb stop`, `abb recover`                                                                  |
+| Bağımsız analiz     | `abb analyze`                                                                                                                   |
+| Geçmiş              | `abb sessions list`, `abb sessions browse`, `abb sessions show <id>`, `abb sessions compare <from> <to>`, `abb sessions verify` |
+| Saklama             | `abb sessions archive`, `abb sessions prune`                                                                                    |
+| Raporlar            | `abb report`, `abb summary`, `abb commands`, `abb timeline`, `abb risks`, `abb export`, `abb rollback`                          |
 
 Tamamlanan oturumlar `.agent-black-box/sessions/<session-id>/` altında `session.json`, `session-metadata.json`, `summary.md`, `commands.md`, `timeline.md`, `diff-summary.md`, `risks.md` ve `rollback.md` dosyalarıyla saklanır. Birini seçmek için `--session <id>` ile tam kimlik, benzersiz ön ek veya `latest` kullanın. Raporlar önceden var olan değişiklikleri, izleyici gözlemlerini ve son Git verilerini ayırır; başlangıç ile bitiş HEAD arasında yapılan commit'leri de gösterir.
 

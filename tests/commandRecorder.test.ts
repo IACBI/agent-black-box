@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, symlink, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONFIG } from "../src/config/defaults.js";
@@ -9,7 +9,9 @@ import {
   recordAndRunCommand,
   redactCommandParts,
   resolveRunCwd,
+  resolveWindowsScript,
 } from "../src/commands/commandRecorder.js";
+import { getRepositoryRoot } from "../src/git/git.js";
 import {
   createSession,
   getActiveSessionPath,
@@ -225,6 +227,128 @@ describe("command recorder", () => {
         await expect(readFile(path.join(dir, "injected.txt"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
         expect(await recordAndRunCommand([scriptPath, "%USERNAME%"], dir)).toBe(1);
         expect(JSON.parse(await readFile(outputPath, "utf8"))).toEqual(args);
+      } finally {
+        await removeTempDir(dir);
+      }
+    },
+    15_000
+  );
+
+  it("resolves bare script names through absolute PATH entries in PATHEXT order", async () => {
+    const dir = await createTempDir();
+    try {
+      const first = path.join(dir, "first");
+      const second = path.join(dir, "second");
+      await mkdir(first);
+      await mkdir(second);
+      await writeFile(path.join(first, "task.bat"), "@echo off\r\n");
+      await writeFile(path.join(first, "task.cmd"), "@echo off\r\n");
+      await writeFile(path.join(second, "batonly.bat"), "@echo off\r\n");
+      const searchPath = [first, second].join(path.delimiter);
+
+      expect(resolveWindowsScript("task", dir, { PATH: searchPath, PATHEXT: ".COM;.EXE;.BAT;.CMD" })).toBe(
+        path.join(first, "task.bat")
+      );
+      expect(resolveWindowsScript("task", dir, { PATH: searchPath, PATHEXT: ".CMD;.BAT" })).toBe(
+        path.join(first, "task.cmd")
+      );
+      expect(resolveWindowsScript("batonly", dir, { PATH: searchPath })).toBe(path.join(second, "batonly.bat"));
+      expect(resolveWindowsScript("missing", dir, { PATH: searchPath })).toBeNull();
+      expect(resolveWindowsScript("task", dir, { PATH: searchPath, PATHEXT: ".EXE;.VBS" })).toBe(
+        path.join(first, "task.cmd")
+      );
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
+  it("never resolves a script from the current directory or relative PATH entries", async () => {
+    const dir = await createTempDir();
+    try {
+      await writeFile(path.join(dir, "shadow.cmd"), "@echo off\r\n");
+
+      expect(resolveWindowsScript("shadow", dir, { PATH: ["", ".", "relative"].join(path.delimiter) })).toBeNull();
+      expect(resolveWindowsScript("shadow", dir, { PATH: undefined })).toBeNull();
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
+  it("resolves scripts named with a directory part against the working directory", async () => {
+    const dir = await createTempDir();
+    try {
+      await mkdir(path.join(dir, "scripts"));
+      await writeFile(path.join(dir, "scripts", "build.bat"), "@echo off\r\n");
+
+      expect(resolveWindowsScript(path.join("scripts", "build"), dir, {})).toBe(path.join(dir, "scripts", "build.bat"));
+      expect(resolveWindowsScript(path.join("scripts", "absent"), dir, {})).toBeNull();
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
+  it.skipIf(process.platform !== "win32")(
+    "runs a bare .bat-only command from PATH and propagates its exit code",
+    async () => {
+      const dir = await createTempDir();
+      const originalPath = process.env.PATH;
+      try {
+        initGitRepo(dir);
+        const binDir = path.join(dir, "bin dir");
+        await mkdir(binDir);
+        const outputPath = path.join(dir, "bat-output.txt");
+        await writeFile(
+          path.join(binDir, "onlybat.bat"),
+          `@echo off\r\n(echo %1)> "${outputPath}"\r\nexit /b 7\r\n`,
+          "utf8"
+        );
+        const session = await createSession(dir, DEFAULT_CONFIG);
+        process.env.PATH = `${binDir}${path.delimiter}${originalPath ?? ""}`;
+
+        expect(await recordAndRunCommand(["onlybat", "argument"], dir)).toBe(7);
+        expect((await readFile(outputPath, "utf8")).trim()).toBe("argument");
+        const [event] = await readCommandEvents(session.sessionDir);
+        expect(event).toMatchObject({ command: "onlybat argument", exitCode: 7 });
+        expect(event.error).toBeUndefined();
+      } finally {
+        process.env.PATH = originalPath;
+        await removeTempDir(dir);
+      }
+    },
+    15_000
+  );
+
+  it.skipIf(process.platform !== "win32")(
+    "does not run a script that only exists in the repository when a bare name is missing from PATH",
+    async () => {
+      const dir = await createTempDir();
+      try {
+        initGitRepo(dir);
+        const markerPath = path.join(dir, "shadow-ran.txt");
+        await writeFile(path.join(dir, "abb-shadow-tool.cmd"), `@echo off\r\necho ran> "${markerPath}"\r\n`, "utf8");
+        const session = await createSession(dir, DEFAULT_CONFIG);
+
+        expect(await recordAndRunCommand(["abb-shadow-tool"], dir)).toBe(1);
+        await expect(readFile(markerPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+        const [event] = await readCommandEvents(session.sessionDir);
+        expect(event.error).toContain("ENOENT");
+      } finally {
+        await removeTempDir(dir);
+      }
+    },
+    15_000
+  );
+
+  it.skipIf(process.platform !== "win32")(
+    "does not execute a git.exe planted in the repository",
+    async () => {
+      const dir = await createTempDir();
+      try {
+        initGitRepo(dir);
+        // A copy of node.exe fails any git invocation, so success proves the real git ran.
+        await copyFile(process.execPath, path.join(dir, "git.exe"));
+
+        await expect(getRepositoryRoot(dir)).resolves.toBeTruthy();
       } finally {
         await removeTempDir(dir);
       }

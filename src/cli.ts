@@ -64,6 +64,7 @@ import {
   retentionDateForDays,
 } from "./session/sessionRetention.js";
 import { filterSessionCatalog } from "./session/sessionSearch.js";
+import { renderSessionVerification, verifySessions } from "./session/sessionVerification.js";
 import { runWatcher } from "./watcher/watcher.js";
 import { pathExists } from "./utils/files.js";
 import { inspectTextFile } from "./utils/fileInspection.js";
@@ -76,7 +77,7 @@ const program = new Command();
 program
   .name("abb")
   .description("Record and explain observable repository changes during AI coding sessions.")
-  .version("0.8.2")
+  .version("0.8.3")
   .option(
     "--allow-external-session-dir",
     "allow a trusted local sessionDir outside the repository; network and UNC paths remain blocked"
@@ -630,6 +631,23 @@ sessionsCommand
     const toReport = await readCatalogSessionReport(resolveSessionEntry(entries, to));
     const comparison = buildSessionComparison(fromReport, toReport);
     console.log(options.json ? JSON.stringify(comparison, null, 2) : generateSessionComparisonMarkdown(comparison));
+  });
+
+sessionsCommand
+  .command("verify")
+  .description("Check the integrity of stored session reports without modifying them.")
+  .argument("[session]", "session ID, unique prefix, or latest; all sessions when omitted")
+  .option("--json", "print structured JSON")
+  .action(async (session: string | undefined, options: { json?: boolean }) => {
+    const repoRoot = await requireRepositoryRoot(process.cwd());
+    const config = await loadRuntimeConfig(repoRoot);
+    const entries = await listSessionCatalog(repoRoot, config);
+    const selected = session === undefined ? entries : [resolveSessionEntry(entries, session)];
+    const summary = await verifySessions(selected);
+    console.log(options.json ? JSON.stringify(summary, null, 2) : renderSessionVerification(summary).trimEnd());
+    if (summary.failed > 0) {
+      process.exitCode = 1;
+    }
   });
 
 async function printSessionReportFile(fileName: string, selector?: string): Promise<void> {

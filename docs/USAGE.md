@@ -71,7 +71,7 @@ A session stores the starting Git baseline, so an understood dirty worktree is s
 
 `run` accepts `--cwd`, `--label`, `--group`, and `--phase`. Pass executable arguments after `--`; native executables run without a shell. The working directory must remain physically inside the repository, including through symlinks/junctions. Standard input/output are inherited, not stored. The child exit code is propagated; startup failure returns 1 and is recorded. Durations use a monotonic clock; timestamps use system time.
 
-On Windows, `.cmd`/`.bat` shims use a `cmd.exe` wrapper. Batch arguments containing percent signs, line breaks, or NUL are rejected. Bare `.cmd` names resolve through PATH; bare `.bat` resolution remains limited, so use an explicit path such as `abb run -- .\scripts\task.bat`. Compound shell syntax is not interpreted for native executables.
+On Windows, `.cmd`/`.bat` scripts run through a `cmd.exe` wrapper. Batch arguments containing percent signs, line breaks, or NUL are rejected. A bare name that is not a native executable resolves through absolute PATH entries in PATHEXT order (`.BAT` before `.CMD` by default). Scripts in the current or repository directory are never picked up implicitly; pass an explicit path such as `abb run -- .\scripts\task.bat` for those. Compound shell syntax is not interpreted for native executables.
 
 Command metadata is redacted before writing. Supported forms include sensitive assignments/flags, headers, JSON arguments with sensitive keys, URL credentials, and sensitive query parameters. Labels, groups, and phases receive the same best-effort redaction. Arbitrary command syntax is not guaranteed secret-free.
 
@@ -99,6 +99,16 @@ abb analyze --staged --baseline HEAD --policy complete-review --format sarif
 Baseline comparison suppresses identical existing secret-like lines up to their baseline occurrence count. Git-verified renames can use the previous path as the baseline. Metadata risks remain visible; excluded baseline paths and unverified rename relationships do not suppress content findings.
 
 `new-secrets` fails on newly detected possible secrets. `complete-review` also fails when non-deleted staged content or needed baseline content could not be scanned. Combining `--fail-on` and a policy fails when either condition applies. Operational errors return 1; findings alone do not fail the command without a threshold/policy.
+
+To block risky commits locally, call the same policy from `.git/hooks/pre-commit` (make it executable and keep `abb` on PATH). The first commit has no baseline commit, so it uses a severity threshold instead:
+
+```sh
+#!/bin/sh
+if git rev-parse --verify --quiet HEAD >/dev/null; then
+  exec abb analyze --staged --baseline HEAD --policy new-secrets
+fi
+exec abb analyze --staged --fail-on high
+```
 
 Worktree, staged, and baseline CLI reads are capped at the smaller of `maxFileSizeKb` and 256 KiB. Deleted, binary, oversized, unsafe, or unavailable content is reported as skipped. Text summarizes coverage; JSON and SARIF retain structured coverage, policy, and rename-comparison details. Findings contain locations and fixed descriptions, not matched values.
 
@@ -151,6 +161,13 @@ abb sessions compare <from> <to> --json
 
 `show` and `compare` accept full IDs, unique prefixes, or `latest`; both support `--json`. Comparison summarizes path, risk, command-frequency, and HEAD differences. Content history filters use a bounded metadata search index, with validated-report fallback for older sessions.
 
+To check that stored sessions are intact without changing them, use `abb sessions verify [session]`. It validates each completed report with the same checks used before pruning, notes missing derived Markdown reports, skips incomplete sessions, and exits 1 if any report fails. `--json` prints the structured result.
+
+```sh
+abb sessions verify
+abb sessions verify latest --json
+```
+
 ```sh
 abb sessions archive --before 2026-01-01 --keep 2 --to .agent-black-box/archive
 abb sessions prune --before 2026-01-01 --keep 2
@@ -162,11 +179,11 @@ Archive requires `--to` or `retention.archiveDir`, outside the session root. It 
 
 ## Troubleshooting
 
-| Symptom                               | Action                                                                                        |
-| ------------------------------------- | --------------------------------------------------------------------------------------------- |
-| No repository / invalid configuration | Run inside a Git repository; use `abb config validate` and `abb doctor`                       |
-| Stale session                         | Use `abb recover` or `abb doctor --repair`; preserve inconsistent state                       |
-| No command history                    | Record commands explicitly through `abb run`; shell history is not read                       |
-| Skipped analysis content              | Read coverage reasons; use `complete-review` when a partial CI review must fail               |
-| Refused rollback                      | Review changes since finalization and the eligible-file list; restore manually if appropriate |
-| Bare Windows `.bat` fails             | Pass its explicit repository-relative or absolute path                                        |
+| Symptom                               | Action                                                                                            |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| No repository / invalid configuration | Run inside a Git repository; use `abb config validate` and `abb doctor`                           |
+| Stale session                         | Use `abb recover` or `abb doctor --repair`; preserve inconsistent state                           |
+| No command history                    | Record commands explicitly through `abb run`; shell history is not read                           |
+| Skipped analysis content              | Read coverage reasons; use `complete-review` when a partial CI review must fail                   |
+| Refused rollback                      | Review changes since finalization and the eligible-file list; restore manually if appropriate     |
+| Windows command not found             | Put its `.cmd`/`.bat` directory on PATH, or pass an explicit repository-relative or absolute path |

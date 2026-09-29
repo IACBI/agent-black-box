@@ -10,7 +10,7 @@ A local TypeScript CLI for reviewing Git state, file events and explicitly wrapp
 | `config/`, `doctor/`               | Configuration, storage validation and diagnostics.                       |
 | `git/`, `utils/`                   | Git snapshots, bounded inspection, paths, persistence and concurrency.   |
 | `watcher/`, `commands/`            | File capture and command execution/redacted metadata.                    |
-| `session/`                         | Ownership, recovery, logs, evidence, history, retention and archives.    |
+| `session/`                         | Ownership, recovery, logs, evidence, history, verification, retention.   |
 | `risks/`, `analyze/`               | Separate recorded-session and watcherless/staged detectors; CI policies. |
 | `reports/`, `export/`, `rollback/` | Reports, exports and explicit guarded restore.                           |
 

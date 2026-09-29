@@ -21,6 +21,7 @@ const REQUIRED_COMMANDS = [
   "abb sessions prune",
   "abb sessions show <id>",
   "abb sessions compare <from> <to>",
+  "abb sessions verify",
   "abb report",
   "abb summary",
   "abb commands",

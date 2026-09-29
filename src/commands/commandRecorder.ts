@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { statSync } from "node:fs";
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -188,7 +189,7 @@ function spawnCommand(commandParts: string[], cwd: string): Promise<{ exitCode: 
   const [command, ...args] = commandParts;
 
   return new Promise((resolve) => {
-    const spawnWithFallback = (targetCommand: string, fallbackIndex: number): void => {
+    const run = (targetCommand: string, mayResolveWindowsScript: boolean): void => {
       let spawnTarget: ReturnType<typeof getSpawnTarget>;
       try {
         spawnTarget = getSpawnTarget(targetCommand, args);
@@ -208,14 +209,17 @@ function spawnCommand(commandParts: string[], cwd: string): Promise<{ exitCode: 
         resolve({ exitCode: null, error: formatSpawnError(error as NodeJS.ErrnoException) });
         return;
       }
-      let fallbackStarted = false;
+      let retrying = false;
       let settled = false;
 
       child.once("error", (error: NodeJS.ErrnoException) => {
-        if (shouldTryWindowsScriptFallback(command, error, fallbackIndex)) {
-          fallbackStarted = true;
-          spawnWithFallback(`${command}${WINDOWS_SCRIPT_EXTENSIONS[fallbackIndex]}`, fallbackIndex + 1);
-          return;
+        if (mayResolveWindowsScript && shouldResolveWindowsScript(command, error)) {
+          const script = resolveWindowsScript(command, cwd);
+          if (script) {
+            retrying = true;
+            run(script, false);
+            return;
+          }
         }
 
         if (!settled) {
@@ -225,30 +229,59 @@ function spawnCommand(commandParts: string[], cwd: string): Promise<{ exitCode: 
       });
 
       child.once("close", (code) => {
-        if (!fallbackStarted && !settled) {
+        if (!retrying && !settled) {
           settled = true;
           resolve({ exitCode: code });
         }
       });
     };
 
-    spawnWithFallback(command, 0);
+    run(command, true);
   });
 }
 
-const WINDOWS_SCRIPT_EXTENSIONS = [".cmd", ".bat"] as const;
+const DEFAULT_WINDOWS_SCRIPT_EXTENSIONS = [".cmd", ".bat"];
 
-function shouldTryWindowsScriptFallback(
-  originalCommand: string,
-  error: NodeJS.ErrnoException,
-  fallbackIndex: number
-): boolean {
-  return (
-    process.platform === "win32" &&
-    error.code === "ENOENT" &&
-    path.extname(originalCommand) === "" &&
-    fallbackIndex < WINDOWS_SCRIPT_EXTENSIONS.length
-  );
+function shouldResolveWindowsScript(originalCommand: string, error: NodeJS.ErrnoException): boolean {
+  return process.platform === "win32" && error.code === "ENOENT" && path.extname(originalCommand) === "";
+}
+
+/**
+ * Finds the `.cmd`/`.bat` script a bare command name refers to, honoring PATHEXT order like
+ * `cmd.exe`. Only absolute PATH entries are searched, so a script in the repository under
+ * review cannot shadow a tool. Names with a directory part resolve against `cwd`.
+ */
+export function resolveWindowsScript(
+  command: string,
+  cwd: string,
+  env: NodeJS.ProcessEnv = process.env
+): string | null {
+  const configured = (env.PATHEXT ?? "")
+    .split(";")
+    .map((extension) => extension.toLowerCase())
+    .filter((extension) => extension === ".cmd" || extension === ".bat");
+  const extensions = configured.length > 0 ? configured : DEFAULT_WINDOWS_SCRIPT_EXTENSIONS;
+  const directories = /[\\/]/.test(command)
+    ? [path.resolve(cwd, path.dirname(command))]
+    : (env.PATH ?? "")
+        .split(path.delimiter)
+        .map((directory) => directory.replace(/^"(.*)"$/, "$1"))
+        .filter((directory) => path.isAbsolute(directory));
+  const baseName = path.basename(command);
+
+  for (const directory of directories) {
+    for (const extension of extensions) {
+      const candidate = path.join(directory, `${baseName}${extension}`);
+      try {
+        if (statSync(candidate).isFile()) {
+          return candidate;
+        }
+      } catch {
+        // Missing or unreadable candidates are skipped.
+      }
+    }
+  }
+  return null;
 }
 
 function getSpawnTarget(
