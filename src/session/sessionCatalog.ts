@@ -368,7 +368,8 @@ function isSessionMetadata(value: unknown): value is SessionMetadata {
     typeof value.riskScore === "number" &&
     value.riskScore >= 0 &&
     value.riskScore <= 100 &&
-    ["none", "low", "medium", "high"].includes(String(value.maxRiskSeverity)) &&
+    typeof value.maxRiskSeverity === "string" &&
+    ["none", "low", "medium", "high"].includes(value.maxRiskSeverity) &&
     isNonNegativeInteger(value.possibleSecretCount) &&
     (typeof value.startHead === "string" || value.startHead === undefined) &&
     (typeof value.endHead === "string" || value.endHead === undefined) &&
@@ -388,6 +389,9 @@ export function parseSessionReport(value: unknown): SessionReport | null {
     !isIsoDate(value.endedAt) ||
     typeof value.finalizedBy !== "string" ||
     typeof value.git.repoRoot !== "string" ||
+    !isOptionalString(value.git.head) ||
+    !isOptionalString(value.git.indexFingerprint) ||
+    !isOptionalString(value.git.branch) ||
     typeof value.git.statusText !== "string" ||
     typeof value.git.diffSummaryText !== "string" ||
     !Array.isArray(value.git.changedFiles) ||
@@ -462,13 +466,16 @@ function isChangedFile(value: unknown): value is ChangedFile {
   return (
     isRecord(value) &&
     typeof value.path === "string" &&
-    ["added", "modified", "deleted", "renamed", "unknown"].includes(String(value.status)) &&
+    typeof value.status === "string" &&
+    ["added", "modified", "deleted", "renamed", "unknown"].includes(value.status) &&
     isOptionalNonNegativeNumber(value.insertions) &&
     isOptionalNonNegativeNumber(value.deletions) &&
     (value.kind === undefined ||
-      ["text", "binary", "large", "missing", "not-file", "unknown"].includes(String(value.kind))) &&
+      (typeof value.kind === "string" &&
+        ["text", "binary", "large", "missing", "not-file", "unknown"].includes(value.kind))) &&
     isOptionalNonNegativeNumber(value.sizeBytes) &&
-    (value.lineStatsSource === undefined || ["git", "estimated", "skipped"].includes(String(value.lineStatsSource))) &&
+    (value.lineStatsSource === undefined ||
+      (typeof value.lineStatsSource === "string" && ["git", "estimated", "skipped"].includes(value.lineStatsSource))) &&
     (typeof value.statsNote === "string" || value.statsNote === undefined)
   );
 }
@@ -479,6 +486,9 @@ function isSessionBaseline(value: unknown): value is NonNullable<SessionReport["
     isIsoDate(value.capturedAt) &&
     isRecord(value.git) &&
     typeof value.git.repoRoot === "string" &&
+    isOptionalString(value.git.head) &&
+    isOptionalString(value.git.indexFingerprint) &&
+    isOptionalString(value.git.branch) &&
     typeof value.git.statusText === "string" &&
     typeof value.git.diffSummaryText === "string" &&
     Array.isArray(value.git.changedFiles) &&
@@ -514,7 +524,8 @@ function isRiskSummary(value: unknown): value is SessionReport["riskSummary"] {
     typeof value.score === "number" &&
     value.score >= 0 &&
     value.score <= 100 &&
-    ["none", "low", "medium", "high"].includes(String(value.maxSeverity)) &&
+    typeof value.maxSeverity === "string" &&
+    ["none", "low", "medium", "high"].includes(value.maxSeverity) &&
     isNonNegativeInteger(value.possibleSecretCount) &&
     isRecord(value.severityCounts) &&
     isNonNegativeInteger(value.severityCounts.low) &&
@@ -528,7 +539,8 @@ function isFileEvent(value: unknown): value is FileEvent {
     isRecord(value) &&
     typeof value.timestamp === "string" &&
     typeof value.path === "string" &&
-    ["add", "change", "unlink"].includes(String(value.eventType))
+    typeof value.eventType === "string" &&
+    ["add", "change", "unlink"].includes(value.eventType)
   );
 }
 
@@ -556,7 +568,8 @@ function normalizeRiskFindings(values: unknown[]): RiskFinding[] | null {
       !isRecord(value) ||
       typeof value.path !== "string" ||
       typeof value.category !== "string" ||
-      !["low", "medium", "high"].includes(String(value.severity)) ||
+      typeof value.severity !== "string" ||
+      !["low", "medium", "high"].includes(value.severity) ||
       typeof value.reason !== "string"
     ) {
       return null;
@@ -629,6 +642,10 @@ function isNonNegativeInteger(value: unknown): value is number {
 
 function isOptionalNonNegativeNumber(value: unknown): value is number | undefined {
   return value === undefined || (typeof value === "number" && Number.isFinite(value) && value >= 0);
+}
+
+function isOptionalString(value: unknown): value is string | undefined {
+  return value === undefined || typeof value === "string";
 }
 
 function sanitizeSingleLine(value: string): string {

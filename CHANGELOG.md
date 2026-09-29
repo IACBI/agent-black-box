@@ -4,6 +4,10 @@
 
 - Expanded real Windows command-wrapper and native executable tests; documented two open CodeQL findings and the command execution trust boundary.
 - Completed the detector source review after resolving the local access restriction and added a regression for repository containment through directory links.
+- Handled command startup failures, disappearing scan paths, exact staged-content size limits, and malformed catalog Git fields explicitly.
+- Prevented concurrent initialization overwrites, verified replay records before pruning, and made forced exports atomic.
+- Corrected large Git line counts and session-directory diagnostics; added detector keyword/redaction/deduplication regressions.
+- Consolidated documentation into current usage, reports, architecture, audit, and contributor references; validated links and included contributor/security guides in packages.
 
 ## 0.8.1
 

@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createDefaultConfig } from "../src/config/config.js";
+import { DEFAULT_CONFIG } from "../src/config/defaults.js";
 import { renderDoctorReport, runDoctor } from "../src/doctor/doctor.js";
 import { createTempDir, initGitRepo, removeTempDir } from "./testUtils.js";
 
@@ -52,4 +53,24 @@ describe("doctor", () => {
       await removeTempDir(dir);
     }
   });
+
+  it.each([".agent-black-box", ".agent-black-box/sessions", ".agent-black-box/missing/sessions"])(
+    "reports a file blocking session directory %s as a doctor failure",
+    async (sessionDir) => {
+      const dir = await createTempDir();
+      try {
+        initGitRepo(dir);
+        await writeFile(path.join(dir, ".agentblackbox.json"), JSON.stringify({ ...DEFAULT_CONFIG, sessionDir }));
+        await writeFile(path.join(dir, ".agent-black-box"), "accidental file\n", "utf8");
+
+        const report = await runDoctor(dir);
+
+        expect(report.ok).toBe(false);
+        expect(renderDoctorReport(report)).toContain("FAIL Session directory");
+        expect(renderDoctorReport(report)).toContain("Not a directory");
+      } finally {
+        await removeTempDir(dir);
+      }
+    }
+  );
 });

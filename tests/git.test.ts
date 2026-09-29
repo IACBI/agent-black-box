@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, realpath, writeFile } from "node:fs/promises";
+import { mkdir, realpath, rename, writeFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { collectGitChangesBetween, collectGitSnapshot, getRepositoryRoot, isGitRepository } from "../src/git/git.js";
 import { createTempDir, initGitRepo, removeTempDir } from "./testUtils.js";
@@ -84,6 +84,85 @@ describe("git helpers", () => {
       });
       expect(file?.insertions).toBeUndefined();
       expect(snapshot.diffSummaryText).toContain("line counts were skipped");
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
+  it("collects exact tracked text line counts for large changes and Unicode paths", async () => {
+    const dir = await createTempDir();
+    try {
+      initGitRepo(dir);
+      execFileSync("git", ["config", "core.autocrlf", "false"], { cwd: dir });
+      execFileSync("git", ["config", "user.email", "tests@example.invalid"], { cwd: dir });
+      execFileSync("git", ["config", "user.name", "Agent Black Box Tests"], { cwd: dir });
+      await writeFile(`${dir}/large.txt`, "old\n");
+      await writeFile(`${dir}/çalışma #%.txt`, "old\n");
+      await writeFile(`${dir}/binary.dat`, Buffer.from([0, 1, 2]));
+      execFileSync("git", ["add", "."], { cwd: dir });
+      execFileSync("git", ["commit", "-m", "baseline"], { cwd: dir });
+      await writeFile(`${dir}/large.txt`, "new\n".repeat(10_000));
+      await writeFile(`${dir}/çalışma #%.txt`, "new\nextra\n");
+      await writeFile(`${dir}/binary.dat`, Buffer.from([0, 3, 4]));
+
+      const snapshot = await collectGitSnapshot(dir);
+      expect(snapshot.changedFiles.find((file) => file.path === "large.txt")).toMatchObject({
+        insertions: 10_000,
+        deletions: 1,
+        lineStatsSource: "git",
+      });
+      expect(snapshot.changedFiles.find((file) => file.path === "çalışma #%.txt")).toMatchObject({
+        insertions: 2,
+        deletions: 1,
+        lineStatsSource: "git",
+      });
+      const binary = snapshot.changedFiles.find((file) => file.path === "binary.dat");
+      expect(binary?.kind).toBe("binary");
+      expect(binary?.insertions).toBeUndefined();
+      expect(binary?.deletions).toBeUndefined();
+      expect(binary?.lineStatsSource).toBeUndefined();
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
+  it("attributes unstaged rename line counts to the destination", async () => {
+    const dir = await createTempDir();
+    try {
+      initGitRepo(dir);
+      execFileSync("git", ["config", "core.autocrlf", "false"], { cwd: dir });
+      execFileSync("git", ["config", "user.email", "tests@example.invalid"], { cwd: dir });
+      execFileSync("git", ["config", "user.name", "Agent Black Box Tests"], { cwd: dir });
+      await writeFile(`${dir}/old.txt`, "one\ntwo\nthree\n");
+      execFileSync("git", ["add", "."], { cwd: dir });
+      execFileSync("git", ["commit", "-m", "baseline"], { cwd: dir });
+      await rename(`${dir}/old.txt`, `${dir}/new.txt`);
+      await writeFile(`${dir}/new.txt`, "one\ntwo\nthree\nfour\n");
+      execFileSync("git", ["add", "--intent-to-add", "new.txt"], { cwd: dir });
+
+      expect((await collectGitSnapshot(dir)).changedFiles).toEqual([
+        { path: "new.txt", status: "renamed", insertions: 1, deletions: 0, lineStatsSource: "git" },
+      ]);
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("preserves tab characters in tracked Git paths", async () => {
+    const dir = await createTempDir();
+    try {
+      initGitRepo(dir);
+      execFileSync("git", ["config", "user.email", "tests@example.invalid"], { cwd: dir });
+      execFileSync("git", ["config", "user.name", "Agent Black Box Tests"], { cwd: dir });
+      const relativePath = "with\ttab.txt";
+      await writeFile(`${dir}/${relativePath}`, "old\n");
+      execFileSync("git", ["add", "."], { cwd: dir });
+      execFileSync("git", ["commit", "-m", "baseline"], { cwd: dir });
+      await writeFile(`${dir}/${relativePath}`, "new\nextra\n");
+
+      expect((await collectGitSnapshot(dir)).changedFiles).toEqual([
+        expect.objectContaining({ path: relativePath, insertions: 2, deletions: 1, lineStatsSource: "git" }),
+      ]);
     } finally {
       await removeTempDir(dir);
     }

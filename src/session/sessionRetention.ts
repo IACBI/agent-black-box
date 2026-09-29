@@ -3,7 +3,12 @@ import { cp, lstat, mkdir, readdir, realpath, rename, rm, writeFile } from "node
 import path from "node:path";
 import type { AgentBlackBoxConfig } from "../types.js";
 import { digestRegularFile } from "./reportStorage.js";
-import { listSessionCatalog, verifyCatalogSessionReportFile, type SessionCatalogEntry } from "./sessionCatalog.js";
+import {
+  listSessionCatalog,
+  readCatalogSessionReport,
+  verifyCatalogSessionReportFile,
+  type SessionCatalogEntry,
+} from "./sessionCatalog.js";
 import { getActiveSessionPath, getSessionLockPath, getSessionRoot } from "./sessionManager.js";
 
 export interface SessionRetentionPlan {
@@ -83,7 +88,8 @@ export async function applySessionRetention(
     if (!entry || entry.startedAt !== session.startedAt) {
       throw new Error(`Session ${session.id} changed since the preview.`);
     }
-    await verifyCatalogSessionReportFile(entry);
+    // Destructive retention must validate replayed records, including same-size log corruption.
+    await readCatalogSessionReport(entry);
     await verifySafeSessionDirectory(physicalRoot, entry.sessionDir, entry.id);
   }
 

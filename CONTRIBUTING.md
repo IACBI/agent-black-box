@@ -1,51 +1,62 @@
 # Contributing
 
-Thanks for helping improve Agent Black Box. The project is intentionally local-first, privacy-conscious, and conservative about behavior that could affect user repositories.
+Preserve public behavior and base reports on observable evidence. See [Usage](docs/USAGE.md) and [Architecture](docs/ARCHITECTURE.md) for workflows and safety boundaries.
 
-## Local Setup
+## Development
+
+Use Node.js 22 or newer, Git, and pnpm 10.30.3 as pinned in `package.json`:
 
 ```sh
-pnpm install
+pnpm install --frozen-lockfile
 pnpm check
-pnpm release:check
 ```
 
-`pnpm check` runs formatting checks, ESLint, TypeScript typechecking, both dead-code checks, a production build, and tests with coverage thresholds.
+`pnpm check` runs formatting, ESLint, TypeScript, dead-code checks, build, and coverage tests. Run `pnpm perf` when changing parsing, file inspection, analysis, or report generation. CI tests Node.js 22 and 24 on Linux, Windows, and macOS.
 
-`pnpm perf` validates budgets for NDJSON ingestion, report generation, legacy catalog fallback, large-repository analysis, and adversarial analyzer content. CI runs the functional suite on Node.js 22 and 24 across Linux, Windows, and macOS.
+Before opening a pull request:
 
-## Development Workflow
+- Add focused regressions for behavior changes and update affected documentation.
+- Keep changes focused; preserve public interfaces and distinctions between pre-existing changes, watcher observations, and final Git state.
+- Use synthetic credentials and repository data in fixtures; review changes for sensitive-data exposure.
+- Run `pnpm check` and applicable performance checks; state any verification limits.
+- Inspect open CodeQL alerts as well as workflow results. A successful analysis does not mean no findings exist.
 
-1. Keep changes focused and easy to review.
-2. Update tests when behavior changes.
-3. Update docs when user-facing behavior changes.
-4. Keep reports based on observable repository evidence.
-5. Use cautious language for heuristic findings.
-6. Preserve the distinction between pre-existing changes, watcher observations, and final Git state.
+Review major dependency updates against the supported Node.js baseline. Report vulnerabilities privately as described in [Security](SECURITY.md).
 
-## Design Principles
+## Releases
 
-- No telemetry.
-- No required external services at runtime.
-- No hidden network calls.
-- No automatic destructive rollback.
-- No raw secret values in reports.
-- No claims of direct AI-agent integration unless implemented.
+Update `package.json`, the CLI version in `src/cli.ts`, and the exact `## X.Y.Z` heading in `CHANGELOG.md` together. Tag as `vX.Y.Z`. During `0.x`, use patches for fixes and minors for features or compatibility changes; after `1.0`, breaking changes require a major release.
 
-## Pull Request Checklist
+Run preflight with the intended tag. In Bash:
 
-- `pnpm check` passes locally.
-- `pnpm perf` passes for changes that affect session parsing, file inspection, or report generation.
-- New behavior has focused tests.
-- README or `docs/` pages are updated when needed.
-- Security-sensitive behavior has been reviewed for secret exposure.
-- Check open CodeQL alerts as well as the workflow result; document unresolved findings and test evidence.
-- Rollback apply behavior never restores paths that were already changed at session start.
+```sh
+RELEASE_TAG=vX.Y.Z pnpm release:check
+```
 
-## Dependency Updates
+In PowerShell:
 
-Dependabot is configured for routine maintenance. Semver-major updates are reviewed manually so the project can preserve the documented Node.js support target.
+```powershell
+$env:RELEASE_TAG = "vX.Y.Z"
+try { pnpm release:check } finally { Remove-Item Env:RELEASE_TAG }
+```
 
-## Security
+`release:check` runs `pnpm check`, the production dependency audit, package-content checks, and package/changelog/tag validation. Merge to `main` and confirm local preflight and hosted CI pass for that commit before tagging:
 
-Do not include real tokens, credentials, private keys, or private repository data in issues, tests, fixtures, screenshots, or reports. Use clearly fake values.
+```sh
+git switch main
+git pull --ff-only origin main
+git tag vX.Y.Z
+git push origin vX.Y.Z
+```
+
+The tag triggers the release workflow. It publishes the tarball and `SHA256SUMS` as GitHub Release assets and records a provenance attestation. Do not create the release manually first; an existing release is updated with changelog notes and regenerated assets.
+
+From the repository root, download and verify the assets in Bash:
+
+```sh
+gh release download vX.Y.Z --repo IACBI/agent-black-box --dir artifacts --pattern '*.tgz' --pattern SHA256SUMS
+sha256sum --check artifacts/SHA256SUMS
+gh attestation verify artifacts/agent-black-box-X.Y.Z.tgz --repo IACBI/agent-black-box
+```
+
+The checksum manifest includes the `artifacts/` prefix. If `sha256sum` is unavailable in PowerShell, compare `Get-FileHash` with the manifest. Releases publish GitHub assets only; npm publishing is not automated.

@@ -1,111 +1,46 @@
 # Architecture
 
-Agent Black Box is a TypeScript CLI built around observable repository state.
+A local TypeScript CLI for reviewing Git state, file events and explicitly wrapped commands. See [Usage](USAGE.md) for commands and [Reports](REPORTS.md) for artifacts and verification levels.
 
-The README is available in [English](../README.md#english) and [Türkçe](../README.md#turkce).
+## Modules
 
-## Main Modules
+| Module                             | Responsibility                                                           |
+| ---------------------------------- | ------------------------------------------------------------------------ |
+| `cli.ts`, `index.ts`               | CLI orchestration and public exports.                                    |
+| `config/`, `doctor/`               | Configuration, storage validation and diagnostics.                       |
+| `git/`, `utils/`                   | Git snapshots, bounded inspection, paths, persistence and concurrency.   |
+| `watcher/`, `commands/`            | File capture and command execution/redacted metadata.                    |
+| `session/`                         | Ownership, recovery, logs, evidence, history, retention and archives.    |
+| `risks/`, `analyze/`               | Separate recorded-session and watcherless/staged detectors; CI policies. |
+| `reports/`, `export/`, `rollback/` | Reports, exports and explicit guarded restore.                           |
 
-```text
-src/
-  cli.ts
-  analyze/
-  commands/
-  config/
-  doctor/
-  export/
-  git/
-  reports/
-  risks/
-  rollback/
-  session/
-  utils/
-  watcher/
-```
+## Data flow
 
-## Data Flow
+1. Initialization exclusively publishes versioned `.agentblackbox.json`; validation/migration enforces the configuration contract.
+2. Creation captures HEAD/branch/index and pre-existing changes, allocates a timestamp/random ID, acquires an owner-token lock and exclusively creates its directory. Legacy IDs remain readable.
+3. The watcher appends file events. `abb run` records redacted metadata without terminal output; stop validates ownership.
+4. Finalization blocks new command registration, waits for live wrappers, reads logs and collects final Git/net HEAD changes. Baseline, observations and Git metadata determine attribution.
+5. Session-relevant changes feed recorded risk/secret review. Reports are published atomically per file; completion metadata is written last. Capture-loss diagnostics survive recovery.
+6. History uses metadata/search indices with report fallback. Structural reads reconstruct large reports; streaming uses lighter verification. Pruning validates records; archives verify copies and preserve originals.
 
-1. `abb init` writes a versioned `.agentblackbox.json`.
-2. `abb config validate/migrate` validates or rewrites config against the current schema.
-3. `abb start` allocates an ID with a timestamp and random suffix, captures the Git start baseline, acquires a process lock, and exclusively creates its session directory before writing active state. Existing timestamp-only IDs remain supported.
-4. The baseline records HEAD, branch, an index fingerprint, and changed paths that existed before watcher observations begin.
-5. The watcher records file events to append-only NDJSON.
-6. `abb run -- <command>` records redacted command metadata to append-only NDJSON.
-7. `abb stop` validates active state and lock ownership before requesting finalization.
-8. Finalization collects Git status, worktree diffs, and net file changes between the start and end HEAD, filtered by configured excludes.
-9. Start state, watcher observations, Git metadata, and final state are combined into cautious change evidence.
-10. Risk and possible-secret detectors analyze session-relevant final changes.
-11. JSON and Markdown reports are written to the session directory.
-12. Compact session metadata is written last so history listing can avoid parsing every full report.
-13. The session catalog resolves `latest`, exact IDs, and unique ID prefixes without converting user input directly into filesystem paths.
-14. `abb export` can bundle a selected session into Markdown or JSON.
-15. `abb analyze` performs bounded, watcherless analysis of current included working-tree changes and can emit text, JSON, or SARIF findings.
-16. `abb analyze --staged --baseline <ref>` compares staged blobs with a fixed commit, following Git-identified renames where safe and suppressing unchanged secret-like lines without exposing their contents.
+Watcherless analysis reads worktree files; staged analysis reads index blobs. Fixed-commit baselines suppress matching secret-like lines by occurrence count and use Git-established rename sources. `new-secrets`/`complete-review` define CI criteria and required coverage. Recorded/watcherless heuristics remain separate; see [Usage](USAGE.md).
 
-## Session Files
+## Safety boundaries
 
-During a session:
+Runtime requires no external API, telemetry or private agent integration. Detectors redact supported patterns and emit heuristic signals. Commands execute caller-selected executables, without a sandbox.
 
-- `.agent-black-box/active-session.json`
-- `.agent-black-box/session.lock`
-- `.agent-black-box/stop-request.json`
-- `.agent-black-box/sessions/<session-id>/events.ndjson`
-- `.agent-black-box/sessions/<session-id>/commands.ndjson`
-- `.agent-black-box/sessions/<session-id>/git-start.json`
+Storage stays physically inside the repository unless explicitly allowed for trusted local external paths; UNC/network storage is blocked. Inspection rejects linked files/external ancestors; command cwd stays inside the physical repository. Same-user path races remain possible.
 
-Final reports:
+State/config/metadata reads are bounded and validated. Stop/recovery require matching state/lock ownership; corrupt/ambiguous state is preserved. Recovery verifies completed reports before clearing stale state. Initialization publishes a fully written file exclusively through a hard link. State/reports and forced exports use atomic rename; ordinary exports use exclusive creation. See [Reports](REPORTS.md) for verification levels.
 
-- `session.json`
-- `session-replay.json` for reports larger than 32 MiB
-- `session-search.json` when the bounded search index fits in 4 MiB
-- `rollback-state.json` for interactive restore preflight
-- `timeline.md`
-- `summary.md`
-- `commands.md`
-- `diff-summary.md`
-- `risks.md`
-- `rollback.md`
-- `session-metadata.json`
+Rollback defaults to guidance. CLI apply requires the latest session, eligible tracked files and typed confirmation; pre-existing changes are excluded. HEAD/index/file identity is rechecked before restore to HEAD. Library caller boundaries and hard-link support/race limits are in [Security](../SECURITY.md) and [Audit](AUDIT.md).
 
-Malformed NDJSON event or command lines are skipped during finalization. Discarded counts and warnings are recorded in `session.json` and `summary.md`.
+## Bounded resource use
 
-Catalog listing reads compact metadata in bounded batches. Sessions from older versions fall back to validated `session.json` data. Incomplete and corrupt session directories remain visible in `abb sessions list` but cannot be selected for reporting or comparison.
+Watching excludes heavy/generated/storage directories and bounds its queue. NDJSON is streamed with a 1 MiB line limit, 1,000,000 accepted records per log and bounded warnings; discarded records are explicit diagnostics.
 
-History filters first use catalog metadata, then a bounded search index for file paths, redacted commands, and risk categories. Missing or invalid indices fall back to the validated report. Retention defaults to a preview; interactive apply rechecks eligible completed reports and rejects active state, linked entries, and changed catalog plans before moving each directory to a hidden quarantine name for deletion.
+Inspection classifies text/binary/large/missing/non-regular paths. CLI worktree, staged and baseline reads cap bytes at the configured limit or 256 KiB, whichever is smaller. The public analyzer defaults to 262,144 JavaScript string characters; callers can configure that limit. Untracked estimates read small text files. Git/recorded-secret inspection uses deterministic concurrency capped at eight workers and available CPUs.
 
-Large reports keep the full `session.json` contract. A versioned replay sidecar stores a compact report body and content digests; structural commands reconstruct events and commands from the original NDJSON logs. Ready-made Markdown and JSON report files are streamed to stdout after verifying the session report and the selected file's regular-file status and identity. Legacy large reports can still be opened with a bounded direct parse.
+Reports retain full JSON under a 256 MiB policy; see [Reports](REPORTS.md) for replay/index limits. Pruning materializes bounded records and uses more memory than listing/streaming. Retention defaults do not schedule background work.
 
-`sessions browse` provides interactive pagination over catalog filters. Staged analysis can evaluate the `new-secrets` or `complete-review` CI policy after baseline comparison. Optional retention settings only supply command defaults; they do not schedule background work. `sessions archive` verifies copies with streaming checksums and writes a completion marker, leaving source sessions intact.
-
-## Safety Boundaries
-
-- No external API is required at runtime.
-- No telemetry is included.
-- Terminal output is not captured.
-- Possible secret values are redacted.
-- Rollback remains advisory.
-- Interactive rollback apply only restores eligible tracked files after typed confirmation.
-- Files already changed at session start are never eligible for interactive rollback apply.
-- Direct AI-agent private APIs are not used.
-- Config and session state are validated before use with bounded string, date, process, and record constraints.
-- Config, state, metadata, and inline session-report JSON reads have explicit size limits. Large reports use a bounded replay sidecar and a 256 MiB total report policy; over-budget finalization fails explicitly while raw logs remain available.
-- Session output paths must remain physically inside the repository by default. A command-scoped override is required for trusted local external storage, while UNC and network paths remain blocked.
-- Repository file inspection does not follow symbolic links, and command working directories cannot escape through links.
-- JSON state and finalized reports use same-directory temporary files followed by atomic rename.
-- Active state and lock files share a random owner token; recovery fails closed when their repository, session directory, or ownership does not match.
-- Recovery verifies a completed report before removing stale state associated with completion metadata. Missing or invalid reports leave that state untouched.
-- Existing export files are not overwritten unless requested.
-
-## Performance Notes
-
-- File watching ignores common heavy directories such as `node_modules`, `.git`, `dist`, `build`, `coverage`, `.next`, and `.agent-black-box`.
-- Secret scanning skips deleted files, binary-like files, and files larger than the configured `maxFileSizeKb`.
-- Shared file inspection classifies text, binary, large, missing, and non-regular files before estimating untracked line counts or scanning for possible secrets.
-- Added-line estimation for untracked files only reads small text files and records when line stats were skipped.
-- File and command events are appended as NDJSON to avoid rewriting large session state while recording.
-- NDJSON finalization is streamed line by line, rejects lines larger than 1 MiB, caps accepted records at 1,000,000, and bounds integrity warnings.
-- Watcherless assignment scanning starts at key boundaries and checks all supported assignments per line. Performance budgets cover long whitespace and identifier inputs to guard against repeated prefix scans.
-- Wrapped command durations use a monotonic clock so wall-clock corrections do not create negative durations and invalidate captured records.
-- Git file inspection and possible-secret scanning use deterministic concurrency capped at eight workers and available CPU parallelism.
-- Session locking uses an atomic lock file and random owner token. `abb recover` or `abb doctor --repair` handles only safely verified stale sessions; ambiguous state is not removed automatically.
-- Staged Git metadata and blob identifiers relative to `HEAD` are represented by a SHA-256 fingerprint; report generation does not store staged file contents.
+Durations use a monotonic clock; index fingerprints store metadata/blob identities. `pnpm perf` measures regression budgets, not peak-memory or cross-platform guarantees.

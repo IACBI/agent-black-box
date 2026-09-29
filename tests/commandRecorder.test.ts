@@ -132,6 +132,27 @@ describe("command recorder", () => {
     expect(formatCommand(["pnpm", "test", "--", "name with spaces"])).toBe('pnpm test -- "name with spaces"');
   });
 
+  it.each([
+    ["empty executable", [""]],
+    ["null byte argument", [process.execPath, "--password", "synthetic\0credential"]],
+  ])("records synchronous spawn failures for %s and clears the in-flight marker", async (_label, commandParts) => {
+    const dir = await createTempDir();
+    try {
+      initGitRepo(dir);
+      const session = await createSession(dir, DEFAULT_CONFIG);
+
+      await expect(recordAndRunCommand(commandParts, dir)).resolves.toBe(1);
+
+      const [event] = await readCommandEvents(session.sessionDir);
+      expect(event?.exitCode).toBeNull();
+      expect(event?.error).toBe("ERR_INVALID_ARG_VALUE: command could not be started.");
+      expect(JSON.stringify(event)).not.toContain("synthetic");
+      expect((await readdir(session.sessionDir)).some((name) => name.startsWith("command-inflight-"))).toBe(false);
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
   it("strips a leading passthrough separator", () => {
     expect(normalizeCommandParts(["--", "node", "--version"])).toEqual(["node", "--version"]);
     expect(normalizeCommandParts(["node", "--version"])).toEqual(["node", "--version"]);

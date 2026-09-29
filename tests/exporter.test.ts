@@ -1,6 +1,7 @@
-import { readFile } from "node:fs/promises";
+import * as fs from "node:fs/promises";
+import { readFile, readdir, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   parseExportFormat,
   parseRiskSeverity,
@@ -9,6 +10,11 @@ import {
 } from "../src/export/exporter.js";
 import { buildSessionReport } from "../src/reports/markdown.js";
 import { createTempDir, removeTempDir } from "./testUtils.js";
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, open: vi.fn(actual.open) };
+});
 
 const report = buildSessionReport(
   {
@@ -59,6 +65,45 @@ describe("session exporter", () => {
 
       await writeSessionExport(outputPath, "second\n", { force: true });
       await expect(readFile(outputPath, "utf8")).resolves.toBe("second\n");
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
+  it("preserves the previous export when a forced replacement write fails", async () => {
+    const dir = await createTempDir();
+    try {
+      const outputPath = path.join(dir, "abb-export.md");
+      await writeFile(outputPath, "original\n");
+      const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+      const failure = new Error("Simulated export write failure.");
+      vi.mocked(fs.open).mockImplementationOnce(async (...args) => {
+        const handle = await actual.open(...args);
+        vi.spyOn(handle, "writeFile").mockRejectedValueOnce(failure);
+        return handle;
+      });
+
+      await expect(writeSessionExport(outputPath, "replacement\n", { force: true })).rejects.toBe(failure);
+      await expect(readFile(outputPath, "utf8")).resolves.toBe("original\n");
+      expect(await readdir(dir)).toEqual(["abb-export.md"]);
+    } finally {
+      vi.restoreAllMocks();
+      await removeTempDir(dir);
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("replaces a forced output link without overwriting its target", async () => {
+    const dir = await createTempDir();
+    try {
+      const targetPath = path.join(dir, "original.md");
+      const outputPath = path.join(dir, "abb-export.md");
+      await writeFile(targetPath, "original\n");
+      await symlink(targetPath, outputPath);
+
+      await expect(writeSessionExport(outputPath, "replacement\n")).rejects.toThrow("Refusing to overwrite");
+      await writeSessionExport(outputPath, "replacement\n", { force: true });
+      await expect(readFile(outputPath, "utf8")).resolves.toBe("replacement\n");
+      await expect(readFile(targetPath, "utf8")).resolves.toBe("original\n");
     } finally {
       await removeTempDir(dir);
     }

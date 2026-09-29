@@ -4,29 +4,25 @@
 [![CodeQL](https://github.com/IACBI/agent-black-box/actions/workflows/codeql.yml/badge.svg)](https://github.com/IACBI/agent-black-box/actions/workflows/codeql.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-## Languages
-
 [English](#english) · [Türkçe](#turkce)
 
 <a id="english"></a>
 
 ## English
 
-Agent Black Box is a local-first CLI for reviewing observable repository changes during AI-assisted coding. It records file events, Git evidence, and commands you explicitly run through it, then produces reports that help you inspect a session before committing.
+Agent Black Box is a local CLI for reviewing repository changes during AI-assisted coding. It records file events, Git evidence, and commands explicitly run through it, then creates reports for review before committing. It does not access agent prompts, upload repository data, or capture terminal output.
 
-The tool works alongside coding agents without accessing their prompts or internal state. It does not upload repository data or capture terminal output.
+### Quick start
 
-### Get started
-
-Requires Node.js 22 or newer, pnpm, and a Git repository. From a source checkout:
+Requires Node.js 22 or newer, Git on PATH, and pnpm. From a source checkout:
 
 ```sh
-pnpm install
-pnpm dev init
+pnpm install --frozen-lockfile
+pnpm dev init # Only if .agentblackbox.json does not already exist
 pnpm dev start
 ```
 
-Leave `start` running. In another terminal, optionally record a command, then stop the session and review its reports:
+Leave the watcher running. In another terminal:
 
 ```sh
 pnpm dev run -- pnpm test
@@ -35,63 +31,61 @@ pnpm dev summary
 pnpm dev risks
 ```
 
-Reports are stored in `.agent-black-box/sessions/<session-id>/`. The examples below use `abb`; in a source checkout, use `pnpm dev` instead, or run `pnpm build` and then `node dist/cli.js`.
+The examples below use `abb`; replace it with `pnpm dev`, or with `node dist/cli.js` after `pnpm build`.
 
-### What you can do
+### Commands
 
-| Task                      | Commands                                                                                                 |
-| ------------------------- | -------------------------------------------------------------------------------------------------------- |
-| Configure and diagnose    | `abb init`, `abb config validate`, `abb config migrate`, `abb doctor`, `abb status`                      |
-| Record a session          | `abb start`, `abb run -- <command>`, `abb stop`, `abb recover`                                           |
-| Analyze without recording | `abb analyze`                                                                                            |
-| Explore history           | `abb sessions list`, `abb sessions browse`, `abb sessions show <id>`, `abb sessions compare <from> <to>` |
-| Manage older sessions     | `abb sessions archive`, `abb sessions prune`                                                             |
-| Read and export reports   | `abb report`, `abb summary`, `abb commands`, `abb timeline`, `abb risks`, `abb export`, `abb rollback`   |
+| Purpose               | Commands                                                                                                 |
+| --------------------- | -------------------------------------------------------------------------------------------------------- |
+| Setup and diagnostics | `abb init`, `abb config validate`, `abb config migrate`, `abb doctor`, `abb status`                      |
+| Recording             | `abb start`, `abb run -- <command>`, `abb stop`, `abb recover`                                           |
+| Independent analysis  | `abb analyze`                                                                                            |
+| History               | `abb sessions list`, `abb sessions browse`, `abb sessions show <id>`, `abb sessions compare <from> <to>` |
+| Retention             | `abb sessions archive`, `abb sessions prune`                                                             |
+| Reports               | `abb report`, `abb summary`, `abb commands`, `abb timeline`, `abb risks`, `abb export`, `abb rollback`   |
 
-For a CI review of staged changes, compare index content with a fixed commit:
+For a SARIF CI review of staged content against a fixed commit:
 
 ```sh
 abb analyze --staged --baseline HEAD --policy complete-review --format sarif
 ```
 
-The `new-secrets` policy fails on newly detected possible secrets. `complete-review` also fails when required staged or baseline content could not be scanned. Both policies require `--staged --baseline`. Text, JSON, and SARIF output identify skipped files and Git-verified rename sources without printing matched secret values. Findings are review signals, not proof of a vulnerability.
+`new-secrets` fails on newly detected possible secrets; `complete-review` also fails when required staged or baseline content could not be scanned. Both require `--staged --baseline`.
 
-Browse completed sessions interactively with `abb sessions browse`, or select one by full ID, unique prefix, or `latest` with `--session <id>`. Archiving previews and then copies verified sessions; originals remain in place. Pruning previews deletion and requires typed confirmation to apply. Neither runs automatically.
+### Reports and safety
 
-### Reports and boundaries
+Completed sessions live in `.agent-black-box/sessions/<session-id>/`: `session.json`, `session-metadata.json`, `summary.md`, `commands.md`, `timeline.md`, `diff-summary.md`, `risks.md`, and `rollback.md`. Select reports by full ID, unique prefix, or `latest` with `--session <id>`.
 
-A completed session contains `session.json`, compact `session-metadata.json`, and human-readable `summary.md`, `commands.md`, `timeline.md`, `diff-summary.md`, `risks.md`, and `rollback.md`. Reports distinguish changes already present at session start from activity observed during the session and Git changes found at finalization. Committed changes between the starting and ending HEAD remain visible even when the working tree ends clean.
+Reports distinguish pre-existing changes, watcher observations, and final Git evidence, including changes committed between the starting and ending HEAD. Secret detection and command redaction are heuristic; review reports before sharing. Commands outside `abb run` are not recorded.
 
-Command recording is opt-in. Sensitive-looking values are redacted before metadata is written, but detection is heuristic: review reports and archives before sharing them. `abb rollback` gives manual guidance; interactive apply is limited to eligible tracked files from the latest completed session and requires confirmation. The tool cannot infer why a change happened or observe commands it did not run.
+Archive, prune, and rollback first show a preview. Applying them requires an interactive terminal and typed confirmation. Archives preserve originals; rollback is limited to eligible tracked files from the latest completed session.
 
-### Documentation and development
+### Documentation
 
-- [Usage guide](docs/USAGE.md): setup, analysis, history, recovery, and retention.
-- [Report reference](docs/REPORTS.md): formats, evidence, and storage limits.
-- [Architecture](docs/ARCHITECTURE.md): data flow and safety boundaries.
-- [Contributing](CONTRIBUTING.md), [security policy](SECURITY.md), [audit](docs/AUDIT.md), and [changelog](CHANGELOG.md).
+- [Usage](docs/USAGE.md): setup, all command options, recovery, and retention.
+- [Reports](docs/REPORTS.md): evidence, formats, and limits.
+- [Architecture](docs/ARCHITECTURE.md): data flow and trust boundaries.
+- [Contributing and releases](CONTRIBUTING.md), [security](SECURITY.md), [audit](docs/AUDIT.md), and [changelog](CHANGELOG.md).
 
-Run `pnpm check` for formatting, lint, types, dead-code checks, build, and coverage tests. The project uses the [MIT license](LICENSE).
+Run `pnpm check` for formatting, lint, types, dead-code checks, build, and coverage tests. Licensed under [MIT](LICENSE).
 
 <a id="turkce"></a>
 
 ## Türkçe
 
-Agent Black Box, yapay zekâ destekli kodlama sırasında depoda gözlemlenebilen değişiklikleri incelemek için geliştirilmiş, yerel çalışan bir komut satırı aracıdır. Dosya olaylarını, Git verilerini ve özellikle araç üzerinden çalıştırdığınız komutları kaydeder; commit öncesi inceleyebileceğiniz raporlar üretir.
+Agent Black Box, yapay zekâ destekli kodlama sırasında depodaki değişiklikleri inceleyen yerel bir komut satırı aracıdır. Dosya olaylarını, Git verilerini ve araç üzerinden çalıştırılan komutları kaydeder; commit öncesi inceleme raporları üretir. Ajan istemlerine erişmez, depo verilerini dışarı göndermez ve terminal çıktısını kaydetmez.
 
-Kodlama ajanlarıyla birlikte çalışır; ancak onların istemlerine veya iç durumuna erişmez. Depo verilerini dışarı göndermez ve terminal çıktısını kaydetmez.
+### Hızlı başlangıç
 
-### Başlangıç
-
-Node.js 22 veya üzeri, pnpm ve bir Git deposu gerekir. Kaynak koddan çalıştırmak için:
+Node.js 22 veya üzeri, PATH üzerinde Git ve pnpm gerekir. Kaynak koddan çalıştırmak için:
 
 ```sh
-pnpm install
-pnpm dev init
+pnpm install --frozen-lockfile
+pnpm dev init # Yalnızca .agentblackbox.json henüz yoksa
 pnpm dev start
 ```
 
-`start` komutunu açık bırakın. Başka bir terminalde isterseniz bir komutu kaydedin; ardından oturumu bitirip raporları inceleyin:
+Dosya izleyiciyi açık bırakın. Başka bir terminalde:
 
 ```sh
 pnpm dev run -- pnpm test
@@ -100,40 +94,40 @@ pnpm dev summary
 pnpm dev risks
 ```
 
-Raporlar `.agent-black-box/sessions/<session-id>/` altında tutulur. Aşağıdaki örneklerde `abb` kullanılır. Kaynak koddan çalışırken bunun yerine `pnpm dev` yazabilir veya `pnpm build` sonrasında `node dist/cli.js` çalıştırabilirsiniz.
+Aşağıdaki örneklerde `abb` yerine `pnpm dev` veya `pnpm build` sonrasında `node dist/cli.js` kullanabilirsiniz.
 
-### Temel işlemler
+### Komutlar
 
-| İşlem                           | Komutlar                                                                                                 |
-| ------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| Yapılandırma ve tanılama        | `abb init`, `abb config validate`, `abb config migrate`, `abb doctor`, `abb status`                      |
-| Oturum kaydı                    | `abb start`, `abb run -- <command>`, `abb stop`, `abb recover`                                           |
-| Oturum açmadan analiz           | `abb analyze`                                                                                            |
-| Geçmişi inceleme                | `abb sessions list`, `abb sessions browse`, `abb sessions show <id>`, `abb sessions compare <from> <to>` |
-| Eski oturumları yönetme         | `abb sessions archive`, `abb sessions prune`                                                             |
-| Raporları okuma ve dışa aktarma | `abb report`, `abb summary`, `abb commands`, `abb timeline`, `abb risks`, `abb export`, `abb rollback`   |
+| Amaç                | Komutlar                                                                                                 |
+| ------------------- | -------------------------------------------------------------------------------------------------------- |
+| Kurulum ve tanılama | `abb init`, `abb config validate`, `abb config migrate`, `abb doctor`, `abb status`                      |
+| Kayıt               | `abb start`, `abb run -- <command>`, `abb stop`, `abb recover`                                           |
+| Bağımsız analiz     | `abb analyze`                                                                                            |
+| Geçmiş              | `abb sessions list`, `abb sessions browse`, `abb sessions show <id>`, `abb sessions compare <from> <to>` |
+| Saklama             | `abb sessions archive`, `abb sessions prune`                                                             |
+| Raporlar            | `abb report`, `abb summary`, `abb commands`, `abb timeline`, `abb risks`, `abb export`, `abb rollback`   |
 
-CI ortamında Git'e eklenmiş değişiklikleri sabit bir commit ile karşılaştırabilirsiniz:
+Git'e eklenen içeriği sabit bir commit ile karşılaştırıp CI için SARIF çıktısı üretin:
 
 ```sh
 abb analyze --staged --baseline HEAD --policy complete-review --format sarif
 ```
 
-`new-secrets`, karşılaştırılan commit'te bulunmayan olası gizli değerler saptandığında işlemi başarısız sayar. `complete-review`, Git'e eklenmiş dosyalar veya karşılaştırma için gereken başlangıç dosyaları taranamadığında da başarısız olur. İki politika da `--staged --baseline` gerektirir. Metin, JSON ve SARIF çıktıları atlanan dosyaları ve Git'in doğruladığı yeniden adlandırma kaynaklarını gösterir; eşleşen gizli değerleri yazdırmaz. Bulgular, kesin güvenlik açığı tespiti değil, inceleme işaretleridir.
+`new-secrets`, yeni olası gizli değerler saptandığında işlemi başarısız sayar. `complete-review`, gerekli eklenmiş veya başlangıç içeriği taranamadığında da başarısız olur. İkisi de `--staged --baseline` gerektirir.
 
-Tamamlanmış oturumları `abb sessions browse` ile etkileşimli inceleyebilirsiniz. Tam kimlik, benzersiz ön ek veya `latest` seçimi için `--session <id>` kullanılır. Arşivleme önce önizleme gösterir, ardından doğrulanmış kopyalar oluşturur; asıl oturumları silmez. Eski oturumları silme işlemi de önce önizlenir ve uygulanması için yazılı onay gerekir. Bu işlemler kendiliğinden çalışmaz.
+### Raporlar ve güvenlik
 
-### Raporlar ve sınırlar
+Tamamlanan oturumlar `.agent-black-box/sessions/<session-id>/` altında tutulur: `session.json`, `session-metadata.json`, `summary.md`, `commands.md`, `timeline.md`, `diff-summary.md`, `risks.md` ve `rollback.md`. Rapor seçmek için `--session <id>` ile tam kimlik, benzersiz ön ek veya `latest` kullanın.
 
-Tamamlanan her oturumda yapılandırılmış `session.json`, kısa geçmiş kaydı `session-metadata.json` ve okunabilir `summary.md`, `commands.md`, `timeline.md`, `diff-summary.md`, `risks.md` ile `rollback.md` bulunur. Raporlar oturum başında zaten var olan değişiklikleri, oturum sırasında gözlenenleri ve sonlandırma sırasında Git'te bulunanları ayırır. Başlangıç ve bitiş HEAD commit'leri arasındaki değişiklikler, çalışma dizini sonradan temizlense bile görünür.
+Raporlar önceden var olan değişiklikleri, izleyici gözlemlerini ve son Git verilerini ayırır; başlangıç ve bitiş HEAD arasında commit edilen değişiklikleri de gösterir. Gizli değer tespiti ve komut maskeleme sezgiseldir; paylaşmadan önce raporları inceleyin. `abb run` dışında çalıştırılan komutlar kaydedilmez.
 
-Komut kaydı isteğe bağlıdır. Hassas görünen değerler komut bilgileri yazılmadan önce maskelenir; yine de bu tespit kusursuz değildir. Raporları veya arşivleri paylaşmadan önce inceleyin. `abb rollback` elle uygulayabileceğiniz öneriler verir. Etkileşimli geri alma yalnızca son tamamlanmış oturumdaki uygun, Git tarafından izlenen dosyalar için kullanılabilir ve onay ister. Araç, bir değişikliğin neden yapıldığını veya kendi üzerinden çalıştırılmayan komutları bilemez.
+Arşivleme, silme ve geri alma önce önizleme gösterir. Uygulama için etkileşimli terminal ve yazılı onay gerekir. Arşivleme asıl oturumları korur; geri alma yalnızca son tamamlanmış oturumdaki uygun, Git tarafından izlenen dosyalara uygulanabilir.
 
-### Belgeler ve geliştirme
+### Belgeler
 
-- [Kullanım kılavuzu](docs/USAGE.md): kurulum, analiz, geçmiş, kurtarma ve saklama.
-- [Rapor başvurusu](docs/REPORTS.md): biçimler, kanıtlar ve depolama sınırları.
-- [Mimari](docs/ARCHITECTURE.md): veri akışı ve güvenlik sınırları.
-- [Katkı rehberi](CONTRIBUTING.md), [güvenlik politikası](SECURITY.md), [denetim](docs/AUDIT.md) ve [değişiklik günlüğü](CHANGELOG.md).
+- [Kullanım](docs/USAGE.md): kurulum, tüm komut seçenekleri, kurtarma ve saklama.
+- [Raporlar](docs/REPORTS.md): veriler, biçimler ve sınırlar.
+- [Mimari](docs/ARCHITECTURE.md): veri akışı ve güven sınırları.
+- [Katkı ve sürüm yayımlama](CONTRIBUTING.md), [güvenlik](SECURITY.md), [denetim](docs/AUDIT.md) ve [değişiklik günlüğü](CHANGELOG.md).
 
-Biçimlendirme, lint, tür denetimi, kullanılmayan kod kontrolü, derleme ve kapsam testleri için `pnpm check` çalıştırın. Proje [MIT lisansı](LICENSE) ile sunulur.
+Biçimlendirme, lint, tür denetimi, kullanılmayan kod kontrolü, derleme ve kapsam testleri için `pnpm check` çalıştırın. Proje [MIT](LICENSE) lisanslıdır.

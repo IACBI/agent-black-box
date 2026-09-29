@@ -137,6 +137,62 @@ describe("secret detector", () => {
     expect(shannonEntropy("aZ9qL2xP8vN4mR7sT1uY6wE3bC5dF0hJ")).toBeGreaterThan(4);
   });
 
+  it("requires a sensitive keyword for high-entropy findings and keeps values redacted", () => {
+    const fakeValue = "aZ9qL2xP8vN4mR7sT1uY6wE3bC5dF0hJ";
+    const findings = detectSecretsInLine("settings.txt", `token appears near ${fakeValue}`, 7);
+
+    expect(findings).toEqual([
+      {
+        path: "settings.txt",
+        line: 7,
+        reason: "Possible high-entropy secret-like value near a sensitive keyword.",
+        redacted: "<redacted>",
+      },
+    ]);
+    expect(JSON.stringify(findings)).not.toContain(fakeValue);
+    expect(detectSecretsInLine("settings.txt", `reference ${fakeValue}`, 8)).toEqual([]);
+  });
+
+  it("retains overlapping rules on separate lines while deduplicating repeated paths and matches", async () => {
+    const dir = await createTempDir();
+    try {
+      const fakeToken = `ghp_${"a".repeat(20)}`;
+      await writeFile(
+        path.join(dir, "overlap.txt"),
+        `heading\npassword=${fakeToken} ${fakeToken}\npassword=${fakeToken}\n`
+      );
+
+      const findings = await detectPossibleSecrets(
+        dir,
+        [
+          { path: "overlap.txt", status: "added" },
+          { path: "overlap.txt", status: "modified" },
+        ],
+        DEFAULT_CONFIG
+      );
+
+      expect(findings).toEqual(
+        [2, 3].flatMap((line) => [
+          {
+            path: "overlap.txt",
+            line,
+            reason: "Possible GitHub token-like value detected.",
+            redacted: "<redacted>",
+          },
+          {
+            path: "overlap.txt",
+            line,
+            reason: "Possible Secret assignment-like value detected.",
+            redacted: "<redacted>",
+          },
+        ])
+      );
+      expect(JSON.stringify(findings)).not.toContain(fakeToken);
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
   it("calculates entropy consistently for Unicode code points", () => {
     expect(shannonEntropy("")).toBe(0);
     expect(shannonEntropy("\u{1F600}".repeat(4))).toBe(0);
