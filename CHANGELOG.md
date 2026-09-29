@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Expanded real Windows command-wrapper and native executable tests; documented two open CodeQL findings and the command execution trust boundary.
+- Completed the detector source review after resolving the local access restriction and added a regression for repository containment through directory links.
 
 ## 0.8.1
 
