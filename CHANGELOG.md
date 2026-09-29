@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.2
 
 - Handled command startup failures, disappearing scan paths, exact staged-content size limits, and malformed catalog Git fields explicitly.
 - Prevented concurrent initialization overwrites, verified replay records before pruning, and made forced exports atomic.
