@@ -1,7 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { RiskSeverity, SessionReport } from "../types.js";
-import { ensureDir, pathExists } from "../utils/files.js";
+import { ensureDir, pathExists, writeTextFileAtomic } from "../utils/files.js";
 import {
   generateCommandsMarkdown,
   generateDiffSummaryMarkdown,
@@ -73,10 +73,11 @@ export async function writeSessionExport(
 
   await ensureDir(path.dirname(resolvedPath));
   try {
-    await writeFile(resolvedPath, content, {
-      encoding: "utf8",
-      flag: options.force ? "w" : "wx",
-    });
+    if (options.force) {
+      await writeTextFileAtomic(resolvedPath, content);
+    } else {
+      await writeFile(resolvedPath, content, { encoding: "utf8", flag: "wx" });
+    }
   } catch (error) {
     if (!options.force && isFileExistsError(error)) {
       throw new Error(

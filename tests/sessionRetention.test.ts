@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_CONFIG } from "../src/config/defaults.js";
@@ -14,6 +14,9 @@ import {
   retentionDateForDays,
 } from "../src/session/sessionRetention.js";
 import { getActiveSessionPath } from "../src/session/sessionManager.js";
+import { INLINE_REPORT_BYTES } from "../src/session/reportStorage.js";
+import type { FileEvent } from "../src/types.js";
+import { pathExists } from "../src/utils/files.js";
 import { createTempDir, removeTempDir } from "./testUtils.js";
 
 describe("session retention", () => {
@@ -75,6 +78,51 @@ describe("session retention", () => {
       await removeTempDir(repo);
     }
   });
+
+  it.each(["healthy", "corrupt"])(
+    "checks large report records before retention (%s)",
+    async (kind) => {
+      const repo = await createTempDir("abb-retention-");
+      try {
+        const event: FileEvent = {
+          timestamp: "2026-01-01T00:00:00.000Z",
+          eventType: "change",
+          path: `src/${"x".repeat(30_000)}.ts`,
+        };
+        const events = Array.from({ length: 1_200 }, () => event);
+        await makeSession(repo, "session-old", "2026-01-01T00:00:00.000Z", events);
+        await makeSession(repo, "session-new", "2026-01-03T00:00:00.000Z");
+        const sessionDir = path.join(repo, DEFAULT_CONFIG.sessionDir, "session-old");
+        const reportPath = path.join(sessionDir, "session.json");
+        const eventPath = path.join(sessionDir, "events.ndjson");
+        const eventLogBytes = (await stat(eventPath)).size;
+        expect((await stat(reportPath)).size).toBeGreaterThan(INLINE_REPORT_BYTES);
+
+        if (kind === "corrupt") {
+          const handle = await open(eventPath, "r+");
+          try {
+            await handle.write(Buffer.from("y"), 0, 1, JSON.stringify(event).indexOf("x"));
+          } finally {
+            await handle.close();
+          }
+        }
+
+        const plan = planSessionRetention(await listSessionCatalog(repo, DEFAULT_CONFIG), "2026-01-04");
+        if (kind === "corrupt") {
+          await expect(applySessionRetention(repo, DEFAULT_CONFIG, plan)).rejects.toThrow("no longer match");
+          expect(await pathExists(reportPath)).toBe(true);
+          expect((await stat(eventPath)).size).toBe(eventLogBytes);
+        } else {
+          await applySessionRetention(repo, DEFAULT_CONFIG, plan);
+          expect(await pathExists(sessionDir)).toBe(false);
+        }
+        expect(await pathExists(path.join(repo, DEFAULT_CONFIG.sessionDir, "session-new", "session.json"))).toBe(true);
+      } finally {
+        await removeTempDir(repo);
+      }
+    },
+    120_000
+  );
 
   it("rejects invalid cutoffs and keep counts", () => {
     expect(() => planSessionRetention([], "2026-02-30")).toThrow("valid date");
@@ -168,17 +216,25 @@ describe("session retention", () => {
   });
 });
 
-async function makeSession(repoRoot: string, id: string, startedAt: string): Promise<void> {
+async function makeSession(repoRoot: string, id: string, startedAt: string, events: FileEvent[] = []): Promise<void> {
   const sessionDir = path.join(repoRoot, ".agent-black-box", "sessions", id);
   const report = buildSessionReport(
     { id, repoRoot, sessionDir, startedAt },
     new Date(Date.parse(startedAt) + 60_000).toISOString(),
     "test",
-    [],
+    events,
     [],
     { repoRoot, branch: "main", statusText: "", diffSummaryText: "", changedFiles: [] },
     [],
     []
   );
+  if (events.length > 0) {
+    await mkdir(sessionDir, { recursive: true });
+    await writeFile(
+      path.join(sessionDir, "events.ndjson"),
+      `${events.map((event) => JSON.stringify(event)).join("\n")}\n`
+    );
+    await writeFile(path.join(sessionDir, "commands.ndjson"), "");
+  }
   await writeReports(report);
 }

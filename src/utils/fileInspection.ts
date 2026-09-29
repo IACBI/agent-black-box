@@ -39,18 +39,27 @@ export async function inspectTextFile(
     return { kind: "not-file", sizeBytes: stats.size, reason: "Path is not a regular file." };
   }
 
-  if (trustedRoot) {
-    const [physicalRoot, physicalParent] = await Promise.all([
-      realpath(trustedRoot),
-      realpath(path.dirname(absolutePath)),
-    ]);
-    const relativeParent = path.relative(physicalRoot, physicalParent);
-    if (relativeParent === ".." || relativeParent.startsWith(`..${path.sep}`) || path.isAbsolute(relativeParent)) {
-      return { kind: "not-file", sizeBytes: stats.size, reason: "Path resolves outside the repository." };
+  let handle: FileHandle;
+  try {
+    if (trustedRoot) {
+      const [physicalRoot, physicalParent] = await Promise.all([
+        realpath(trustedRoot),
+        realpath(path.dirname(absolutePath)),
+      ]);
+      const relativeParent = path.relative(physicalRoot, physicalParent);
+      if (relativeParent === ".." || relativeParent.startsWith(`..${path.sep}`) || path.isAbsolute(relativeParent)) {
+        return { kind: "not-file", sizeBytes: stats.size, reason: "Path resolves outside the repository." };
+      }
     }
+
+    handle = await open(absolutePath, "r");
+  } catch (error) {
+    if (isNotFound(error)) {
+      return { kind: "missing", reason: "File does not exist." };
+    }
+    throw error;
   }
 
-  const handle = await open(absolutePath, "r");
   try {
     const opened = await handle.stat();
     if (
@@ -130,7 +139,12 @@ async function readFilePrefix(handle: FileHandle, bytes: number): Promise<Buffer
 }
 
 function isNotFound(error: unknown): boolean {
-  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error.code === "ENOENT" || error.code === "ENOTDIR")
+  );
 }
 
 function countReplacementCharacters(value: string): number {

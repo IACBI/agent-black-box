@@ -211,7 +211,7 @@ function readGitBlob(repoRoot: string, objectId: string, maxBytes: number): Prom
           reject(new Error("Git returned an unexpected staged blob format."));
           return;
         }
-        resolve(stdout);
+        resolve(stdout.length > maxBytes ? null : stdout);
       }
     );
   });

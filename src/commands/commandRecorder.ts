@@ -198,12 +198,18 @@ function spawnCommand(commandParts: string[], cwd: string): Promise<{ exitCode: 
         resolve({ exitCode: null, error: "Windows command script arguments could not be passed safely." });
         return;
       }
-      const child = spawn(spawnTarget.command, spawnTarget.args, {
-        cwd,
-        shell: false,
-        stdio: "inherit",
-        windowsVerbatimArguments: spawnTarget.windowsVerbatimArguments,
-      });
+      let child: ReturnType<typeof spawn>;
+      try {
+        child = spawn(spawnTarget.command, spawnTarget.args, {
+          cwd,
+          shell: false,
+          stdio: "inherit",
+          windowsVerbatimArguments: spawnTarget.windowsVerbatimArguments,
+        });
+      } catch (error) {
+        resolve({ exitCode: null, error: formatSpawnError(error as NodeJS.ErrnoException) });
+        return;
+      }
       let fallbackStarted = false;
       let settled = false;
 

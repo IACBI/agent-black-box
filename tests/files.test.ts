@@ -68,4 +68,42 @@ describe("atomic file writes", () => {
       await removeTempDir(dir);
     }
   });
+
+  it("publishes exclusively without replacing an existing file", async () => {
+    const dir = await createTempDir();
+    try {
+      const filePath = path.join(dir, "config.json");
+      await writeTextFileAtomic(filePath, "original", { overwrite: false });
+
+      await expect(writeTextFileAtomic(filePath, "replacement", { overwrite: false })).rejects.toMatchObject({
+        code: "EEXIST",
+      });
+      await expect(readFile(filePath, "utf8")).resolves.toBe("original");
+      expect(await readdir(dir)).toEqual(["config.json"]);
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
+  it("preserves the previous file when a temporary write fails", async () => {
+    const dir = await createTempDir();
+    try {
+      const filePath = path.join(dir, "report.md");
+      await writeFile(filePath, "original");
+      const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+      const failure = new Error("Simulated write failure.");
+      vi.mocked(fs.open).mockImplementationOnce(async (...args) => {
+        const handle = await actual.open(...args);
+        vi.spyOn(handle, "writeFile").mockRejectedValueOnce(failure);
+        return handle;
+      });
+
+      await expect(writeTextFileAtomic(filePath, "replacement")).rejects.toBe(failure);
+      await expect(readFile(filePath, "utf8")).resolves.toBe("original");
+      expect(await readdir(dir)).toEqual(["report.md"]);
+    } finally {
+      vi.restoreAllMocks();
+      await removeTempDir(dir);
+    }
+  });
 });

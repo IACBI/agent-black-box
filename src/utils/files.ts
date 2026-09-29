@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { access, mkdir, open, readFile, readdir, rename, rm, stat } from "node:fs/promises";
+import { access, link, mkdir, open, readFile, readdir, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
 
 export async function pathExists(filePath: string): Promise<boolean> {
@@ -65,7 +65,11 @@ export async function writeJsonFile(filePath: string, value: unknown): Promise<v
   await writeTextFileAtomic(filePath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-export async function writeTextFileAtomic(filePath: string, contents: string): Promise<void> {
+export async function writeTextFileAtomic(
+  filePath: string,
+  contents: string,
+  options: { overwrite?: boolean } = {}
+): Promise<void> {
   const directory = path.dirname(filePath);
   await ensureDir(directory);
 
@@ -82,7 +86,13 @@ export async function writeTextFileAtomic(filePath: string, contents: string): P
 
   await handle.close();
   try {
-    await rename(temporaryPath, filePath);
+    if (options.overwrite === false) {
+      // Publish the completed file exclusively; rename would overwrite a concurrent creator.
+      await link(temporaryPath, filePath);
+      await rm(temporaryPath, { force: true });
+    } else {
+      await rename(temporaryPath, filePath);
+    }
   } catch (error) {
     await rm(temporaryPath, { force: true });
     throw error;

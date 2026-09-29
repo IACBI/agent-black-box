@@ -29,7 +29,14 @@ export async function createDefaultConfig(repoRoot: string): Promise<string> {
     throw new Error(`${CONFIG_FILE_NAME} already exists.`);
   }
 
-  await writeTextFileAtomic(configPath, `${JSON.stringify(DEFAULT_CONFIG, null, 2)}\n`);
+  try {
+    await writeTextFileAtomic(configPath, `${JSON.stringify(DEFAULT_CONFIG, null, 2)}\n`, { overwrite: false });
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST") {
+      throw new Error(`${CONFIG_FILE_NAME} already exists.`, { cause: error });
+    }
+    throw error;
+  }
   return configPath;
 }
 

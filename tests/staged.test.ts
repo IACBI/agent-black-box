@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { analyzeChangedFiles } from "../src/analyze/analyzer.js";
 import { compareAnalysisWithBaseline } from "../src/analyze/baseline.js";
+import { evaluateAnalysisPolicy } from "../src/analyze/policy.js";
 import {
   collectBaselineAnalysisInputFiles,
   collectStagedAnalysisInputFiles,
@@ -13,6 +14,58 @@ import { DEFAULT_CONFIG } from "../src/config/defaults.js";
 import { createTempDir, initGitRepo, removeTempDir } from "./testUtils.js";
 
 describe("staged analysis", () => {
+  it.each([
+    { maxFileSizeKb: 1, maxBytes: 1024 },
+    { maxFileSizeKb: 500, maxBytes: 256 * 1024 },
+  ])(
+    "enforces the $maxBytes-byte limit for staged and baseline blobs",
+    async ({ maxFileSizeKb, maxBytes }) => {
+      const repo = await createTempDir();
+      try {
+        initGitRepo(repo);
+        execFileSync("git", ["config", "user.email", "tests@example.invalid"], { cwd: repo });
+        execFileSync("git", ["config", "user.name", "Agent Black Box Tests"], { cwd: repo });
+        const config = { ...DEFAULT_CONFIG, maxFileSizeKb };
+        for (const extraBytes of [0, 1, 2]) {
+          await writeFile(path.join(repo, `limit-${extraBytes}.txt`), "a".repeat(maxBytes + extraBytes), "utf8");
+        }
+        execFileSync("git", ["add", "-A"], { cwd: repo });
+        execFileSync("git", ["commit", "-m", "baseline"], { cwd: repo });
+        const commit = await resolveBaselineCommit(repo, "HEAD");
+        for (const extraBytes of [0, 1, 2]) {
+          await writeFile(path.join(repo, `limit-${extraBytes}.txt`), "b".repeat(maxBytes + extraBytes), "utf8");
+        }
+        execFileSync("git", ["add", "-A"], { cwd: repo });
+
+        const files = await collectStagedAnalysisInputFiles(repo, config);
+        const baseline = await collectBaselineAnalysisInputFiles(repo, files, config, commit);
+        for (const collected of [files, baseline]) {
+          expect(collected.find((file) => file.path === "limit-0.txt")).toMatchObject({ kind: "text" });
+          expect(collected.find((file) => file.path === "limit-0.txt")?.content).toHaveLength(maxBytes);
+          for (const extraBytes of [1, 2]) {
+            const file = collected.find((entry) => entry.path === `limit-${extraBytes}.txt`);
+            expect(file).toMatchObject({ kind: "large" });
+            expect(file?.content).toBeUndefined();
+            expect(file?.analysisSkipReason).toContain(`exceeds ${maxBytes} bytes`);
+          }
+        }
+
+        const overflowFiles = files.filter((file) => file.path === "limit-1.txt");
+        const result = {
+          ...compareAnalysisWithBaseline(overflowFiles, [], analyzeChangedFiles(overflowFiles), commit),
+          coverage: { source: "index" as const, scannedTextFiles: 0, skipped: [] },
+        };
+        expect(evaluateAnalysisPolicy(result, overflowFiles, "complete-review")).toMatchObject({
+          failed: true,
+          skippedStagedFiles: 1,
+        });
+      } finally {
+        await removeTempDir(repo);
+      }
+    },
+    20_000
+  );
+
   it("reads staged content even when the working tree has changed", async () => {
     const repo = await createTempDir();
     try {

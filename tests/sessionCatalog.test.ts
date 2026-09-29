@@ -7,6 +7,7 @@ import { writeReports } from "../src/reports/reportWriter.js";
 import {
   buildSessionMetadata,
   listSessionCatalog,
+  parseSessionReport,
   readCatalogSessionReport,
   resolveSessionEntry,
   SESSION_METADATA_FILE,
@@ -97,6 +98,99 @@ describe("session catalog", () => {
     }
   });
 
+  it.each(["head", "indexFingerprint", "branch"])("rejects numeric Git %s in stored reports", async (field) => {
+    const repo = await createTempDir("abb-catalog-");
+    try {
+      const id = "session-invalid-git";
+      const report = makeReport(repo, path.join(repo, DEFAULT_CONFIG.sessionDir, id), id, "2026-01-05T00:00:00.000Z");
+      await expectCorruptReport(repo, id, { ...report, git: { ...report.git, [field]: 42 } });
+    } finally {
+      await removeTempDir(repo);
+    }
+  });
+
+  it.each([
+    ["status", "modified"],
+    ["kind", "text"],
+    ["lineStatsSource", "git"],
+  ])("rejects array-valued file %s in stored reports", async (field, value) => {
+    const repo = await createTempDir("abb-catalog-");
+    try {
+      const id = "session-invalid-file";
+      const report = makeReport(repo, path.join(repo, DEFAULT_CONFIG.sessionDir, id), id, "2026-01-05T00:00:00.000Z");
+      await expectCorruptReport(repo, id, {
+        ...report,
+        git: { ...report.git, changedFiles: [{ path: "src/index.ts", status: "modified", [field]: [value] }] },
+      });
+    } finally {
+      await removeTempDir(repo);
+    }
+  });
+
+  it.each([
+    {
+      field: "risks",
+      record: { path: "src/auth.ts", category: "auth", severity: ["high"], score: 90, reason: "Review." },
+    },
+    {
+      field: "events",
+      record: { timestamp: "2026-01-05T00:00:00.000Z", path: "src/index.ts", eventType: ["change"] },
+    },
+  ])("rejects array-valued enums in $field before rendering", async ({ field, record }) => {
+    const repo = await createTempDir("abb-catalog-");
+    try {
+      const id = "session-invalid-enum";
+      const report = makeReport(repo, path.join(repo, DEFAULT_CONFIG.sessionDir, id), id, "2026-01-05T00:00:00.000Z");
+      await expectCorruptReport(repo, id, { ...report, [field]: [record] });
+    } finally {
+      await removeTempDir(repo);
+    }
+  });
+
+  it.each(["head", "indexFingerprint", "branch"])(
+    "normalizes invalid baseline Git %s to an unavailable baseline",
+    (field) => {
+      const report = makeReport(
+        "/repo",
+        "/repo/sessions/session-baseline",
+        "session-baseline",
+        "2026-01-05T00:00:00.000Z"
+      );
+      const parsed = parseSessionReport({
+        ...report,
+        baseline: { capturedAt: report.startedAt, git: { ...report.git, [field]: 42 } },
+      });
+      expect(parsed).not.toBeNull();
+      expect(parsed?.baseline).toBeNull();
+    }
+  );
+
+  it("derives invalid enum-valued metadata and risk summaries from the valid report", async () => {
+    const repo = await createTempDir("abb-catalog-");
+    try {
+      const id = "session-invalid-summary";
+      const sessionDir = path.join(repo, DEFAULT_CONFIG.sessionDir, id);
+      const report = makeReport(repo, sessionDir, id, "2026-01-05T00:00:00.000Z");
+      await mkdir(sessionDir, { recursive: true });
+      await writeJsonFile(path.join(sessionDir, "session.json"), {
+        ...report,
+        riskSummary: { ...report.riskSummary, maxSeverity: ["high"] },
+      });
+      await writeJsonFile(path.join(sessionDir, SESSION_METADATA_FILE), {
+        ...buildSessionMetadata(report),
+        maxRiskSeverity: ["high"],
+      });
+
+      const [entry] = await listSessionCatalog(repo, DEFAULT_CONFIG);
+      expect(entry.state).toBe("complete");
+      expect(entry.warning).toContain("derived from session.json");
+      expect(entry.maxRiskSeverity).toBe("none");
+      expect((await readCatalogSessionReport(entry)).riskSummary.maxSeverity).toBe("none");
+    } finally {
+      await removeTempDir(repo);
+    }
+  });
+
   it("reopens a report larger than the inline read limit without changing session.json", async () => {
     const repo = await createTempDir("abb-large-catalog-");
     try {
@@ -150,6 +244,16 @@ describe("session catalog", () => {
     }
   }, 120_000);
 });
+
+async function expectCorruptReport(repo: string, id: string, value: unknown): Promise<void> {
+  const sessionDir = path.join(repo, DEFAULT_CONFIG.sessionDir, id);
+  await mkdir(sessionDir, { recursive: true });
+  await writeJsonFile(path.join(sessionDir, "session.json"), value);
+
+  const [entry] = await listSessionCatalog(repo, DEFAULT_CONFIG);
+  expect(entry.state).toBe("corrupt");
+  await expect(readCatalogSessionReport({ id, sessionDir, state: "complete" })).rejects.toThrow("invalid session.json");
+}
 
 function makeReport(repoRoot: string, sessionDir: string, id: string, startedAt: string) {
   return buildSessionReport(

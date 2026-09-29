@@ -1,11 +1,10 @@
-import { access, constants } from "node:fs/promises";
+import { access, constants, stat } from "node:fs/promises";
 import path from "node:path";
 import type { AgentBlackBoxConfig } from "../types.js";
 import { CONFIG_FILE_NAME, DEFAULT_CONFIG } from "../config/defaults.js";
 import { configExists, type ConfigLoadOptions, loadConfigWithMeta } from "../config/config.js";
 import { getRepositoryRoot } from "../git/git.js";
 import { getSessionRoot, inspectSessionRecoveryState } from "../session/sessionManager.js";
-import { pathExists } from "../utils/files.js";
 
 export type DoctorStatus = "pass" | "warn" | "fail";
 
@@ -110,13 +109,31 @@ async function checkConfig(
 
 async function checkSessionDirectory(repoRoot: string, config: AgentBlackBoxConfig): Promise<DoctorCheck> {
   const sessionRoot = getSessionRoot(repoRoot, config);
-  const existingPath = (await pathExists(sessionRoot)) ? sessionRoot : path.dirname(sessionRoot);
+  let existingPath = sessionRoot;
 
-  if (!(await pathExists(existingPath))) {
-    return warn("Session directory", `${sessionRoot} does not exist yet. It will be created by \`abb start\`.`);
+  while (true) {
+    try {
+      const details = await stat(existingPath);
+      if (!details.isDirectory()) {
+        return fail("Session directory", `Not a directory: ${existingPath}`);
+      }
+      const writable = await checkWritable(existingPath, "Session directory");
+      if (writable.status === "fail" || existingPath === sessionRoot || existingPath === path.dirname(sessionRoot)) {
+        return writable;
+      }
+      return warn("Session directory", `${sessionRoot} does not exist yet. It will be created by \`abb start\`.`);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") {
+        return fail("Session directory", `Cannot inspect ${existingPath}: ${(error as Error).message}`);
+      }
+      const parentPath = path.dirname(existingPath);
+      if (parentPath === existingPath) {
+        return fail("Session directory", `No existing directory found for ${sessionRoot}.`);
+      }
+      existingPath = parentPath;
+    }
   }
-
-  return checkWritable(existingPath, "Session directory");
 }
 
 async function checkSessionRecovery(repoRoot: string, config: AgentBlackBoxConfig): Promise<DoctorCheck> {

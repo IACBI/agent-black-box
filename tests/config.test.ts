@@ -1,6 +1,7 @@
+import * as fs from "node:fs/promises";
 import { readFile, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createDefaultConfig,
   getConfigPath,
@@ -10,6 +11,11 @@ import {
 } from "../src/config/config.js";
 import { DEFAULT_CONFIG } from "../src/config/defaults.js";
 import { createTempDir, removeTempDir } from "./testUtils.js";
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, access: vi.fn(actual.access) };
+});
 
 describe("config", () => {
   it("validates the default storage path even without a config file", async () => {
@@ -52,6 +58,23 @@ describe("config", () => {
       expect(configPath).toBe(getConfigPath(dir));
       expect(JSON.parse(raw)).toEqual(DEFAULT_CONFIG);
       await expect(createDefaultConfig(dir)).rejects.toThrow(".agentblackbox.json already exists");
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
+  it("preserves a config created after the initial existence check", async () => {
+    const dir = await createTempDir();
+    try {
+      const configPath = getConfigPath(dir);
+      const existingConfig = JSON.stringify({ ...DEFAULT_CONFIG, maxFileSizeKb: 42 });
+      vi.mocked(fs.access).mockImplementationOnce(async () => {
+        await writeFile(configPath, existingConfig);
+        throw Object.assign(new Error("Stale absence check."), { code: "ENOENT" });
+      });
+
+      await expect(createDefaultConfig(dir)).rejects.toThrow(".agentblackbox.json already exists");
+      await expect(readFile(configPath, "utf8")).resolves.toBe(existingConfig);
     } finally {
       await removeTempDir(dir);
     }

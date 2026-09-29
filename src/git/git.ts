@@ -56,26 +56,18 @@ export async function isGitRepository(cwd: string): Promise<boolean> {
 export async function collectGitSnapshot(repoRoot: string, excludePatterns: string[] = []): Promise<GitSnapshot> {
   const git = simpleGit({ baseDir: repoRoot, binary: "git" });
   const diffPathspecs = buildDiffPathspecs(excludePatterns);
-  const [status, head, indexFingerprint, diffSummary, unstagedStat, stagedStat] = await Promise.all([
+  const [status, head, indexFingerprint, unstagedNumStat, unstagedStat, stagedStat] = await Promise.all([
     git.status(),
     getHeadRevision(git),
     getIndexFingerprint(git, diffPathspecs),
-    git.diffSummary(),
+    git.raw(["diff", "--numstat", "-z"]),
     git.raw(diffPathspecs.length > 0 ? ["diff", "--stat", "--", ...diffPathspecs] : ["diff", "--stat"]),
     git.raw(
       diffPathspecs.length > 0 ? ["diff", "--cached", "--stat", "--", ...diffPathspecs] : ["diff", "--cached", "--stat"]
     ),
   ]);
 
-  const summaryByPath = new Map(
-    diffSummary.files.map((file) => [
-      normalizePath(file.file),
-      {
-        insertions: "insertions" in file ? file.insertions : undefined,
-        deletions: "deletions" in file ? file.deletions : undefined,
-      },
-    ])
-  );
+  const summaryByPath = parseNumStat(unstagedNumStat);
 
   const visibleStatusFiles = status.files.filter((file) => !isPathExcluded(file.path, excludePatterns));
   const changedFiles = await mapWithConcurrency(visibleStatusFiles, FILE_INSPECTION_CONCURRENCY, async (file) => {
@@ -231,6 +223,32 @@ function parseNameStatus(output: string): ChangedFile[] {
   }
 
   return files;
+}
+
+function parseNumStat(output: string): Map<string, Pick<ChangedFile, "insertions" | "deletions">> {
+  const tokens = output.split("\0");
+  const stats = new Map<string, Pick<ChangedFile, "insertions" | "deletions">>();
+
+  for (let index = 0; index < tokens.length;) {
+    const match = /^(\d+|-)\t(\d+|-)\t([\s\S]*)$/.exec(tokens[index++]);
+    if (!match) {
+      continue;
+    }
+    let filePath = match[3];
+    if (!filePath) {
+      // Renames and copies have an empty path field followed by separate source and destination tokens.
+      index += 1;
+      filePath = tokens[index++];
+    }
+    if (filePath) {
+      stats.set(normalizePath(filePath), {
+        insertions: match[1] === "-" ? undefined : Number(match[1]),
+        deletions: match[2] === "-" ? undefined : Number(match[2]),
+      });
+    }
+  }
+
+  return stats;
 }
 
 function mapDiffStatus(status: string): ChangeStatus {

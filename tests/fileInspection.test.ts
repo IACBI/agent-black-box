@@ -1,8 +1,14 @@
+import * as fs from "node:fs/promises";
 import { symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { inspectTextFile, isLikelyBinary } from "../src/utils/fileInspection.js";
 import { createTempDir, removeTempDir } from "./testUtils.js";
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, open: vi.fn(actual.open), realpath: vi.fn(actual.realpath) };
+});
 
 describe("file inspection", () => {
   it("detects text and binary buffers", () => {
@@ -36,6 +42,46 @@ describe("file inspection", () => {
         kind: "large",
         sizeBytes: 128,
       });
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
+  it.each(["ENOENT", "ENOTDIR"])("classifies a file that disappears before opening (%s) as missing", async (code) => {
+    const dir = await createTempDir();
+    try {
+      const filePath = path.join(dir, "changing.txt");
+      await writeFile(filePath, "hello", "utf8");
+      vi.mocked(fs.open).mockRejectedValueOnce(Object.assign(new Error("File disappeared."), { code }));
+
+      await expect(inspectTextFile(filePath, 1024)).resolves.toMatchObject({ kind: "missing" });
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
+  it.each(["ENOENT", "ENOTDIR"])("classifies a disappearing trusted ancestor (%s) as missing", async (code) => {
+    const dir = await createTempDir();
+    try {
+      const filePath = path.join(dir, "changing.txt");
+      await writeFile(filePath, "hello", "utf8");
+      vi.mocked(fs.realpath).mockRejectedValueOnce(Object.assign(new Error("Ancestor disappeared."), { code }));
+
+      await expect(inspectTextFile(filePath, 1024, undefined, dir)).resolves.toMatchObject({ kind: "missing" });
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
+  it("preserves file permission errors during inspection", async () => {
+    const dir = await createTempDir();
+    try {
+      const filePath = path.join(dir, "restricted.txt");
+      await writeFile(filePath, "hello", "utf8");
+      const permissionError = Object.assign(new Error("Permission denied."), { code: "EACCES" });
+      vi.mocked(fs.open).mockRejectedValueOnce(permissionError);
+
+      await expect(inspectTextFile(filePath, 1024)).rejects.toBe(permissionError);
     } finally {
       await removeTempDir(dir);
     }
