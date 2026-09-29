@@ -39,6 +39,7 @@ pnpm release:check
 - New behavior has focused tests.
 - README or `docs/` pages are updated when needed.
 - Security-sensitive behavior has been reviewed for secret exposure.
+- Check open CodeQL alerts as well as the workflow result; document unresolved findings and test evidence.
 - Rollback apply behavior never restores paths that were already changed at session start.
 
 ## Dependency Updates

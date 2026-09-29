@@ -35,3 +35,7 @@ Do not include real secrets in reports. Use redacted values or clearly fake exam
 - Production dependency audits and CodeQL analysis run in CI; runtime operation remains network-independent.
 
 The latest repository-level review is recorded in [the project audit](docs/AUDIT.md).
+
+`abb run` and the exported `recordAndRunCommand` function execute the caller's selected executable. Programmatic callers must authorize executable names and arguments before invoking the function; recording and redaction do not provide a command sandbox. Windows batch files also depend on the behavior of the invoked script.
+
+A successful CodeQL workflow does not imply that its alert list is empty. Open findings, tested protections, and review limitations are documented in the audit rather than silently suppressed.
