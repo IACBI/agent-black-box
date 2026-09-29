@@ -1,4 +1,5 @@
-import { mkdir, readFile, readdir, symlink, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { copyFile, mkdir, readFile, readdir, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONFIG } from "../src/config/defaults.js";
@@ -10,6 +11,8 @@ import {
   redactCommandParts,
   resolveRunCwd,
 } from "../src/commands/commandRecorder.js";
+import { collectStagedAnalysisInputFiles } from "../src/analyze/staged.js";
+import { getRepositoryRoot } from "../src/git/git.js";
 import {
   createSession,
   getActiveSessionPath,
@@ -134,6 +137,7 @@ describe("command recorder", () => {
 
   it.each([
     ["empty executable", [""]],
+    ["null byte executable", ["tool\0name"]],
     ["null byte argument", [process.execPath, "--password", "synthetic\0credential"]],
   ])("records synchronous spawn failures for %s and clears the in-flight marker", async (_label, commandParts) => {
     const dir = await createTempDir();
@@ -226,6 +230,86 @@ describe("command recorder", () => {
         expect(await recordAndRunCommand([scriptPath, "%USERNAME%"], dir)).toBe(1);
         expect(JSON.parse(await readFile(outputPath, "utf8"))).toEqual(args);
       } finally {
+        await removeTempDir(dir);
+      }
+    },
+    15_000
+  );
+
+  it.skipIf(process.platform !== "win32")(
+    "runs a bare .bat-only command from PATH and propagates its exit code",
+    async () => {
+      const dir = await createTempDir();
+      const originalPath = process.env.PATH;
+      try {
+        initGitRepo(dir);
+        const binDir = path.join(dir, "bin dir");
+        await mkdir(binDir);
+        const outputPath = path.join(dir, "bat-output.txt");
+        await writeFile(
+          path.join(binDir, "onlybat.bat"),
+          `@echo off\r\n(echo %1)> "${outputPath}"\r\nexit /b 7\r\n`,
+          "utf8"
+        );
+        const session = await createSession(dir, DEFAULT_CONFIG);
+        process.env.PATH = `${binDir}${path.delimiter}${originalPath ?? ""}`;
+
+        expect(await recordAndRunCommand(["onlybat", "argument"], dir)).toBe(7);
+        expect((await readFile(outputPath, "utf8")).trim()).toBe("argument");
+        const [event] = await readCommandEvents(session.sessionDir);
+        expect(event).toMatchObject({ command: "onlybat argument", exitCode: 7 });
+        expect(event.error).toBeUndefined();
+      } finally {
+        process.env.PATH = originalPath;
+        await removeTempDir(dir);
+      }
+    },
+    15_000
+  );
+
+  it.skipIf(process.platform !== "win32")(
+    "does not run a script that only exists in the repository when a bare name is missing from PATH",
+    async () => {
+      const dir = await createTempDir();
+      vi.stubEnv("NoDefaultCurrentDirectoryInExePath", undefined);
+      try {
+        initGitRepo(dir);
+        const markerPath = path.join(dir, "shadow-ran.txt");
+        await writeFile(path.join(dir, "abb-shadow-tool.cmd"), `@echo off\r\necho ran> "${markerPath}"\r\n`, "utf8");
+        const session = await createSession(dir, DEFAULT_CONFIG);
+
+        expect(await recordAndRunCommand(["abb-shadow-tool"], dir)).toBe(1);
+        await expect(readFile(markerPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+        const [event] = await readCommandEvents(session.sessionDir);
+        expect(event.error).toContain("ENOENT");
+      } finally {
+        vi.unstubAllEnvs();
+        await removeTempDir(dir);
+      }
+    },
+    15_000
+  );
+
+  it.skipIf(process.platform !== "win32")(
+    "does not execute a git.exe planted in the repository",
+    async () => {
+      const dir = await createTempDir();
+      // The variable makes Windows skip the current directory; unset it to match a default install.
+      vi.stubEnv("NoDefaultCurrentDirectoryInExePath", undefined);
+      try {
+        initGitRepo(dir);
+        await writeFile(path.join(dir, "tracked.txt"), "staged content\n");
+        execFileSync("git", ["add", "tracked.txt"], { cwd: dir });
+        // A copy of node.exe fails any git invocation, so success proves the real git ran.
+        await copyFile(process.execPath, path.join(dir, "git.exe"));
+
+        await expect(getRepositoryRoot(dir)).resolves.toBeTruthy();
+        const staged = await collectStagedAnalysisInputFiles(dir, DEFAULT_CONFIG);
+        expect(staged.map((file) => [file.path, file.content])).toEqual([["tracked.txt", "staged content\n"]]);
+        await createSession(dir, DEFAULT_CONFIG);
+        expect(await recordAndRunCommand(["git", "--version"], dir)).toBe(0);
+      } finally {
+        vi.unstubAllEnvs();
         await removeTempDir(dir);
       }
     },

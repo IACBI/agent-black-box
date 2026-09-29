@@ -15,6 +15,7 @@ export * from "./session/sessionManager.js";
 export * from "./session/changeEvidence.js";
 export * from "./session/sessionCatalog.js";
 export * from "./session/sessionComparison.js";
+export * from "./session/sessionVerification.js";
 export * from "./types.js";
 export * from "./utils/fileInspection.js";
 export * from "./utils/concurrency.js";

@@ -19,7 +19,7 @@ import { buildSessionReport } from "../reports/markdown.js";
 import { writeReports } from "../reports/reportWriter.js";
 import { ensureDir, pathExists, readJsonFileLimited, removeFileIfExists, writeJsonFile } from "../utils/files.js";
 import { buildChangeEvidence, selectSessionRelevantChanges } from "./changeEvidence.js";
-import { listSessionCatalog, resolveSessionEntry, verifyCatalogSessionReportFile } from "./sessionCatalog.js";
+import { verifyCatalogSessionReportFile } from "./sessionCatalog.js";
 import { isCapturedCommandEvent, isCapturedFileEvent, readNdjsonRecords, type NdjsonReadResult } from "./ndjson.js";
 
 const ACTIVE_SESSION_FILE = "active-session.json";
@@ -478,14 +478,6 @@ async function waitForInFlightCommands(sessionDir: string): Promise<string[]> {
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-}
-
-export async function getLatestSessionDir(repoRoot: string, config: AgentBlackBoxConfig): Promise<string | null> {
-  const entries = await listSessionCatalog(repoRoot, config);
-  if (!entries.some((entry) => entry.state === "complete")) {
-    return null;
-  }
-  return resolveSessionEntry(entries, "latest").sessionDir;
 }
 
 export function isProcessRunning(pid: number): boolean {

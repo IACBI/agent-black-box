@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
-import { simpleGit } from "simple-git";
+import type { SimpleGit } from "simple-git";
+import { createGit, gitExecutable } from "../git/executable.js";
 import type { AgentBlackBoxConfig } from "../types.js";
 import { collectStagedChanges } from "../git/git.js";
 import { mapWithConcurrency } from "../utils/concurrency.js";
@@ -18,7 +19,7 @@ export async function collectStagedAnalysisInputFiles(
     return [];
   }
 
-  const git = simpleGit({ baseDir: repoRoot, binary: "git" });
+  const git = createGit(repoRoot);
   const indexEntries = new Map<string, { mode: string; objectId: string }>();
   const indexOutput = await git.raw(["ls-files", "--stage", "-z"]);
   for (const entry of indexOutput.split("\0")) {
@@ -62,7 +63,7 @@ export async function resolveBaselineCommit(repoRoot: string, reference: string)
     throw new Error("--baseline must identify an existing Git commit.");
   }
   try {
-    const git = simpleGit({ baseDir: repoRoot, binary: "git" });
+    const git = createGit(repoRoot);
     const commit = (await git.raw(["rev-parse", "--verify", "--end-of-options", `${reference}^{commit}`])).trim();
     if (/^[0-9a-f]{40,64}$/.test(commit)) {
       return commit;
@@ -82,7 +83,7 @@ export async function collectBaselineAnalysisInputFiles(
   if (!/^[0-9a-f]{40,64}$/.test(commit)) {
     throw new Error("Baseline commit must be a full Git object ID.");
   }
-  const git = simpleGit({ baseDir: repoRoot, binary: "git" });
+  const git = createGit(repoRoot);
   const maxBytes = Math.min(config.maxFileSizeKb * 1024, MAX_ANALYSIS_BYTES);
   const samePathEntries = await mapWithConcurrency(stagedFiles, 4, (file) =>
     file.status === "deleted" ? Promise.resolve(null) : findBaselineBlob(git, commit, file.path)
@@ -145,7 +146,7 @@ export async function collectBaselineAnalysisInputFiles(
 }
 
 async function collectBaselineRenameSources(
-  git: ReturnType<typeof simpleGit>,
+  git: SimpleGit,
   commit: string,
   excludePatterns: string[]
 ): Promise<Map<string, string>> {
@@ -178,7 +179,7 @@ async function collectBaselineRenameSources(
 }
 
 async function findBaselineBlob(
-  git: ReturnType<typeof simpleGit>,
+  git: SimpleGit,
   commit: string,
   filePath: string
 ): Promise<{ mode: string; objectId: string } | null> {
@@ -195,7 +196,7 @@ async function findBaselineBlob(
 function readGitBlob(repoRoot: string, objectId: string, maxBytes: number): Promise<Buffer | null> {
   return new Promise((resolve, reject) => {
     execFile(
-      "git",
+      gitExecutable(),
       ["cat-file", "blob", objectId],
       { cwd: repoRoot, encoding: "buffer", maxBuffer: maxBytes + 1 },
       (error, stdout) => {

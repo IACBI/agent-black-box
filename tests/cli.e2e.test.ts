@@ -93,6 +93,40 @@ describe("CLI end-to-end", () => {
     }
   });
 
+  it("verifies stored sessions and exits non-zero when a report is damaged", async () => {
+    const repo = await createTempDir("abb-verify-cli-");
+    try {
+      initGitRepo(repo);
+      const healthy = await createSession(repo, DEFAULT_CONFIG);
+      await finalizeSession(healthy, DEFAULT_CONFIG, "test");
+
+      const ok = await runCli(repo, ["sessions", "verify"]);
+      expect(ok.exitCode).toBe(0);
+      expect(ok.stdout).toContain(`verified ${healthy.id}`);
+      expect(ok.stdout).toContain("Verified: 1, failed: 0, skipped: 0.");
+
+      const damaged = await createSession(repo, DEFAULT_CONFIG);
+      await finalizeSession(damaged, DEFAULT_CONFIG, "test");
+      await writeFile(path.join(damaged.sessionDir, "session.json"), "{ not json");
+
+      const all = await runCli(repo, ["sessions", "verify", "--json"]);
+      expect(all.exitCode).toBe(1);
+      const summary = JSON.parse(all.stdout) as {
+        verified: number;
+        failed: number;
+        sessions: Array<{ id: string; status: string }>;
+      };
+      expect(summary).toMatchObject({ verified: 1, failed: 1 });
+      expect(summary.sessions.find((session) => session.id === damaged.id)?.status).toBe("failed");
+
+      const single = await runCli(repo, ["sessions", "verify", healthy.id]);
+      expect(single.exitCode).toBe(0);
+      expect(single.stdout).toContain("Verified: 1, failed: 0, skipped: 0.");
+    } finally {
+      await removeTempDir(repo);
+    }
+  });
+
   it.skipIf(process.platform === "win32")("refuses to stream a report replaced by a symbolic link", async () => {
     const repo = await createTempDir("abb-linked-report-");
     const outside = await createTempDir("abb-outside-report-");

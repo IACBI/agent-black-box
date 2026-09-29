@@ -3,7 +3,7 @@ import { stdin as input, stdout as output } from "node:process";
 import { createHash } from "node:crypto";
 import { lstat, open, readlink, realpath } from "node:fs/promises";
 import path from "node:path";
-import { simpleGit } from "simple-git";
+import { createGit } from "../git/executable.js";
 import type { AgentBlackBoxConfig, ChangedFile, FileChangeEvidence, SessionReport } from "../types.js";
 import { collectGitSnapshot } from "../git/git.js";
 import { indexFileChangeEvidence } from "../session/changeEvidence.js";
@@ -329,7 +329,7 @@ export async function applyRollbackPlan(repoRoot: string, plan: RollbackPlan): P
     return;
   }
 
-  const git = simpleGit({ baseDir: repoRoot, binary: "git" });
+  const git = createGit(repoRoot);
   await git.raw([
     "restore",
     "--source=HEAD",

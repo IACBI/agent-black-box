@@ -61,13 +61,6 @@ export function selectSessionRelevantChanges(
   return [...changesByPath.values()];
 }
 
-export function findFileChangeEvidence(
-  evidence: SessionChangeEvidence | undefined,
-  filePath: string
-): FileChangeEvidence | undefined {
-  return evidence?.files.find((file) => file.path === filePath);
-}
-
 export function indexFileChangeEvidence(evidence: SessionChangeEvidence | undefined): Map<string, FileChangeEvidence> {
   return new Map((evidence?.files ?? []).map((file) => [file.path, file]));
 }

@@ -6,6 +6,7 @@ import { loadConfig, type ConfigLoadOptions } from "../config/config.js";
 import { requireRepositoryRoot } from "../git/git.js";
 import { appendCommandEvent, inspectSessionRecoveryState, registerInFlightCommand } from "../session/sessionManager.js";
 import { removeFileIfExists } from "../utils/files.js";
+import { resolveWindowsExecutable } from "../utils/executables.js";
 import { isPathInside, toRepoRelative } from "../utils/paths.js";
 
 const SENSITIVE_PATTERN =
@@ -186,69 +187,65 @@ function optionalMetadata<K extends "label" | "group" | "phase">(
 
 function spawnCommand(commandParts: string[], cwd: string): Promise<{ exitCode: number | null; error?: string }> {
   const [command, ...args] = commandParts;
+  const executable = resolveExecutable(command, cwd);
+  if (executable === null) {
+    return Promise.resolve({ exitCode: null, error: formatSpawnError({ code: "ENOENT" } as NodeJS.ErrnoException) });
+  }
 
   return new Promise((resolve) => {
-    const spawnWithFallback = (targetCommand: string, fallbackIndex: number): void => {
-      let spawnTarget: ReturnType<typeof getSpawnTarget>;
-      try {
-        spawnTarget = getSpawnTarget(targetCommand, args);
-      } catch {
-        resolve({ exitCode: null, error: "Windows command script arguments could not be passed safely." });
-        return;
-      }
-      let child: ReturnType<typeof spawn>;
-      try {
-        child = spawn(spawnTarget.command, spawnTarget.args, {
-          cwd,
-          shell: false,
-          stdio: "inherit",
-          windowsVerbatimArguments: spawnTarget.windowsVerbatimArguments,
-        });
-      } catch (error) {
-        resolve({ exitCode: null, error: formatSpawnError(error as NodeJS.ErrnoException) });
-        return;
-      }
-      let fallbackStarted = false;
-      let settled = false;
-
-      child.once("error", (error: NodeJS.ErrnoException) => {
-        if (shouldTryWindowsScriptFallback(command, error, fallbackIndex)) {
-          fallbackStarted = true;
-          spawnWithFallback(`${command}${WINDOWS_SCRIPT_EXTENSIONS[fallbackIndex]}`, fallbackIndex + 1);
-          return;
-        }
-
-        if (!settled) {
-          settled = true;
-          resolve({ exitCode: null, error: formatSpawnError(error) });
-        }
+    let spawnTarget: ReturnType<typeof getSpawnTarget>;
+    try {
+      spawnTarget = getSpawnTarget(executable, args);
+    } catch {
+      resolve({ exitCode: null, error: "Windows command script arguments could not be passed safely." });
+      return;
+    }
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(spawnTarget.command, spawnTarget.args, {
+        cwd,
+        shell: false,
+        stdio: "inherit",
+        windowsVerbatimArguments: spawnTarget.windowsVerbatimArguments,
       });
+    } catch (error) {
+      resolve({ exitCode: null, error: formatSpawnError(error as NodeJS.ErrnoException) });
+      return;
+    }
+    let settled = false;
 
-      child.once("close", (code) => {
-        if (!fallbackStarted && !settled) {
-          settled = true;
-          resolve({ exitCode: code });
-        }
-      });
-    };
+    child.once("error", (error: NodeJS.ErrnoException) => {
+      if (!settled) {
+        settled = true;
+        resolve({ exitCode: null, error: formatSpawnError(error) });
+      }
+    });
 
-    spawnWithFallback(command, 0);
+    child.once("close", (code) => {
+      if (!settled) {
+        settled = true;
+        resolve({ exitCode: code });
+      }
+    });
   });
 }
 
-const WINDOWS_SCRIPT_EXTENSIONS = [".cmd", ".bat"] as const;
+/**
+ * On Windows a bare command name is resolved through absolute PATH entries only, so an executable
+ * or script inside the repository cannot shadow a tool. Returns null when a bare name is not found.
+ */
+function resolveExecutable(command: string, cwd: string): string | null {
+  // Invalid names are passed through so spawn reports its own validation error.
+  if (process.platform !== "win32" || command === "" || command.includes("\0")) {
+    return command;
+  }
 
-function shouldTryWindowsScriptFallback(
-  originalCommand: string,
-  error: NodeJS.ErrnoException,
-  fallbackIndex: number
-): boolean {
-  return (
-    process.platform === "win32" &&
-    error.code === "ENOENT" &&
-    path.extname(originalCommand) === "" &&
-    fallbackIndex < WINDOWS_SCRIPT_EXTENSIONS.length
-  );
+  const hasDirectory = /[\\/]/.test(command);
+  if (hasDirectory && path.extname(command) !== "") {
+    return command;
+  }
+
+  return resolveWindowsExecutable(command, cwd) ?? (hasDirectory ? command : null);
 }
 
 function getSpawnTarget(
