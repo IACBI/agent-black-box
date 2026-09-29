@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Updated the pinned CodeQL Action steps together to v4.38.2 and refreshed ESLint, typescript-eslint, Knip, and tsx development tooling.
 - Added staged analysis with fixed-commit baselines, count-aware secret suppression, and Git rename-source provenance in text, JSON, and SARIF.
 - Added `new-secrets` and `complete-review` CI policies, including explicit scan-coverage diagnostics.
 - Added filtered session history, interactive browsing, retention previews, and verified copy-only archives with optional configuration defaults.
