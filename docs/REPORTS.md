@@ -44,4 +44,4 @@ Inline JSON reads stop at 32 MiB. Larger reports retain full JSON and reconstruc
 
 Structural reads/pruning validate reconstructed record counts/digests and discarded-line counts. Large-report streaming, completed-state recovery and archive preflight check the report digest/log sizes without replaying records. Streamed files must be regular and match their opened identity. Catalog metadata is not a full integrity scan.
 
-Pruning rereads eligible reports before deletion. Archiving verifies copied bytes with streaming checksums, marks completion and keeps originals. Inspect interrupted quarantine/partial-archive directories before cleanup. [Audit](AUDIT.md) records resource and filesystem-race limitations.
+Pruning rereads eligible reports before deletion. Archiving verifies copied bytes with streaming checksums, marks completion and keeps originals. Inspect interrupted quarantine/partial-archive directories before cleanup.

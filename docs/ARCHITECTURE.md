@@ -33,7 +33,7 @@ Storage stays physically inside the repository unless explicitly allowed for tru
 
 State/config/metadata reads are bounded and validated. Stop/recovery require matching state/lock ownership; corrupt/ambiguous state is preserved. Recovery verifies completed reports before clearing stale state. Initialization publishes a fully written file exclusively through a hard link. State/reports and forced exports use atomic rename; ordinary exports use exclusive creation. See [Reports](REPORTS.md) for verification levels.
 
-Rollback defaults to guidance. CLI apply requires the latest session, eligible tracked files and typed confirmation; pre-existing changes are excluded. HEAD/index/file identity is rechecked before restore to HEAD. Library caller boundaries and hard-link support/race limits are in [Security](../SECURITY.md) and [Audit](AUDIT.md).
+Rollback defaults to guidance. CLI apply requires the latest session, eligible tracked files and typed confirmation; pre-existing changes are excluded. HEAD/index/file identity is rechecked before restore to HEAD. Library caller boundaries are in [Security](../SECURITY.md).
 
 ## Bounded resource use
 

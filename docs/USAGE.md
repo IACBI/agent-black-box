@@ -102,7 +102,7 @@ Baseline comparison suppresses identical existing secret-like lines up to their 
 
 Worktree, staged, and baseline CLI reads are capped at the smaller of `maxFileSizeKb` and 256 KiB. Deleted, binary, oversized, unsafe, or unavailable content is reported as skipped. Text summarizes coverage; JSON and SARIF retain structured coverage, policy, and rename-comparison details. Findings contain locations and fixed descriptions, not matched values.
 
-Recorded-session detection and `analyze` use different heuristics. For example, recording can flag an environment-variable password assignment that analysis excludes, while analysis recognizes some token/private-key forms absent from the recording detector. Neither is a comprehensive security scanner; see [Audit](AUDIT.md).
+Recorded-session detection and `analyze` use different heuristics. For example, recording can flag an environment-variable password assignment that analysis excludes, while analysis recognizes some token/private-key forms absent from the recording detector. Neither is a comprehensive security scanner.
 
 ## Read and export reports
 

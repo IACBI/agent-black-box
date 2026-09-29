@@ -2,12 +2,11 @@
 
 ## Unreleased
 
-- Expanded real Windows command-wrapper and native executable tests; documented two open CodeQL findings and the command execution trust boundary.
-- Completed the detector source review after resolving the local access restriction and added a regression for repository containment through directory links.
 - Handled command startup failures, disappearing scan paths, exact staged-content size limits, and malformed catalog Git fields explicitly.
 - Prevented concurrent initialization overwrites, verified replay records before pruning, and made forced exports atomic.
-- Corrected large Git line counts and session-directory diagnostics; added detector keyword/redaction/deduplication regressions.
-- Consolidated documentation into current usage, reports, architecture, audit, and contributor references; validated links and included contributor/security guides in packages.
+- Corrected large Git line counts and session-directory diagnostics; added detector keyword, redaction, and deduplication regressions; verified repository containment through directory links.
+- Expanded Windows command-wrapper tests with injection payloads.
+- Consolidated documentation into usage, reports, architecture, security, and contributor guides; removed the point-in-time audit report and the redundant repository `.agentblackbox.json` (built-in defaults are identical).
 
 ## 0.8.1
 

@@ -45,7 +45,10 @@ describe("bilingual README", () => {
   it("keeps only English and Turkish sections aligned with the documented CLI and report surface", async () => {
     const readme = await readFile("README.md", "utf8");
     expect(readme).not.toContain("pnpm dev -- ");
-    expect([...readme.matchAll(/<a id="([^"]+)"><\/a>/g)].map((match) => match[1])).toEqual(LANGUAGE_ANCHORS);
+    expect([...readme.matchAll(/<a id="([^"]+)"><\/a>/g)].map((match) => match[1])).toEqual([
+      "top",
+      ...LANGUAGE_ANCHORS,
+    ]);
 
     for (const [index, anchor] of LANGUAGE_ANCHORS.entries()) {
       const startMarker = `<a id="${anchor}"></a>`;
@@ -91,7 +94,7 @@ describe("bilingual README", () => {
     expect(packageJson.scripts).toMatchObject({ deadcode: expect.any(String), perf: expect.any(String) });
     expect(usage).toContain("Node.js 22 or newer");
     expect(contributing).toContain("pnpm perf");
-    expect(security).toContain("docs/AUDIT.md");
+    expect(security).toContain("Report a vulnerability");
     expect(workflow).toContain("os: [ubuntu-latest, windows-latest, macos-latest]");
     expect(workflow).toContain("node: [22, 24]");
   });
