@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_CONFIG } from "../src/config/defaults.js";
@@ -88,6 +88,23 @@ describe("secret detector", () => {
           }
         }
       }
+    }
+  });
+
+  it("does not scan changed files through a directory link outside the repository", async () => {
+    const dir = await createTempDir();
+    try {
+      const repoRoot = path.join(dir, "repo");
+      const outside = path.join(dir, "outside");
+      await Promise.all([mkdir(repoRoot), mkdir(outside)]);
+      await writeFile(path.join(outside, "settings.txt"), `password=${"a".repeat(12)}\n`, "utf8");
+      await symlink(outside, path.join(repoRoot, "linked"), process.platform === "win32" ? "junction" : "dir");
+
+      await expect(
+        detectPossibleSecrets(repoRoot, [{ path: "linked/settings.txt", status: "added" }], DEFAULT_CONFIG)
+      ).resolves.toEqual([]);
+    } finally {
+      await removeTempDir(dir);
     }
   });
 

@@ -109,9 +109,13 @@ The alerts remain open. No queries were excluded, findings suppressed, or runtim
 
 The exported `recordAndRunCommand` function executes the caller's selected executable and arguments. Programmatic callers must authorize that command before invoking it; recording and redaction do not provide a command sandbox.
 
-### Follow-up review limitation
+### Completed detector source review
 
-A local tool policy prevented re-reading `src/risks/secretDetector.ts` and `tests/secretDetector.test.ts` during this follow-up. Their automated tests still ran, but that does not replace a current source review. The 0.8.1 findings are verified improvements to the reviewed modules, not a claim that a new unrestricted audit of every source file was completed. Removing this review limitation requires access to those two source files through the normal tooling.
+The local access restriction was resolved on 2026-09-29. The follow-up source review now includes `src/risks/secretDetector.ts` and `tests/secretDetector.test.ts`, their callers, bounded file inspection, and concurrency handling. The review checked byte limits, line numbering, redacted finding contents, deduplication, JWT compatibility, Unicode entropy, and physical repository containment. No additional runtime defect was identified in these modules.
+
+A direct detector integration regression now verifies that changed files reached through a directory link outside the repository produce no findings. It uses a Windows junction or a POSIX directory symlink and complements the existing file-inspection test, protecting the detector's trusted-root wiring. Existing detection rules and public API contracts remain unchanged. Heuristic detection limits and the open CodeQL findings above remain applicable.
+
+The completion preflight passed on Windows with Node.js 24.12.0 and pnpm 10.30.3: `pnpm release:check`, `pnpm perf`, and a full dependency audit. All 27 test files passed with 164 tests passed and two file-symlink tests skipped on Windows; coverage remained 87.10% statements, 80.72% branches, 92.73% functions, and 86.81% lines. Both dead-code checks passed and no known dependency advisories were reported. The performance run read 100,000 events in 174 ms with a measured heap delta of 9.2 MiB; all other budgets passed. These are local measurements and do not establish a peak-memory or cross-platform latency guarantee.
 
 ## Recommended next work
 
