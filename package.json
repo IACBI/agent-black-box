@@ -58,7 +58,7 @@
     "git",
     "developer-tools"
   ],
-  "author": "𝓐.𝓒.𝓑",
+  "author": "A.C.B",
   "license": "MIT",
   "dependencies": {
     "chokidar": "^4.0.3",
