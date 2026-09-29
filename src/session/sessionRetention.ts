@@ -10,6 +10,7 @@ import {
   type SessionCatalogEntry,
 } from "./sessionCatalog.js";
 import { getActiveSessionPath, getSessionLockPath, getSessionRoot } from "./sessionManager.js";
+import { isPathInside } from "../utils/paths.js";
 
 export interface SessionRetentionPlan {
   before: string;
@@ -196,8 +197,7 @@ async function prepareArchiveRoot(repoRoot: string, sessionRoot: string, configu
     throw new Error("Archive destination must be a non-empty local path.");
   }
   const archivePath = path.resolve(repoRoot, configuredPath);
-  const relative = path.relative(sessionRoot, archivePath);
-  if (relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))) {
+  if (isPathInside(sessionRoot, archivePath)) {
     throw new Error("Archive destination must stay outside the session root.");
   }
   await mkdir(archivePath, { recursive: true, mode: 0o700 });
@@ -206,11 +206,7 @@ async function prepareArchiveRoot(repoRoot: string, sessionRoot: string, configu
     throw new Error("Archive destination is not a regular directory.");
   }
   const physicalArchive = await realpath(archivePath);
-  const physicalRelative = path.relative(sessionRoot, physicalArchive);
-  if (
-    physicalRelative === "" ||
-    (physicalRelative !== ".." && !physicalRelative.startsWith(`..${path.sep}`) && !path.isAbsolute(physicalRelative))
-  ) {
+  if (isPathInside(sessionRoot, physicalArchive)) {
     throw new Error("Archive destination must stay outside the session root, including through links.");
   }
   return physicalArchive;

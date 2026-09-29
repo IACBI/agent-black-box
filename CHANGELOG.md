@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Made path exclusion about 7x faster on large trees by normalizing each path once, skipping regex passes for already-normalized paths, and matching segments without allocation.
+- Consolidated eight duplicated directory-containment checks into one shared helper with regression coverage.
+- Removed a redundant per-line deduplication pass in the secret detector and a quadratic status lookup during rollback verification.
+
 ## 0.8.2
 
 - Handled command startup failures, disappearing scan paths, exact staged-content size limits, and malformed catalog Git fields explicitly.

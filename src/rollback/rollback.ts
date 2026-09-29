@@ -9,7 +9,7 @@ import { collectGitSnapshot } from "../git/git.js";
 import { indexFileChangeEvidence } from "../session/changeEvidence.js";
 import { mapWithConcurrency } from "../utils/concurrency.js";
 import { readJsonFileLimited, writeJsonFile } from "../utils/files.js";
-import { resolveRepoPath, shellQuotePath } from "../utils/paths.js";
+import { isPathInside, resolveRepoPath, shellQuotePath } from "../utils/paths.js";
 
 export interface RollbackPlan {
   requestedFiles: string[];
@@ -116,9 +116,10 @@ export async function verifyRollbackSafetyState(
   }
 
   const recorded = new Map(value.files.map((file) => [file.path, file]));
+  const currentStatuses = new Map(current.changedFiles.map((changed) => [changed.path, changed.status]));
   for (const file of plan.restorableFiles) {
     const expected = recorded.get(file.path);
-    const currentStatus = current.changedFiles.find((changed) => changed.path === file.path)?.status;
+    const currentStatus = currentStatuses.get(file.path);
     if (!expected || expected.status !== file.status || currentStatus !== file.status) {
       throw new Error(`The recorded change for ${file.path} is no longer current; automatic restore was refused.`);
     }
@@ -163,8 +164,7 @@ async function inspectRollbackFile(repoRoot: string, filePath: string): Promise<
     throw error;
   });
   if (physicalParent) {
-    const relativeParent = path.relative(physicalRoot, physicalParent);
-    if (relativeParent === ".." || relativeParent.startsWith(`..${path.sep}`) || path.isAbsolute(relativeParent)) {
+    if (!isPathInside(physicalRoot, physicalParent)) {
       throw new Error(`Rollback path ${filePath} resolves outside the repository.`);
     }
   }

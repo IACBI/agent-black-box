@@ -1,6 +1,7 @@
 import { lstat, open, realpath, type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import type { FileKind } from "../types.js";
+import { isPathInside } from "./paths.js";
 
 const DEFAULT_SAMPLE_BYTES = 64 * 1024;
 
@@ -46,8 +47,7 @@ export async function inspectTextFile(
         realpath(trustedRoot),
         realpath(path.dirname(absolutePath)),
       ]);
-      const relativeParent = path.relative(physicalRoot, physicalParent);
-      if (relativeParent === ".." || relativeParent.startsWith(`..${path.sep}`) || path.isAbsolute(relativeParent)) {
+      if (!isPathInside(physicalRoot, physicalParent)) {
         return { kind: "not-file", sizeBytes: stats.size, reason: "Path resolves outside the repository." };
       }
     }

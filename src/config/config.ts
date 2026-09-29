@@ -3,6 +3,7 @@ import path from "node:path";
 import type { AgentBlackBoxConfig, ConfigLoadResult } from "../types.js";
 import { CONFIG_FILE_NAME, CONFIG_SCHEMA_URL, CURRENT_CONFIG_VERSION, DEFAULT_CONFIG } from "./defaults.js";
 import { pathExists, readTextFileLimited, writeTextFileAtomic } from "../utils/files.js";
+import { isPathInside } from "../utils/paths.js";
 
 const MAX_CONFIG_BYTES = 1024 * 1024;
 
@@ -82,11 +83,6 @@ export async function loadConfigWithMeta(repoRoot: string, options?: ConfigLoadO
     configPath,
     exists: true,
   };
-}
-
-function isPathInside(parentPath: string, candidatePath: string): boolean {
-  const relative = path.relative(parentPath, candidatePath);
-  return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
 }
 
 export async function migrateConfigFile(repoRoot: string, options?: ConfigLoadOptions): Promise<ConfigLoadResult> {

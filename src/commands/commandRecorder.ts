@@ -6,7 +6,7 @@ import { loadConfig, type ConfigLoadOptions } from "../config/config.js";
 import { requireRepositoryRoot } from "../git/git.js";
 import { appendCommandEvent, inspectSessionRecoveryState, registerInFlightCommand } from "../session/sessionManager.js";
 import { removeFileIfExists } from "../utils/files.js";
-import { normalizePath, toRepoRelative } from "../utils/paths.js";
+import { isPathInside, toRepoRelative } from "../utils/paths.js";
 
 const SENSITIVE_PATTERN =
   /(api[_-]?key|secret|token|password|passwd|private[_-]?key|client[_-]?secret|access[_-]?key|authorization|cookie)/i;
@@ -83,9 +83,8 @@ export async function resolveRunCwd(repoRoot: string, requestedCwd?: string): Pr
   }
 
   const resolved = path.resolve(repoRoot, requestedCwd);
-  const relative = normalizePath(path.relative(repoRoot, resolved));
 
-  if (relative === ".." || relative.startsWith("../") || path.isAbsolute(relative)) {
+  if (!isPathInside(repoRoot, resolved)) {
     throw new Error("--cwd must stay inside the repository.");
   }
 
@@ -95,8 +94,7 @@ export async function resolveRunCwd(repoRoot: string, requestedCwd?: string): Pr
   }
 
   const [physicalRepoRoot, physicalRunCwd] = await Promise.all([realpath(repoRoot), realpath(resolved)]);
-  const physicalRelative = normalizePath(path.relative(physicalRepoRoot, physicalRunCwd));
-  if (physicalRelative === ".." || physicalRelative.startsWith("../") || path.isAbsolute(physicalRelative)) {
+  if (!isPathInside(physicalRepoRoot, physicalRunCwd)) {
     throw new Error("--cwd must stay inside the repository, including through symbolic links.");
   }
 
