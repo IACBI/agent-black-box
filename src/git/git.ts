@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { availableParallelism } from "node:os";
-import { simpleGit } from "simple-git";
+import type { SimpleGit } from "simple-git";
+import { createGit } from "./executable.js";
 import type { ChangedFile, ChangeStatus, GitSnapshot } from "../types.js";
 import { inspectTextFile, type FileInspection } from "../utils/fileInspection.js";
 import { mapWithConcurrency } from "../utils/concurrency.js";
@@ -11,7 +12,7 @@ const FILE_INSPECTION_CONCURRENCY = Math.min(8, availableParallelism());
 
 export async function getRepositoryRoot(cwd: string): Promise<string | null> {
   try {
-    const git = simpleGit({ baseDir: cwd, binary: "git" });
+    const git = createGit(cwd);
     const root = await git.revparse(["--show-toplevel"]);
     return root.trim();
   } catch (error) {
@@ -54,7 +55,7 @@ export async function isGitRepository(cwd: string): Promise<boolean> {
 }
 
 export async function collectGitSnapshot(repoRoot: string, excludePatterns: string[] = []): Promise<GitSnapshot> {
-  const git = simpleGit({ baseDir: repoRoot, binary: "git" });
+  const git = createGit(repoRoot);
   const diffPathspecs = buildDiffPathspecs(excludePatterns);
   const [status, head, indexFingerprint, unstagedNumStat, unstagedStat, stagedStat] = await Promise.all([
     git.status(),
@@ -122,7 +123,7 @@ export async function collectGitChangesBetween(
     throw new Error("Git revision comparison requires full hexadecimal object IDs.");
   }
 
-  const git = simpleGit({ baseDir: repoRoot, binary: "git" });
+  const git = createGit(repoRoot);
   if (!fromHead) {
     const output = await git.raw(["ls-tree", "-r", "--name-only", "-z", toHead]);
     return output
@@ -147,7 +148,7 @@ export async function collectGitChangesBetween(
 }
 
 export async function collectStagedChanges(repoRoot: string, excludePatterns: string[] = []): Promise<ChangedFile[]> {
-  const git = simpleGit({ baseDir: repoRoot, binary: "git" });
+  const git = createGit(repoRoot);
   const pathspecs = buildDiffPathspecs(excludePatterns);
   const output = await git.raw([
     "diff",
@@ -164,7 +165,7 @@ function isGitObjectId(value: string): boolean {
   return /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(value);
 }
 
-async function getIndexFingerprint(git: ReturnType<typeof simpleGit>, pathspecs: string[]): Promise<string> {
+async function getIndexFingerprint(git: SimpleGit, pathspecs: string[]): Promise<string> {
   const args =
     pathspecs.length > 0
       ? ["diff", "--cached", "--raw", "-z", "--", ...pathspecs]
@@ -173,7 +174,7 @@ async function getIndexFingerprint(git: ReturnType<typeof simpleGit>, pathspecs:
   return createHash("sha256").update(stagedState).digest("hex");
 }
 
-async function getHeadRevision(git: ReturnType<typeof simpleGit>): Promise<string | undefined> {
+async function getHeadRevision(git: SimpleGit): Promise<string | undefined> {
   try {
     return (await git.revparse(["--verify", "HEAD"])).trim() || undefined;
   } catch {

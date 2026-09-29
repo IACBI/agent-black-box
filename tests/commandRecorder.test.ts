@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { copyFile, mkdir, readFile, readdir, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -9,8 +10,8 @@ import {
   recordAndRunCommand,
   redactCommandParts,
   resolveRunCwd,
-  resolveWindowsScript,
 } from "../src/commands/commandRecorder.js";
+import { collectStagedAnalysisInputFiles } from "../src/analyze/staged.js";
 import { getRepositoryRoot } from "../src/git/git.js";
 import {
   createSession,
@@ -136,6 +137,7 @@ describe("command recorder", () => {
 
   it.each([
     ["empty executable", [""]],
+    ["null byte executable", ["tool\0name"]],
     ["null byte argument", [process.execPath, "--password", "synthetic\0credential"]],
   ])("records synchronous spawn failures for %s and clears the in-flight marker", async (_label, commandParts) => {
     const dir = await createTempDir();
@@ -234,59 +236,6 @@ describe("command recorder", () => {
     15_000
   );
 
-  it("resolves bare script names through absolute PATH entries in PATHEXT order", async () => {
-    const dir = await createTempDir();
-    try {
-      const first = path.join(dir, "first");
-      const second = path.join(dir, "second");
-      await mkdir(first);
-      await mkdir(second);
-      await writeFile(path.join(first, "task.bat"), "@echo off\r\n");
-      await writeFile(path.join(first, "task.cmd"), "@echo off\r\n");
-      await writeFile(path.join(second, "batonly.bat"), "@echo off\r\n");
-      const searchPath = [first, second].join(path.delimiter);
-
-      expect(resolveWindowsScript("task", dir, { PATH: searchPath, PATHEXT: ".COM;.EXE;.BAT;.CMD" })).toBe(
-        path.join(first, "task.bat")
-      );
-      expect(resolveWindowsScript("task", dir, { PATH: searchPath, PATHEXT: ".CMD;.BAT" })).toBe(
-        path.join(first, "task.cmd")
-      );
-      expect(resolveWindowsScript("batonly", dir, { PATH: searchPath })).toBe(path.join(second, "batonly.bat"));
-      expect(resolveWindowsScript("missing", dir, { PATH: searchPath })).toBeNull();
-      expect(resolveWindowsScript("task", dir, { PATH: searchPath, PATHEXT: ".EXE;.VBS" })).toBe(
-        path.join(first, "task.cmd")
-      );
-    } finally {
-      await removeTempDir(dir);
-    }
-  });
-
-  it("never resolves a script from the current directory or relative PATH entries", async () => {
-    const dir = await createTempDir();
-    try {
-      await writeFile(path.join(dir, "shadow.cmd"), "@echo off\r\n");
-
-      expect(resolveWindowsScript("shadow", dir, { PATH: ["", ".", "relative"].join(path.delimiter) })).toBeNull();
-      expect(resolveWindowsScript("shadow", dir, { PATH: undefined })).toBeNull();
-    } finally {
-      await removeTempDir(dir);
-    }
-  });
-
-  it("resolves scripts named with a directory part against the working directory", async () => {
-    const dir = await createTempDir();
-    try {
-      await mkdir(path.join(dir, "scripts"));
-      await writeFile(path.join(dir, "scripts", "build.bat"), "@echo off\r\n");
-
-      expect(resolveWindowsScript(path.join("scripts", "build"), dir, {})).toBe(path.join(dir, "scripts", "build.bat"));
-      expect(resolveWindowsScript(path.join("scripts", "absent"), dir, {})).toBeNull();
-    } finally {
-      await removeTempDir(dir);
-    }
-  });
-
   it.skipIf(process.platform !== "win32")(
     "runs a bare .bat-only command from PATH and propagates its exit code",
     async () => {
@@ -322,6 +271,7 @@ describe("command recorder", () => {
     "does not run a script that only exists in the repository when a bare name is missing from PATH",
     async () => {
       const dir = await createTempDir();
+      vi.stubEnv("NoDefaultCurrentDirectoryInExePath", undefined);
       try {
         initGitRepo(dir);
         const markerPath = path.join(dir, "shadow-ran.txt");
@@ -333,6 +283,7 @@ describe("command recorder", () => {
         const [event] = await readCommandEvents(session.sessionDir);
         expect(event.error).toContain("ENOENT");
       } finally {
+        vi.unstubAllEnvs();
         await removeTempDir(dir);
       }
     },
@@ -343,13 +294,22 @@ describe("command recorder", () => {
     "does not execute a git.exe planted in the repository",
     async () => {
       const dir = await createTempDir();
+      // The variable makes Windows skip the current directory; unset it to match a default install.
+      vi.stubEnv("NoDefaultCurrentDirectoryInExePath", undefined);
       try {
         initGitRepo(dir);
+        await writeFile(path.join(dir, "tracked.txt"), "staged content\n");
+        execFileSync("git", ["add", "tracked.txt"], { cwd: dir });
         // A copy of node.exe fails any git invocation, so success proves the real git ran.
         await copyFile(process.execPath, path.join(dir, "git.exe"));
 
         await expect(getRepositoryRoot(dir)).resolves.toBeTruthy();
+        const staged = await collectStagedAnalysisInputFiles(dir, DEFAULT_CONFIG);
+        expect(staged.map((file) => [file.path, file.content])).toEqual([["tracked.txt", "staged content\n"]]);
+        await createSession(dir, DEFAULT_CONFIG);
+        expect(await recordAndRunCommand(["git", "--version"], dir)).toBe(0);
       } finally {
+        vi.unstubAllEnvs();
         await removeTempDir(dir);
       }
     },

@@ -1,5 +1,4 @@
 import { spawn } from "node:child_process";
-import { statSync } from "node:fs";
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -7,6 +6,7 @@ import { loadConfig, type ConfigLoadOptions } from "../config/config.js";
 import { requireRepositoryRoot } from "../git/git.js";
 import { appendCommandEvent, inspectSessionRecoveryState, registerInFlightCommand } from "../session/sessionManager.js";
 import { removeFileIfExists } from "../utils/files.js";
+import { resolveWindowsExecutable } from "../utils/executables.js";
 import { isPathInside, toRepoRelative } from "../utils/paths.js";
 
 const SENSITIVE_PATTERN =
@@ -187,101 +187,65 @@ function optionalMetadata<K extends "label" | "group" | "phase">(
 
 function spawnCommand(commandParts: string[], cwd: string): Promise<{ exitCode: number | null; error?: string }> {
   const [command, ...args] = commandParts;
+  const executable = resolveExecutable(command, cwd);
+  if (executable === null) {
+    return Promise.resolve({ exitCode: null, error: formatSpawnError({ code: "ENOENT" } as NodeJS.ErrnoException) });
+  }
 
   return new Promise((resolve) => {
-    const run = (targetCommand: string, mayResolveWindowsScript: boolean): void => {
-      let spawnTarget: ReturnType<typeof getSpawnTarget>;
-      try {
-        spawnTarget = getSpawnTarget(targetCommand, args);
-      } catch {
-        resolve({ exitCode: null, error: "Windows command script arguments could not be passed safely." });
-        return;
-      }
-      let child: ReturnType<typeof spawn>;
-      try {
-        child = spawn(spawnTarget.command, spawnTarget.args, {
-          cwd,
-          shell: false,
-          stdio: "inherit",
-          windowsVerbatimArguments: spawnTarget.windowsVerbatimArguments,
-        });
-      } catch (error) {
-        resolve({ exitCode: null, error: formatSpawnError(error as NodeJS.ErrnoException) });
-        return;
-      }
-      let retrying = false;
-      let settled = false;
-
-      child.once("error", (error: NodeJS.ErrnoException) => {
-        if (mayResolveWindowsScript && shouldResolveWindowsScript(command, error)) {
-          const script = resolveWindowsScript(command, cwd);
-          if (script) {
-            retrying = true;
-            run(script, false);
-            return;
-          }
-        }
-
-        if (!settled) {
-          settled = true;
-          resolve({ exitCode: null, error: formatSpawnError(error) });
-        }
+    let spawnTarget: ReturnType<typeof getSpawnTarget>;
+    try {
+      spawnTarget = getSpawnTarget(executable, args);
+    } catch {
+      resolve({ exitCode: null, error: "Windows command script arguments could not be passed safely." });
+      return;
+    }
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(spawnTarget.command, spawnTarget.args, {
+        cwd,
+        shell: false,
+        stdio: "inherit",
+        windowsVerbatimArguments: spawnTarget.windowsVerbatimArguments,
       });
+    } catch (error) {
+      resolve({ exitCode: null, error: formatSpawnError(error as NodeJS.ErrnoException) });
+      return;
+    }
+    let settled = false;
 
-      child.once("close", (code) => {
-        if (!retrying && !settled) {
-          settled = true;
-          resolve({ exitCode: code });
-        }
-      });
-    };
+    child.once("error", (error: NodeJS.ErrnoException) => {
+      if (!settled) {
+        settled = true;
+        resolve({ exitCode: null, error: formatSpawnError(error) });
+      }
+    });
 
-    run(command, true);
+    child.once("close", (code) => {
+      if (!settled) {
+        settled = true;
+        resolve({ exitCode: code });
+      }
+    });
   });
 }
 
-const DEFAULT_WINDOWS_SCRIPT_EXTENSIONS = [".cmd", ".bat"];
-
-function shouldResolveWindowsScript(originalCommand: string, error: NodeJS.ErrnoException): boolean {
-  return process.platform === "win32" && error.code === "ENOENT" && path.extname(originalCommand) === "";
-}
-
 /**
- * Finds the `.cmd`/`.bat` script a bare command name refers to, honoring PATHEXT order like
- * `cmd.exe`. Only absolute PATH entries are searched, so a script in the repository under
- * review cannot shadow a tool. Names with a directory part resolve against `cwd`.
+ * On Windows a bare command name is resolved through absolute PATH entries only, so an executable
+ * or script inside the repository cannot shadow a tool. Returns null when a bare name is not found.
  */
-export function resolveWindowsScript(
-  command: string,
-  cwd: string,
-  env: NodeJS.ProcessEnv = process.env
-): string | null {
-  const configured = (env.PATHEXT ?? "")
-    .split(";")
-    .map((extension) => extension.toLowerCase())
-    .filter((extension) => extension === ".cmd" || extension === ".bat");
-  const extensions = configured.length > 0 ? configured : DEFAULT_WINDOWS_SCRIPT_EXTENSIONS;
-  const directories = /[\\/]/.test(command)
-    ? [path.resolve(cwd, path.dirname(command))]
-    : (env.PATH ?? "")
-        .split(path.delimiter)
-        .map((directory) => directory.replace(/^"(.*)"$/, "$1"))
-        .filter((directory) => path.isAbsolute(directory));
-  const baseName = path.basename(command);
-
-  for (const directory of directories) {
-    for (const extension of extensions) {
-      const candidate = path.join(directory, `${baseName}${extension}`);
-      try {
-        if (statSync(candidate).isFile()) {
-          return candidate;
-        }
-      } catch {
-        // Missing or unreadable candidates are skipped.
-      }
-    }
+function resolveExecutable(command: string, cwd: string): string | null {
+  // Invalid names are passed through so spawn reports its own validation error.
+  if (process.platform !== "win32" || command === "" || command.includes("\0")) {
+    return command;
   }
-  return null;
+
+  const hasDirectory = /[\\/]/.test(command);
+  if (hasDirectory && path.extname(command) !== "") {
+    return command;
+  }
+
+  return resolveWindowsExecutable(command, cwd) ?? (hasDirectory ? command : null);
 }
 
 function getSpawnTarget(

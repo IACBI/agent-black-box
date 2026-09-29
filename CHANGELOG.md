@@ -3,7 +3,7 @@
 ## 0.8.3
 
 - Added `abb sessions verify [session]` (and `verifySessions` in the library) to check stored session reports read-only, with `--json` output and a non-zero exit when a report fails.
-- Fixed Windows bare `.bat` commands: names are now resolved through absolute PATH entries in PATHEXT order instead of retrying a `.cmd` guess, unresolved names report `ENOENT`, and scripts in the repository are never picked up implicitly. Added tests, including one proving a planted `git.exe` is not executed.
+- Closed a Windows hijack: process creation searches the current directory first, so a `git.exe` (or any bare command) planted in a reviewed repository could run. Git and bare command names now resolve only through absolute PATH entries in PATHEXT order; unresolved names report `ENOENT`. This also fixes bare `.bat`-only commands. Verified with a planted `git.exe` on real Windows CI.
 - Documented a pre-commit hook recipe for the `new-secrets` policy, verified against a real repository.
 - Removed four unused helpers (`readJsonFile`, `getNewestDirectory`, `getLatestSessionDir`, `findFileChangeEvidence`).
 - Made path exclusion about 7x faster on large trees by normalizing each path once, skipping regex passes for already-normalized paths, and matching segments without allocation.
