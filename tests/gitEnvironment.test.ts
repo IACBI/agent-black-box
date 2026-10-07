@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { copyFile, writeFile } from "node:fs/promises";
+import { copyFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONFIG } from "../src/config/defaults.js";
@@ -48,7 +48,7 @@ describe("Git environment compatibility", () => {
       vi.stubEnv("GIT_DIR", path.join(repo, ".git"));
       vi.stubEnv("GIT_WORK_TREE", repo);
 
-      expect(await getRepositoryRoot(outside)).toBe(repo.replace(/\\/g, "/"));
+      expect(await getRepositoryRoot(outside)).toBe((await realpath(repo)).replace(/\\/g, "/"));
     } finally {
       await removeTempDir(repo);
       await removeTempDir(outside);
