@@ -7,6 +7,32 @@ import type { SessionReport } from "../types.js";
 export const INLINE_REPORT_BYTES = 32 * 1024 * 1024;
 export const MAX_REPORT_BYTES = 256 * 1024 * 1024;
 export const REPORT_REPLAY_FILE = "session-replay.json";
+export const FILE_DIGEST_STREAM_BYTES = 64 * 1024;
+const MAX_MATERIALIZED_BYTES = 4096 * 1024 * 1024;
+
+export class MaterializationBudgetError extends Error {
+  constructor(filePath: string, fileBytes: number, maxBytes: number) {
+    super(
+      `${path.basename(filePath)} requires ${fileBytes} materialized input bytes; the working-data policy allows ${maxBytes} bytes. Increase --memory-budget-mb or reduce --concurrency to inspect this session.`
+    );
+    this.name = "MaterializationBudgetError";
+  }
+}
+
+export function validateMaterializationLimit(maxBytes: number | undefined): void {
+  if (
+    maxBytes !== undefined &&
+    (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > MAX_MATERIALIZED_BYTES)
+  ) {
+    throw new Error("maxMaterializedBytes must be an integer between 1 and 4294967296 bytes.");
+  }
+}
+
+export function assertMaterializationBudget(filePath: string, fileBytes: number, maxBytes: number | undefined): void {
+  if (maxBytes !== undefined && fileBytes > maxBytes) {
+    throw new MaterializationBudgetError(filePath, fileBytes, maxBytes);
+  }
+}
 
 export interface ReportReplay {
   replayVersion: 1;
@@ -47,7 +73,7 @@ export async function digestRegularFile(filePath: string): Promise<{ bytes: numb
 
   const hash = createHash("sha256");
   let bytes = 0;
-  for await (const chunk of createReadStream(filePath)) {
+  for await (const chunk of createReadStream(filePath, { highWaterMark: FILE_DIGEST_STREAM_BYTES })) {
     hash.update(chunk);
     bytes += chunk.length;
   }

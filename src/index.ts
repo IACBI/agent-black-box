@@ -12,6 +12,7 @@ export * from "./rollback/rollback.js";
 export * from "./risks/riskDetector.js";
 export * from "./risks/secretDetector.js";
 export * from "./session/sessionManager.js";
+export * from "./session/captureHealth.js";
 export * from "./session/changeEvidence.js";
 export * from "./session/sessionCatalog.js";
 export * from "./session/sessionComparison.js";

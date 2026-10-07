@@ -8,6 +8,16 @@ export type FileKind = "text" | "binary" | "large" | "missing" | "not-file" | "u
 
 export type LineStatsSource = "git" | "estimated" | "skipped";
 
+export interface ConfiguredAnalysisPolicy {
+  failOnNewSecrets?: boolean;
+  requireCompleteCoverage?: boolean;
+  minSeverity?: RiskSeverity;
+  /** Applies to severity-based risk findings; secret and coverage gates remain independent. */
+  categories?: string[];
+}
+
+export type ConfiguredAnalysisPolicies = Record<string, ConfiguredAnalysisPolicy>;
+
 export interface AgentBlackBoxConfig {
   $schema?: string;
   configVersion: 1;
@@ -15,6 +25,7 @@ export interface AgentBlackBoxConfig {
   exclude: string[];
   riskPatterns: string[];
   maxFileSizeKb: number;
+  analysisPolicies?: ConfiguredAnalysisPolicies;
   retention?: {
     days?: number;
     keep?: number;

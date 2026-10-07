@@ -1,8 +1,8 @@
 import path from "node:path";
 import { appendFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONFIG } from "../src/config/defaults.js";
-import { buildSessionReport } from "../src/reports/markdown.js";
+import { buildSessionReport, generateSummaryMarkdown } from "../src/reports/markdown.js";
 import { writeReports } from "../src/reports/reportWriter.js";
 import {
   buildSessionMetadata,
@@ -14,10 +14,67 @@ import {
   verifyCatalogSessionReportFile,
 } from "../src/session/sessionCatalog.js";
 import { writeJsonFile } from "../src/utils/files.js";
+import * as files from "../src/utils/files.js";
 import { INLINE_REPORT_BYTES, REPORT_REPLAY_FILE } from "../src/session/reportStorage.js";
 import { createTempDir, removeTempDir } from "./testUtils.js";
 
 describe("session catalog", () => {
+  it.each([0, -1, 1.5, 4294967297, NaN, Infinity])(
+    "rejects invalid materialization limits %s before filesystem reads",
+    async (maxMaterializedBytes) => {
+      await expect(listSessionCatalog("unopened-repository", DEFAULT_CONFIG, { maxMaterializedBytes })).rejects.toThrow(
+        "maxMaterializedBytes"
+      );
+      await expect(
+        verifyCatalogSessionReportFile(
+          { id: "session-test", sessionDir: "unopened-session", state: "complete" },
+          { maxMaterializedBytes }
+        )
+      ).rejects.toThrow("maxMaterializedBytes");
+    }
+  );
+
+  it("distinguishes metadata and start-record policy refusals from corrupted data", async () => {
+    const repo = await createTempDir("abb-catalog-policy-");
+    try {
+      const id = "session-policy-metadata";
+      const sessionDir = path.join(repo, DEFAULT_CONFIG.sessionDir, id);
+      const report = makeReport(repo, sessionDir, id, "2026-01-05T00:00:00.000Z");
+      await mkdir(sessionDir, { recursive: true });
+      await writeJsonFile(path.join(sessionDir, "session.json"), report);
+      await writeJsonFile(path.join(sessionDir, SESSION_METADATA_FILE), {
+        ...buildSessionMetadata(report),
+        padding: "x".repeat(8192),
+      });
+      const [entry] = await listSessionCatalog(repo, DEFAULT_CONFIG, { maxMaterializedBytes: 4096 });
+      expect(entry).toMatchObject({
+        id,
+        state: "complete",
+        startedAt: report.startedAt,
+        warning: expect.stringContaining("working-data policy"),
+      });
+      expect(entry.warning).not.toContain("Invalid metadata");
+      expect(entry.metadataUnavailable).toBeUndefined();
+      await rm(sessionDir, { recursive: true });
+      const incompleteId = "session-policy-start";
+      const incompleteDir = path.join(repo, DEFAULT_CONFIG.sessionDir, incompleteId);
+      await mkdir(incompleteDir);
+      await writeJsonFile(path.join(incompleteDir, "session-start.json"), {
+        id: incompleteId,
+        startedAt: report.startedAt,
+      });
+      const [incomplete] = await listSessionCatalog(repo, DEFAULT_CONFIG, { maxMaterializedBytes: 64 });
+      expect(incomplete).toMatchObject({
+        id: incompleteId,
+        state: "incomplete",
+        metadataUnavailable: true,
+        warning: expect.stringContaining("working-data policy"),
+      });
+    } finally {
+      await removeTempDir(repo);
+    }
+  });
+
   it("lists complete, legacy, incomplete, and corrupt sessions without trusting selector paths", async () => {
     const repo = await createTempDir("abb-catalog-");
     try {
@@ -97,6 +154,64 @@ describe("session catalog", () => {
       await removeTempDir(repo);
     }
   });
+
+  it.each([undefined, 1024 * 1024])(
+    "bounds fallback and metadata reads with input quota %s",
+    async (maxMaterializedBytes) => {
+      const repo = await createTempDir("abb-catalog-concurrency-");
+      const readJsonFileLimited = files.readJsonFileLimited;
+      let activeReportReads = 0;
+      let maximumReportReads = 0;
+      let metadataReads = 0;
+      let activeMetadataReads = 0;
+      let maximumMetadataReads = 0;
+      let restoreReader: (() => void) | undefined;
+      try {
+        for (let index = 0; index < 8; index += 1) {
+          const id = `session-concurrency-${index}`;
+          const sessionDir = path.join(repo, DEFAULT_CONFIG.sessionDir, id);
+          const report = makeReport(repo, sessionDir, id, "2026-01-05T00:00:00.000Z");
+          await mkdir(sessionDir, { recursive: true });
+          await writeJsonFile(path.join(sessionDir, "session.json"), report);
+          if (index % 2 === 0) {
+            await writeJsonFile(path.join(sessionDir, SESSION_METADATA_FILE), buildSessionMetadata(report));
+          }
+        }
+        const reader = vi.spyOn(files, "readJsonFileLimited").mockImplementation(async (filePath, maxBytes) => {
+          if (path.basename(filePath) !== "session.json") {
+            metadataReads += 1;
+            activeMetadataReads += 1;
+            maximumMetadataReads = Math.max(maximumMetadataReads, activeMetadataReads);
+            try {
+              await new Promise((resolve) => setTimeout(resolve, 10));
+              return await readJsonFileLimited(filePath, maxBytes);
+            } finally {
+              activeMetadataReads -= 1;
+            }
+          }
+          activeReportReads += 1;
+          maximumReportReads = Math.max(maximumReportReads, activeReportReads);
+          try {
+            expect(metadataReads).toBe(4);
+            await new Promise((resolve) => setTimeout(resolve, 10));
+            return await readJsonFileLimited(filePath, maxBytes);
+          } finally {
+            activeReportReads -= 1;
+          }
+        });
+        restoreReader = () => reader.mockRestore();
+
+        const entries = await listSessionCatalog(repo, DEFAULT_CONFIG, { maxMaterializedBytes });
+        expect(entries).toHaveLength(8);
+        expect(entries.every((entry) => entry.state === "complete")).toBe(true);
+        expect(maximumReportReads).toBe(1);
+        expect(maximumMetadataReads).toBe(maxMaterializedBytes === undefined ? 4 : 1);
+      } finally {
+        restoreReader?.();
+        await removeTempDir(repo);
+      }
+    }
+  );
 
   it.each(["head", "indexFingerprint", "branch"])("rejects numeric Git %s in stored reports", async (field) => {
     const repo = await createTempDir("abb-catalog-");
@@ -191,6 +306,29 @@ describe("session catalog", () => {
     }
   });
 
+  it.each([42, {}, "invalid"])("normalizes invalid baseline capture time %j before rendering", (capturedAt) => {
+    const report = makeReport(
+      "/repo",
+      "/repo/sessions/session-evidence",
+      "session-evidence",
+      "2026-01-05T00:00:00.000Z"
+    );
+    const parsed = parseSessionReport({
+      ...report,
+      baseline: { capturedAt: report.startedAt, git: report.git },
+      changeEvidence: {
+        ...report.changeEvidence,
+        baselineAvailable: true,
+        baselineCapturedAt: capturedAt,
+      },
+    });
+
+    expect(parsed).not.toBeNull();
+    expect(parsed?.changeEvidence.baselineAvailable).toBe(false);
+    expect(parsed?.changeEvidence.baselineCapturedAt).toBeUndefined();
+    expect(() => generateSummaryMarkdown(parsed!)).not.toThrow();
+  });
+
   it("reopens a report larger than the inline read limit without changing session.json", async () => {
     const repo = await createTempDir("abb-large-catalog-");
     try {
@@ -222,6 +360,7 @@ describe("session catalog", () => {
       expect(reopened.events[0]).toEqual(event);
       expect(reopened.integrity.discardedFileEventLines).toBe(1);
       await expect(verifyCatalogSessionReportFile(entry)).resolves.toBeUndefined();
+      await expect(verifyCatalogSessionReportFile(entry, { verifyEventLogs: true })).resolves.toBeUndefined();
 
       const replayPath = path.join(sessionDir, REPORT_REPLAY_FILE);
       const replayContents = await readFile(replayPath);
@@ -229,6 +368,22 @@ describe("session catalog", () => {
       const [legacy] = await listSessionCatalog(repo, DEFAULT_CONFIG);
       expect(legacy.warning).toContain("requires more memory");
       expect((await readCatalogSessionReport(legacy)).events).toHaveLength(1_200);
+      await expect(verifyCatalogSessionReportFile(legacy, { maxMaterializedBytes: 1024 * 1024 })).rejects.toThrow(
+        "session.json requires"
+      );
+      const metadataPath = path.join(sessionDir, SESSION_METADATA_FILE);
+      const metadataContents = await readFile(metadataPath);
+      await rm(metadataPath);
+      const [deferred] = await listSessionCatalog(repo, DEFAULT_CONFIG, { maxMaterializedBytes: 1024 * 1024 });
+      expect(deferred).toMatchObject({
+        id,
+        state: "complete",
+        metadataUnavailable: true,
+        warning: expect.stringContaining("working-data policy"),
+      });
+      expect(() => resolveSessionEntry([deferred], "latest")).toThrow("Latest session cannot be determined");
+      expect(resolveSessionEntry([deferred], id).id).toBe(id);
+      await writeFile(metadataPath, metadataContents);
       await writeFile(replayPath, replayContents);
 
       await writeJsonFile(path.join(sessionDir, SESSION_METADATA_FILE), { metadataVersion: 999 });

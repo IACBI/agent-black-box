@@ -31,6 +31,7 @@ abb doctor
 | `maxFileSizeKb`                    | `500`; integer from 1 to 102400, measured in 1024-byte units                     |
 | `retention.days`, `retention.keep` | Optional integers from 1 to 100000                                               |
 | `retention.archiveDir`             | Optional trusted local archive destination                                       |
+| `analysisPolicies`                 | Optional named staged CI policies; selected explicitly with `analyze --policy`   |
 
 Non-empty custom `exclude` and `riskPatterns` arrays replace defaults; empty arrays fall back to defaults. See [default risk patterns](https://github.com/IACBI/agent-black-box/blob/main/src/config/defaults.ts). Matching is case-insensitive and uses path components/segments, not glob expressions. If you move storage to another repository directory, add its parent to `exclude` to avoid recording its output.
 
@@ -77,6 +78,10 @@ Command metadata is redacted before writing. Supported forms include sensitive a
 
 `stop` verifies active state and lock ownership, requests finalization, and waits for the watcher. In-flight recorded commands delay finalization. After roughly ten seconds the CLI can report that finalization is pending; the watcher continues. Use `status` to check progress.
 
+`abb status --capture-health` inspects durable watcher-loss and command-completion markers without loading event logs or changing the session. `abb status --json` includes the same diagnostics and omits private ownership tokens. `doctor` also reports capture health for an inspectable active/recoverable session. Status remains informational; degraded health is a diagnostic, not a failed status command.
+
+Health is scoped to persisted markers: `healthy` means a complete inspection found no persisted loss/interruption evidence, `degraded` means such evidence exists, and `unknown` means the inspection cannot establish health. Check `inspectionComplete` and `truncated` in JSON; partial degraded counts are lower bounds. The scan stops after 10,000 directory entries. Live process IDs can be reused, and watcher buffers, pending writes, and unrecorded losses are not observable. Preserve degraded session evidence and inspect the final report's capture warnings.
+
 For a dead watcher, use `abb recover` or `abb doctor --repair`. Repair requires verified stale ownership or valid completed reports backing the state. Corrupt/inconsistent state remains available for diagnosis; do not delete evidence merely to silence an error.
 
 ## Analyze without recording
@@ -88,17 +93,41 @@ abb analyze --format sarif --fail-on high
 abb analyze --staged --baseline HEAD --policy complete-review --format sarif
 ```
 
-| Option                 | Behavior                                                           |
-| ---------------------- | ------------------------------------------------------------------ |
-| `--format <format>`    | `text` (default), `json`, or `sarif`                               |
-| `--staged`             | Read index blobs instead of working-tree content                   |
-| `--baseline <ref>`     | With `--staged`, compare against a resolved Git commit             |
-| `--fail-on <severity>` | Exit 1 for a finding at or above `low`, `medium`, or `high`        |
-| `--policy <profile>`   | `new-secrets` or `complete-review`; requires `--staged --baseline` |
+| Option                 | Behavior                                                            |
+| ---------------------- | ------------------------------------------------------------------- |
+| `--format <format>`    | `text` (default), `json`, or `sarif`                                |
+| `--staged`             | Read index blobs instead of working-tree content                    |
+| `--baseline <ref>`     | With `--staged`, compare against a resolved Git commit              |
+| `--fail-on <severity>` | Exit 1 for a finding at or above `low`, `medium`, or `high`         |
+| `--policy <profile>`   | Built-in or configured named policy; requires `--staged --baseline` |
 
 Baseline comparison suppresses identical existing secret-like lines up to their baseline occurrence count. Git-verified renames can use the previous path as the baseline. Metadata risks remain visible; excluded baseline paths and unverified rename relationships do not suppress content findings.
 
 `new-secrets` fails on newly detected possible secrets. `complete-review` also fails when non-deleted staged content or needed baseline content could not be scanned. Combining `--fail-on` and a policy fails when either condition applies. Operational errors return 1; findings alone do not fail the command without a threshold/policy.
+
+Add named profiles to `.agentblackbox.json` to choose different gates for local commits and CI:
+
+```json
+{
+  "analysisPolicies": {
+    "local-review": { "failOnNewSecrets": true },
+    "ci-review": {
+      "requireCompleteCoverage": true,
+      "minSeverity": "medium",
+      "categories": ["CI/CD file", "Auth/security-related file"]
+    }
+  }
+}
+```
+
+```sh
+abb analyze --staged --baseline HEAD --policy local-review
+abb analyze --staged --baseline HEAD --policy ci-review --format sarif
+```
+
+Profiles default to `failOnNewSecrets: true` and `requireCompleteCoverage: false`. Setting `failOnNewSecrets: false` explicitly disables the secret gate for that profile. `minSeverity` optionally gates metadata-risk findings; `categories` narrows only that gate using exact, case-insensitive category names and requires `minSeverity`. Secret and coverage gates remain independent. Filtering a gate does not remove findings from the report. JSON/SARIF include `severityRiskCount` for custom profiles; built-in result shapes and behavior remain unchanged.
+
+At most 32 profiles are allowed; names match `[a-z][a-z0-9-]{0,63}`. Built-in names cannot be overridden, unknown fields/names fail validation, and category lists contain 1–32 non-empty strings of at most 128 characters. Policies never run automatically; choose one explicitly. The same staged/index and baseline requirements apply to every profile.
 
 To block risky commits locally, call the same policy from `.git/hooks/pre-commit` (make it executable and keep `abb` on PATH). The first commit has no baseline commit, so it uses a severity threshold instead:
 
@@ -166,7 +195,12 @@ To check that stored sessions are intact without changing them, use `abb session
 ```sh
 abb sessions verify
 abb sessions verify latest --json
+abb sessions verify --memory-budget-mb 64 --concurrency 2 --json
 ```
+
+Full replay verification streams canonical event digests instead of materializing event arrays. Optional `--memory-budget-mb` accepts 8–4096 MiB and allocates a working-data quota across workers. `--concurrency` accepts 1–16 (default 4); a budget reduces it to at most one worker per 8 MiB. Per worker, stream buffers reserve approximately 4.375 MiB; half the remaining quota limits each materialized JSON input, allowing for its buffered copy. Oversized inputs fail visibly before parsing. Increase the budget or lower concurrency when an intact legacy/inline report cannot fit; no records are silently discarded to satisfy the quota.
+
+This is an encoded-input and stream-buffer budget, not a hard JavaScript heap/RSS limit: decoded strings, parsed objects, catalog entries and returned results require additional memory. Existing file/line/count limits still apply, and defaults remain unchanged when no budget is selected. Budgeted legacy catalog fallback streams replay digests; if a report's metadata cannot be obtained within the quota, choose an explicit session ID or increase the budget. `latest` refuses an ambiguous selection rather than guessing.
 
 ```sh
 abb sessions archive --before 2026-01-01 --keep 2 --to .agent-black-box/archive

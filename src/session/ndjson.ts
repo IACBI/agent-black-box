@@ -1,8 +1,12 @@
+import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import type { CommandEvent, FileEvent } from "../types.js";
 import { pathExists } from "../utils/files.js";
 
 const MAX_NDJSON_LINE_BYTES = 1024 * 1024;
+const NDJSON_READ_CHUNK_BYTES = 64 * 1024;
+/** Encoded line parts, their concatenated copy, and current/prefetched chunks; parsed objects are outside this policy. */
+export const NDJSON_STREAM_WORKING_BYTES = 2 * MAX_NDJSON_LINE_BYTES + 2 * NDJSON_READ_CHUNK_BYTES;
 const MAX_NDJSON_RECORDS = 1_000_000;
 const MAX_INTEGRITY_WARNINGS = 100;
 const MAX_PATH_LENGTH = 32_768;
@@ -13,6 +17,16 @@ export interface NdjsonReadResult<T> {
   records: T[];
   discardedLines: number;
   warnings: string[];
+}
+
+interface NdjsonScanResult {
+  recordCount: number;
+  discardedLines: number;
+  warnings: string[];
+}
+
+export interface NdjsonDigestResult extends NdjsonScanResult {
+  digest: string;
 }
 
 export function isCapturedFileEvent(value: unknown): value is FileEvent {
@@ -51,16 +65,45 @@ export async function readNdjsonRecords<T>(
   guard: (value: unknown) => value is T,
   label: string
 ): Promise<NdjsonReadResult<T>> {
+  const records: T[] = [];
+  const result = await scanNdjsonRecords(filePath, guard, label, (record) => records.push(record));
+  return { records, discardedLines: result.discardedLines, warnings: result.warnings };
+}
+
+/** Hash the same canonical JSON array as digestRecords without retaining its records. */
+export async function digestNdjsonRecords<T>(
+  filePath: string,
+  guard: (value: unknown) => value is T,
+  label: string
+): Promise<NdjsonDigestResult> {
+  const hash = createHash("sha256");
+  hash.update("[");
+  const result = await scanNdjsonRecords(filePath, guard, label, (record, index) => {
+    if (index > 0) {
+      hash.update(",");
+    }
+    hash.update(JSON.stringify(record));
+  });
+  hash.update("]");
+  return { ...result, digest: hash.digest("hex") };
+}
+
+async function scanNdjsonRecords<T>(
+  filePath: string,
+  guard: (value: unknown) => value is T,
+  label: string,
+  consumeRecord: (record: T, index: number) => void
+): Promise<NdjsonScanResult> {
   if (!(await pathExists(filePath))) {
-    return { records: [], discardedLines: 0, warnings: [] };
+    return { recordCount: 0, discardedLines: 0, warnings: [] };
   }
 
-  const records: T[] = [];
+  let recordCount = 0;
   const warnings: string[] = [];
   let discardedLines = 0;
   let lineNumber = 0;
   let warningOverflowRecorded = false;
-  const input = createReadStream(filePath);
+  const input = createReadStream(filePath, { highWaterMark: NDJSON_READ_CHUNK_BYTES });
   let lineParts: Buffer[] = [];
   let lineLength = 0;
   let discardingOversizedLine = false;
@@ -87,24 +130,28 @@ export async function readNdjsonRecords<T>(
       return;
     }
 
-    if (records.length >= MAX_NDJSON_RECORDS) {
+    if (recordCount >= MAX_NDJSON_RECORDS) {
       discardedLines += 1;
       addWarning(`Discarded ${label} beyond the ${MAX_NDJSON_RECORDS} record limit.`);
       return;
     }
 
+    let record: T;
     try {
       const parsed = JSON.parse(normalized.toString("utf8")) as unknown;
-      if (guard(parsed)) {
-        records.push(parsed);
+      if (!guard(parsed)) {
+        discardedLines += 1;
+        addWarning(`Discarded malformed ${label} on line ${lineNumber}.`);
         return;
       }
-      discardedLines += 1;
-      addWarning(`Discarded malformed ${label} on line ${lineNumber}.`);
+      record = parsed;
     } catch {
       discardedLines += 1;
       addWarning(`Discarded unreadable ${label} on line ${lineNumber}.`);
+      return;
     }
+    consumeRecord(record, recordCount);
+    recordCount += 1;
   };
 
   for await (const chunk of input) {
@@ -147,7 +194,7 @@ export async function readNdjsonRecords<T>(
     );
   }
 
-  return { records, discardedLines, warnings };
+  return { recordCount, discardedLines, warnings };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

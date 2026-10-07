@@ -16,4 +16,6 @@ Evidence stays local: Agent Black Box has no telemetry and does not upload repos
 
 `applyRollbackPlan` bypasses the CLI's snapshot preflight. Callers must validate and obtain appropriate confirmation before restoring files.
 
+Git subprocesses preserve selected local storage and discovery environment variables, including alternate indices. Executable and configuration injection variables are filtered by `simple-git`; trusted repository configuration remains a separate trust boundary. Terminal presentation escapes control characters in repository paths and other untrusted values. Structured JSON/SARIF retain their original values, and manual rollback snippets preserve exact arguments using POSIX shell quoting.
+
 See [Usage](docs/USAGE.md) for safe workflows and [Architecture](docs/ARCHITECTURE.md) for trust boundaries.

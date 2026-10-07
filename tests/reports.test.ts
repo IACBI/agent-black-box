@@ -162,6 +162,14 @@ describe("markdown reports", () => {
     expect(filterRiskFindings(risks, { category: "Config file" }).map((risk) => risk.path)).toEqual(["src/config.ts"]);
   });
 
+  it("keeps category filters inside safe inline code", () => {
+    const markdown = generateRisksMarkdown(baseReport, { category: "Config`\n# injected\u001b[2J" });
+
+    expect(markdown).toContain("Active filter: category `` Config` # injected [2J ``.");
+    expect(markdown).not.toContain("\n# injected");
+    expect(markdown).not.toContain("\u001b");
+  });
+
   it("generates rollback suggestions without executing changes", () => {
     const markdown = generateRollbackMarkdown(baseReport);
 
@@ -179,7 +187,50 @@ describe("markdown reports", () => {
       },
     });
 
-    expect(markdown).toContain("git diff -- ':(top,literal)src/weird'\\''$(touch owned)\\nfile.ts'");
+    expect(markdown).toContain("abb_arg_1=$(printf '%b_' ':(top,literal)src/weird'\\''$(touch owned)\\0012file.ts')");
+    expect(markdown).toContain('git diff -- "${abb_arg_1%_}"');
     expect(markdown).not.toContain("\nfile.ts");
+  });
+
+  it("makes control paths visible in rollback headings without emitting terminal escapes", () => {
+    const markdown = generateRollbackMarkdown({
+      ...baseReport,
+      git: {
+        ...baseReport.git,
+        changedFiles: [{ path: "src/\u001b[2J\nfile.ts", status: "modified" }],
+      },
+    });
+    expect(markdown).not.toContain("\u001b");
+    expect(markdown).toContain('### `"src/\\u001b[2J\\nfile.ts"`');
+    expect(markdown).toContain("printf '%b_' ':(top,literal)src/\\0033[2J\\0012file.ts'");
+  });
+
+  it("keeps control filenames distinct in timeline, summary, risk and diff reports", () => {
+    const controlPath = "src/a\u001b[2J\n.ts";
+    const literalPath = "src/a\\u001b[2J\\n.ts";
+    const report = {
+      ...baseReport,
+      git: {
+        ...baseReport.git,
+        changedFiles: [controlPath, literalPath].map((path) => ({ path, status: "modified" as const })),
+      },
+      events: [controlPath, literalPath].map((path) => ({
+        timestamp: baseReport.startedAt,
+        eventType: "change" as const,
+        path,
+      })),
+      risks: [controlPath, literalPath].map((path) => ({ ...baseReport.risks[0]!, path })),
+    };
+    for (const render of [
+      generateTimelineMarkdown,
+      generateSummaryMarkdown,
+      generateRisksMarkdown,
+      generateDiffSummaryMarkdown,
+    ]) {
+      const markdown = render(report);
+      expect(markdown).not.toContain("\u001b");
+      expect(markdown).toContain(JSON.stringify(controlPath));
+      expect(markdown).toContain(JSON.stringify(literalPath));
+    }
   });
 });

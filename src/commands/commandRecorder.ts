@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { realpath, stat } from "node:fs/promises";
+import { realpath, rename, stat } from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { loadConfig, type ConfigLoadOptions } from "../config/config.js";
@@ -71,10 +71,47 @@ export async function recordAndRunCommand(
     });
     recorded = true;
     return result.exitCode ?? 1;
+  } catch (error) {
+    // Preserve capture-loss evidence without leaving a finished command tied to a live wrapper PID.
+    const failedMarker = path.join(
+      path.dirname(inFlightMarker),
+      path.basename(inFlightMarker).replace("command-inflight-", "command-failed-")
+    );
+    try {
+      await rename(inFlightMarker, failedMarker);
+    } catch (markerError) {
+      throw new AggregateError(
+        [error, markerError],
+        "Command capture failed and its failure marker could not be saved.",
+        { cause: markerError }
+      );
+    }
+    throw error;
   } finally {
     if (recorded) {
-      await removeFileIfExists(inFlightMarker);
+      await releaseCompletedCommandMarker(inFlightMarker);
     }
+  }
+}
+
+async function releaseCompletedCommandMarker(inFlightMarker: string): Promise<void> {
+  try {
+    await removeFileIfExists(inFlightMarker);
+  } catch (cleanupError) {
+    const completedMarker = path.join(
+      path.dirname(inFlightMarker),
+      path.basename(inFlightMarker).replace("command-inflight-", "command-completed-")
+    );
+    try {
+      await rename(inFlightMarker, completedMarker);
+    } catch (markerError) {
+      throw new AggregateError(
+        [cleanupError, markerError],
+        "Command was recorded, but its completion marker could not be released.",
+        { cause: markerError }
+      );
+    }
+    throw cleanupError;
   }
 }
 
@@ -257,8 +294,22 @@ function getSpawnTarget(
   windowsVerbatimArguments?: boolean;
 } {
   if (process.platform === "win32" && /\.(cmd|bat)$/i.test(command)) {
+    const configuredInterpreter = process.env.ComSpec;
+    let interpreter: string | null;
+    if (configuredInterpreter && path.isAbsolute(configuredInterpreter)) {
+      interpreter = configuredInterpreter;
+    } else {
+      if (configuredInterpreter && /[\\/]/.test(configuredInterpreter)) {
+        throw new Error("Windows command interpreter paths must be absolute.");
+      }
+      interpreter = resolveWindowsExecutable(configuredInterpreter || "cmd.exe", process.cwd());
+    }
+    if (!interpreter) {
+      throw new Error("A trusted Windows command interpreter was not found.");
+    }
+
     return {
-      command: process.env.ComSpec ?? "cmd.exe",
+      command: interpreter,
       args: ["/d", "/v:off", "/s", "/c", buildWindowsCommandLine([command, ...args])],
       windowsVerbatimArguments: true,
     };

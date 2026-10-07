@@ -23,7 +23,7 @@ import {
   markdownInlineCode,
   markdownTableCode,
 } from "../utils/markdown.js";
-import { shellQuotePath } from "../utils/paths.js";
+import { formatTerminalValue, renderPosixCommand } from "../utils/terminal.js";
 import { toLiteralGitPathspec } from "../rollback/rollback.js";
 
 const COMMAND_CAPTURE_NOTE =
@@ -87,20 +87,23 @@ export function generateTimelineMarkdown(report: SessionReport): string {
   const changedFiles = report.git.changedFiles
     .map(
       (file) =>
-        `- ${file.status}: ${markdownInlineCode(file.path)} (${formatEvidenceLabel(evidenceByPath.get(file.path))})`
+        `- ${file.status}: ${markdownInlineCode(formatTerminalValue(file.path))} (${formatEvidenceLabel(evidenceByPath.get(file.path))})`
     )
     .join("\n");
   const committedChanges = (report.changeEvidence?.committedChanges ?? [])
-    .map((file) => `- ${file.status}: ${markdownInlineCode(file.path)}`)
+    .map((file) => `- ${file.status}: ${markdownInlineCode(formatTerminalValue(file.path))}`)
     .join("\n");
   const fileEvents = report.events
-    .map((event) => `- ${escapeMarkdownText(event.timestamp)} - ${event.eventType} - ${markdownInlineCode(event.path)}`)
+    .map(
+      (event) =>
+        `- ${escapeMarkdownText(event.timestamp)} - ${event.eventType} - ${markdownInlineCode(formatTerminalValue(event.path))}`
+    )
     .join("\n");
   const commandEvents = report.commands.map((command) => formatCommandEvent(command)).join("\n");
   const timeline = [
     ...report.events.map((event) => ({
       timestamp: event.timestamp,
-      line: `- ${escapeMarkdownText(event.timestamp)} - file ${event.eventType} - ${markdownInlineCode(event.path)}`,
+      line: `- ${escapeMarkdownText(event.timestamp)} - file ${event.eventType} - ${markdownInlineCode(formatTerminalValue(event.path))}`,
     })),
     ...report.commands.map((command) => ({
       timestamp: command.startedAt,
@@ -116,7 +119,7 @@ export function generateTimelineMarkdown(report: SessionReport): string {
 ## Session metadata
 
 - Session ID: ${markdownInlineCode(report.id)}
-- Repository: ${markdownInlineCode(report.repoRoot)}
+- Repository: ${markdownInlineCode(formatTerminalValue(report.repoRoot))}
 - Started: ${escapeMarkdownText(report.startedAt)}
 - Ended: ${escapeMarkdownText(report.endedAt)}
 
@@ -175,13 +178,13 @@ export function generateSummaryMarkdown(report: SessionReport): string {
   const committedChangeCount = report.changeEvidence?.committedChanges.length ?? 0;
   const topChangedFiles = sessionRelevantChanges
     .slice(0, 12)
-    .map((file) => `- ${file.status}: ${markdownInlineCode(file.path)}`)
+    .map((file) => `- ${file.status}: ${markdownInlineCode(formatTerminalValue(file.path))}`)
     .join("\n");
   const topRisks = report.risks
     .slice(0, 8)
     .map(
       (risk) =>
-        `- ${risk.severity.toUpperCase()} - ${markdownInlineCode(risk.path)} - ${escapeMarkdownText(risk.category)}`
+        `- ${risk.severity.toUpperCase()} - ${markdownInlineCode(formatTerminalValue(risk.path))} - ${escapeMarkdownText(risk.category)}`
     )
     .join("\n");
 
@@ -241,7 +244,7 @@ function formatCommandEvent(command: CommandEvent): string {
   const label = command.label ? ` [${escapeMarkdownText(command.label)}]` : "";
   const group = command.group ? ` group ${markdownInlineCode(command.group)}` : "";
   const phase = command.phase ? ` phase ${markdownInlineCode(command.phase)}` : "";
-  const cwd = command.cwd && command.cwd !== "." ? ` cwd ${markdownInlineCode(command.cwd)}` : "";
+  const cwd = command.cwd && command.cwd !== "." ? ` cwd ${markdownInlineCode(formatTerminalValue(command.cwd))}` : "";
   return `- ${escapeMarkdownText(command.startedAt)}${label} - command exit ${command.exitCode ?? "unknown"}${group}${phase}${cwd} - ${markdownInlineCode(command.command)}`;
 }
 
@@ -255,13 +258,13 @@ export function generateDiffSummaryMarkdown(report: SessionReport): string {
       const source = file.lineStatsSource ?? "unknown";
       const note = file.statsNote ?? "";
       const evidence = evidenceByPath.get(file.path);
-      return `| ${markdownTableCode(file.path)} | ${file.status} | ${formatEvidenceValue(evidence?.atStart)} | ${formatEvidenceValue(evidence?.observedDuringSession)} | ${kind} | ${formatBytes(file.sizeBytes)} | ${insertions} | ${deletions} | ${source} | ${escapeMarkdownTableCell(note)} |`;
+      return `| ${markdownTableCode(formatTerminalValue(file.path))} | ${file.status} | ${formatEvidenceValue(evidence?.atStart)} | ${formatEvidenceValue(evidence?.observedDuringSession)} | ${kind} | ${formatBytes(file.sizeBytes)} | ${insertions} | ${deletions} | ${source} | ${escapeMarkdownTableCell(note)} |`;
     })
     .join("\n");
 
   const categories = summarizeNotableCategories(report.risks);
   const committedRows = (report.changeEvidence?.committedChanges ?? [])
-    .map((file) => `| ${markdownTableCode(file.path)} | ${file.status} |`)
+    .map((file) => `| ${markdownTableCode(formatTerminalValue(file.path))} | ${file.status} |`)
     .join("\n");
 
   return `# Agent Black Box Diff Summary
@@ -300,25 +303,25 @@ export function generateRisksMarkdown(report: SessionReport, filter: RiskReportF
   const riskyFiles = risks
     .map(
       (risk) =>
-        `- ${risk.severity.toUpperCase()} (${risk.score}/100) - ${markdownInlineCode(risk.path)} - ${escapeMarkdownText(risk.category)}: ${escapeMarkdownText(risk.reason)}`
+        `- ${risk.severity.toUpperCase()} (${risk.score}/100) - ${markdownInlineCode(formatTerminalValue(risk.path))} - ${escapeMarkdownText(risk.category)}: ${escapeMarkdownText(risk.reason)}`
     )
     .join("\n");
 
   const secrets = report.possibleSecrets
     .map(
       (secret) =>
-        `- ${markdownInlineCode(`${secret.path}:${secret.line}`)} - ${escapeMarkdownText(secret.reason)} Value: ${escapeMarkdownText(secret.redacted)}`
+        `- ${markdownInlineCode(`${formatTerminalValue(secret.path)}:${secret.line}`)} - ${escapeMarkdownText(secret.reason)} Value: ${escapeMarkdownText(secret.redacted)}`
     )
     .join("\n");
 
   const dependencyChanges = risks
     .filter((risk) => ["Lockfile", "Package manager file", "Config file"].includes(risk.category))
-    .map((risk) => `- ${markdownInlineCode(risk.path)} - ${escapeMarkdownText(risk.category)}`)
+    .map((risk) => `- ${markdownInlineCode(formatTerminalValue(risk.path))} - ${escapeMarkdownText(risk.category)}`)
     .join("\n");
 
   const ciChanges = risks
     .filter((risk) => risk.category === "CI/CD file" || risk.category === "Docker file")
-    .map((risk) => `- ${markdownInlineCode(risk.path)} - ${escapeMarkdownText(risk.category)}`)
+    .map((risk) => `- ${markdownInlineCode(formatTerminalValue(risk.path))} - ${escapeMarkdownText(risk.category)}`)
     .join("\n");
 
   return `# Agent Black Box Risks
@@ -381,15 +384,16 @@ export function generateRollbackMarkdown(report: SessionReport, _config?: AgentB
   const evidenceByPath = indexFileChangeEvidence(report.changeEvidence);
   const suggestions = report.git.changedFiles
     .map((file) => {
-      const quotedPath = shellQuotePath(toLiteralGitPathspec(file.path));
+      const pathspec = toLiteralGitPathspec(file.path);
+      const diffCommand = renderPosixCommand("git diff --", [pathspec]);
       const evidence = evidenceByPath.get(file.path);
       if (file.status === "added") {
-        return `### ${markdownInlineCode(file.path)}
+        return `### ${markdownInlineCode(formatTerminalValue(file.path))}
 
 This appears to be an added or untracked file. Review it before removing it manually.
 
 \`\`\`sh
-git diff -- ${quotedPath}
+${diffCommand}
 \`\`\``;
       }
 
@@ -398,21 +402,21 @@ git diff -- ${quotedPath}
           evidence?.atStart === true
             ? "This path already had changes when the session started. Restore commands are omitted because they could discard pre-session work."
             : "No reliable start baseline is available for this path. Restore commands are omitted.";
-        return `### ${markdownInlineCode(file.path)}
+        return `### ${markdownInlineCode(formatTerminalValue(file.path))}
 
 ${reason}
 
 \`\`\`sh
-git diff -- ${quotedPath}
+${diffCommand}
 \`\`\``;
       }
 
-      return `### ${markdownInlineCode(file.path)}
+      return `### ${markdownInlineCode(formatTerminalValue(file.path))}
 
 \`\`\`sh
-git diff -- ${quotedPath}
-git restore -- ${quotedPath}
-git checkout -- ${quotedPath}
+${diffCommand}
+${renderPosixCommand("git restore --", [pathspec])}
+${renderPosixCommand("git checkout --", [pathspec])}
 \`\`\``;
     })
     .join("\n\n");
@@ -597,7 +601,7 @@ function describeRiskFilter(filter: RiskReportFilter): string {
     parts.push(`minimum severity \`${filter.minSeverity}\``);
   }
   if (filter.category) {
-    parts.push(`category \`${filter.category}\``);
+    parts.push(`category ${markdownInlineCode(filter.category)}`);
   }
 
   return parts.length > 0 ? `Active filter: ${parts.join(", ")}.` : "Active filter: none.";

@@ -18,6 +18,42 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 });
 
 describe("config", () => {
+  it("loads and migrates optional named policies without replacing built-in configuration", async () => {
+    const dir = await createTempDir();
+    try {
+      await writeFile(
+        getConfigPath(dir),
+        JSON.stringify({ analysisPolicies: { "team-review": { minSeverity: "medium", categories: ["CI/CD file"] } } })
+      );
+      const loaded = await loadConfigWithMeta(dir);
+      expect(loaded.errors).toEqual([]);
+      expect(loaded.warnings).not.toContain('Unknown config key "analysisPolicies" is ignored.');
+      expect(loaded.config.analysisPolicies?.["team-review"]).toEqual({
+        failOnNewSecrets: true,
+        requireCompleteCoverage: false,
+        minSeverity: "medium",
+        categories: ["CI/CD file"],
+      });
+      await migrateConfigFile(dir);
+      expect((await loadConfig(dir)).analysisPolicies).toEqual(loaded.config.analysisPolicies);
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
+  it("fails configuration loading for a malformed named policy instead of ignoring it", async () => {
+    const dir = await createTempDir();
+    try {
+      await writeFile(
+        getConfigPath(dir),
+        JSON.stringify({ analysisPolicies: { "team-review": { minSeverity: "urgent" } } })
+      );
+      await expect(loadConfig(dir)).rejects.toThrow("minSeverity");
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
   it("validates the default storage path even without a config file", async () => {
     const dir = await createTempDir();
     const outside = await createTempDir();

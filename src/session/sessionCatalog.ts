@@ -12,16 +12,20 @@ import type {
 } from "../types.js";
 import { summarizeRisks } from "../risks/riskDetector.js";
 import { pathExists, readJsonFileLimited } from "../utils/files.js";
+import { mapWithConcurrency } from "../utils/concurrency.js";
 import { buildChangeEvidence, selectSessionRelevantChanges } from "./changeEvidence.js";
-import { isCapturedCommandEvent, isCapturedFileEvent, readNdjsonRecords } from "./ndjson.js";
+import { digestNdjsonRecords, isCapturedCommandEvent, isCapturedFileEvent, readNdjsonRecords } from "./ndjson.js";
 import {
+  assertMaterializationBudget,
   digestRecords,
   digestRegularFile,
   INLINE_REPORT_BYTES,
   isReportReplay,
   MAX_REPORT_BYTES,
+  MaterializationBudgetError,
   REPORT_REPLAY_FILE,
   type ReportReplay,
+  validateMaterializationLimit,
 } from "./reportStorage.js";
 
 export const SESSION_METADATA_FILE = "session-metadata.json";
@@ -29,6 +33,7 @@ const SESSION_REPORT_FILE = "session.json";
 const SESSION_START_FILE = "session-start.json";
 const SESSION_DIRECTORY_PATTERN = /^session-[A-Za-z0-9._-]+$/;
 const CATALOG_BATCH_SIZE = 32;
+const CATALOG_REPORT_CONCURRENCY = 1;
 const MAX_SESSION_METADATA_BYTES = 1024 * 1024;
 
 export type SessionCatalogState = "complete" | "incomplete" | "corrupt";
@@ -50,6 +55,19 @@ export interface SessionCatalogEntry {
   endHead?: string;
   branch?: string;
   warning?: string;
+  /** A working-data policy deferred report parsing, so catalog timestamps and counts are unavailable. */
+  metadataUnavailable?: boolean;
+}
+
+export interface SessionCatalogOptions {
+  maxMaterializedBytes?: number;
+}
+
+interface PendingCatalogReport {
+  id: string;
+  sessionDir: string;
+  needsReport: true;
+  metadataPolicyWarning?: string;
 }
 
 export function buildSessionMetadata(report: SessionReport): SessionMetadata {
@@ -73,8 +91,10 @@ export function buildSessionMetadata(report: SessionReport): SessionMetadata {
 
 export async function listSessionCatalog(
   repoRoot: string,
-  config: AgentBlackBoxConfig
+  config: AgentBlackBoxConfig,
+  options: SessionCatalogOptions = {}
 ): Promise<SessionCatalogEntry[]> {
+  validateMaterializationLimit(options.maxMaterializedBytes);
   const sessionRoot = path.isAbsolute(config.sessionDir) ? config.sessionDir : path.join(repoRoot, config.sessionDir);
   if (!(await pathExists(sessionRoot))) {
     return [];
@@ -84,12 +104,35 @@ export async function listSessionCatalog(
     .filter((entry) => entry.isDirectory() && SESSION_DIRECTORY_PATTERN.test(entry.name))
     .map((entry) => ({ id: entry.name, sessionDir: path.join(sessionRoot, entry.name) }));
   const entries: SessionCatalogEntry[] = [];
+  const pendingReports: PendingCatalogReport[] = [];
 
-  for (let offset = 0; offset < directories.length; offset += CATALOG_BATCH_SIZE) {
-    entries.push(
-      ...(await Promise.all(directories.slice(offset, offset + CATALOG_BATCH_SIZE).map(inspectSessionDirectory)))
+  const batchSize =
+    options.maxMaterializedBytes === undefined
+      ? CATALOG_BATCH_SIZE
+      : Math.min(
+          CATALOG_BATCH_SIZE,
+          Math.max(1, Math.floor(options.maxMaterializedBytes / MAX_SESSION_METADATA_BYTES))
+        );
+  for (let offset = 0; offset < directories.length; offset += batchSize) {
+    const inspected = await Promise.all(
+      directories
+        .slice(offset, offset + batchSize)
+        .map((directory) => inspectSessionDirectory(directory, options.maxMaterializedBytes))
     );
+    for (const result of inspected) {
+      if ("needsReport" in result) {
+        pendingReports.push(result);
+      } else {
+        entries.push(result);
+      }
+    }
   }
+  // Legacy reports can each require up to 256 MiB before parsing; do not read them in metadata-sized batches.
+  entries.push(
+    ...(await mapWithConcurrency(pendingReports, CATALOG_REPORT_CONCURRENCY, (directory) =>
+      inspectSessionReport(directory, options.maxMaterializedBytes)
+    ))
+  );
 
   return entries.sort(compareCatalogEntries);
 }
@@ -101,6 +144,11 @@ export function resolveSessionEntry(entries: SessionCatalogEntry[], selector: st
 
   const normalizedSelector = selector?.trim() || "latest";
   if (normalizedSelector === "latest") {
+    if (entries.some((entry) => entry.state === "complete" && entry.metadataUnavailable)) {
+      throw new Error(
+        "Latest session cannot be determined because catalog metadata is unavailable under the working-data policy. Increase --memory-budget-mb or select an explicit session ID."
+      );
+    }
     const latest = entries.find((entry) => entry.state === "complete");
     if (!latest) {
       throw new Error("No completed Agent Black Box sessions were found.");
@@ -140,11 +188,18 @@ export async function resolveSession(
 }
 
 export async function readCatalogSessionReport(entry: SessionCatalogEntry): Promise<SessionReport> {
+  return readCatalogSessionReportWithinLimit(entry);
+}
+
+async function readCatalogSessionReportWithinLimit(
+  entry: SessionCatalogEntry,
+  maxMaterializedBytes?: number
+): Promise<SessionReport> {
   if (entry.state !== "complete") {
     throw new Error(`Session ${entry.id} is not complete.`);
   }
 
-  const result = await readStoredReportUnknown(entry.sessionDir, entry.id);
+  const result = await readStoredReportUnknown(entry.sessionDir, entry.id, { maxMaterializedBytes });
   const report = parseSessionReport(result.value);
   if (!report || report.id !== entry.id) {
     throw new Error(
@@ -154,7 +209,12 @@ export async function readCatalogSessionReport(entry: SessionCatalogEntry): Prom
   return report;
 }
 
-export async function verifyCatalogSessionReportFile(entry: SessionCatalogEntry): Promise<void> {
+/** Large replay checks default to report digests and log sizes; opt in to canonical record verification. */
+export async function verifyCatalogSessionReportFile(
+  entry: SessionCatalogEntry,
+  options: { verifyEventLogs?: boolean; maxMaterializedBytes?: number } = {}
+): Promise<void> {
+  validateMaterializationLimit(options.maxMaterializedBytes);
   if (entry.state !== "complete") {
     throw new Error(`Session ${entry.id} is not complete.`);
   }
@@ -164,19 +224,41 @@ export async function verifyCatalogSessionReportFile(entry: SessionCatalogEntry)
     throw new Error(`Session ${entry.id} contains an unsupported session.json report.`);
   }
   if (reportFile.size <= INLINE_REPORT_BYTES || !(await pathExists(path.join(entry.sessionDir, REPORT_REPLAY_FILE)))) {
-    await readCatalogSessionReport(entry);
+    assertMaterializationBudget(reportPath, reportFile.size, options.maxMaterializedBytes);
+    await readCatalogSessionReportWithinLimit(entry, options.maxMaterializedBytes);
     return;
   }
-  await readLargeReplayCore(entry.sessionDir, entry.id, reportFile.size);
+  const { replay, core } = await readLargeReplayCore(
+    entry.sessionDir,
+    entry.id,
+    reportFile.size,
+    options.maxMaterializedBytes
+  );
+  if (options.verifyEventLogs) {
+    await verifyReplayEventLogs(entry.sessionDir, replay, core);
+  }
 }
 
-async function inspectSessionDirectory(directory: { id: string; sessionDir: string }): Promise<SessionCatalogEntry> {
+async function inspectSessionDirectory(
+  directory: { id: string; sessionDir: string },
+  maxMaterializedBytes?: number
+): Promise<SessionCatalogEntry | PendingCatalogReport> {
   const metadataPath = path.join(directory.sessionDir, SESSION_METADATA_FILE);
   const reportPath = path.join(directory.sessionDir, SESSION_REPORT_FILE);
   const startPath = path.join(directory.sessionDir, SESSION_START_FILE);
+  let metadataPolicyWarning: string | undefined;
 
   if (await pathExists(metadataPath)) {
-    const metadataResult = await readJsonUnknown(metadataPath);
+    let metadataResult;
+    try {
+      metadataResult = await readJsonUnknown(metadataPath, undefined, maxMaterializedBytes);
+    } catch (error) {
+      if (!(error instanceof MaterializationBudgetError)) {
+        throw error;
+      }
+      metadataPolicyWarning = error.message;
+      metadataResult = { error: error.message };
+    }
     if (metadataResult.value && isSessionMetadata(metadataResult.value) && metadataResult.value.id === directory.id) {
       if (await pathExists(reportPath)) {
         let reportFile;
@@ -203,19 +285,19 @@ async function inspectSessionDirectory(directory: { id: string; sessionDir: stri
   }
 
   if (await pathExists(reportPath)) {
-    const reportResult = await readStoredReportUnknown(directory.sessionDir, directory.id);
-    const report = parseSessionReport(reportResult.value);
-    if (report && report.id === directory.id) {
-      return {
-        ...metadataToCatalogEntry(directory.sessionDir, buildSessionMetadata(report)),
-        ...((await pathExists(metadataPath)) ? { warning: "Invalid metadata; derived from session.json." } : {}),
-      };
-    }
-    return corruptEntry(directory, reportResult.error ?? "session.json has an unexpected shape");
+    return { ...directory, needsReport: true, ...(metadataPolicyWarning ? { metadataPolicyWarning } : {}) };
   }
 
   if (await pathExists(startPath)) {
-    const startResult = await readJsonUnknown(startPath);
+    let startResult;
+    try {
+      startResult = await readJsonUnknown(startPath, undefined, maxMaterializedBytes);
+    } catch (error) {
+      if (!(error instanceof MaterializationBudgetError)) {
+        throw error;
+      }
+      return { ...directory, state: "incomplete", metadataUnavailable: true, warning: error.message };
+    }
     if (startResult.value && isSessionStart(startResult.value) && startResult.value.id === directory.id) {
       return {
         id: directory.id,
@@ -228,6 +310,43 @@ async function inspectSessionDirectory(directory: { id: string; sessionDir: stri
   }
 
   return corruptEntry(directory, "No session metadata, report, or start record was found");
+}
+
+async function inspectSessionReport(
+  directory: PendingCatalogReport,
+  maxMaterializedBytes?: number
+): Promise<SessionCatalogEntry> {
+  let reportResult;
+  try {
+    reportResult = await readStoredReportUnknown(directory.sessionDir, directory.id, {
+      maxMaterializedBytes,
+      metadataOnly: maxMaterializedBytes !== undefined,
+    });
+  } catch (error) {
+    if (!(error instanceof MaterializationBudgetError)) {
+      throw error;
+    }
+    return {
+      id: directory.id,
+      sessionDir: directory.sessionDir,
+      state: "complete",
+      metadataUnavailable: true,
+      warning: error.message,
+    };
+  }
+  const report = parseSessionReport(reportResult.value);
+  if (report && report.id === directory.id) {
+    return {
+      ...metadataToCatalogEntry(directory.sessionDir, buildSessionMetadata(report)),
+      ...(reportResult.commandCount === undefined ? {} : { commandCount: reportResult.commandCount }),
+      ...(directory.metadataPolicyWarning
+        ? { warning: `Catalog metadata was derived from session.json because ${directory.metadataPolicyWarning}` }
+        : (await pathExists(path.join(directory.sessionDir, SESSION_METADATA_FILE)))
+          ? { warning: "Invalid metadata; derived from session.json." }
+          : {}),
+    };
+  }
+  return corruptEntry(directory, reportResult.error ?? "session.json has an unexpected shape");
 }
 
 function metadataToCatalogEntry(sessionDir: string, metadata: SessionMetadata): SessionCatalogEntry {
@@ -265,18 +384,37 @@ function compareCatalogEntries(left: SessionCatalogEntry, right: SessionCatalogE
   return rightTime - leftTime || right.id.localeCompare(left.id);
 }
 
-async function readJsonUnknown(filePath: string, limitBytes?: number): Promise<{ value?: unknown; error?: string }> {
+async function readJsonUnknown(
+  filePath: string,
+  limitBytes?: number,
+  maxMaterializedBytes?: number
+): Promise<{ value?: unknown; error?: string }> {
   try {
     const maxBytes =
       limitBytes ??
       (path.basename(filePath) === SESSION_REPORT_FILE ? INLINE_REPORT_BYTES : MAX_SESSION_METADATA_BYTES);
-    return { value: await readJsonFileLimited<unknown>(filePath, maxBytes) };
+    if (maxMaterializedBytes !== undefined) {
+      const file = await lstat(filePath);
+      if (file.isFile() && file.size <= maxBytes) {
+        assertMaterializationBudget(filePath, file.size, maxMaterializedBytes);
+      }
+    }
+    return {
+      value: await readJsonFileLimited<unknown>(filePath, Math.min(maxBytes, maxMaterializedBytes ?? maxBytes)),
+    };
   } catch (error) {
+    if (error instanceof MaterializationBudgetError) {
+      throw error;
+    }
     return { error: sanitizeSingleLine((error as Error).message) };
   }
 }
 
-async function readStoredReportUnknown(sessionDir: string, id: string): Promise<{ value?: unknown; error?: string }> {
+async function readStoredReportUnknown(
+  sessionDir: string,
+  id: string,
+  options: { maxMaterializedBytes?: number; metadataOnly?: boolean } = {}
+): Promise<{ value?: unknown; error?: string; commandCount?: number }> {
   const reportPath = path.join(sessionDir, SESSION_REPORT_FILE);
   try {
     const reportFile = await lstat(reportPath);
@@ -284,7 +422,11 @@ async function readStoredReportUnknown(sessionDir: string, id: string): Promise<
       throw new Error("session.json is not a regular file.");
     }
     if (reportFile.size <= INLINE_REPORT_BYTES) {
-      return readJsonUnknown(reportPath);
+      assertMaterializationBudget(reportPath, reportFile.size, options.maxMaterializedBytes);
+      return readJsonUnknown(
+        reportPath,
+        Math.min(INLINE_REPORT_BYTES, options.maxMaterializedBytes ?? INLINE_REPORT_BYTES)
+      );
     }
     if (reportFile.size > MAX_REPORT_BYTES) {
       throw new Error(`session.json exceeds the ${MAX_REPORT_BYTES / 1024 / 1024} MiB size limit.`);
@@ -292,9 +434,14 @@ async function readStoredReportUnknown(sessionDir: string, id: string): Promise<
 
     const replayPath = path.join(sessionDir, REPORT_REPLAY_FILE);
     if (!(await pathExists(replayPath))) {
-      return readJsonUnknown(reportPath, MAX_REPORT_BYTES);
+      assertMaterializationBudget(reportPath, reportFile.size, options.maxMaterializedBytes);
+      return readJsonUnknown(reportPath, Math.min(MAX_REPORT_BYTES, options.maxMaterializedBytes ?? MAX_REPORT_BYTES));
     }
-    const { replay, core } = await readLargeReplayCore(sessionDir, id, reportFile.size);
+    const { replay, core } = await readLargeReplayCore(sessionDir, id, reportFile.size, options.maxMaterializedBytes);
+    if (options.metadataOnly) {
+      await verifyReplayEventLogs(sessionDir, replay, core);
+      return { value: core, commandCount: replay.commandCount };
+    }
     const eventPath = path.join(sessionDir, "events.ndjson");
     const commandPath = path.join(sessionDir, "commands.ndjson");
     const [events, commands] = await Promise.all([
@@ -313,16 +460,43 @@ async function readStoredReportUnknown(sessionDir: string, id: string): Promise<
     }
     return { value: { ...replay.report, events: events.records, commands: commands.records } };
   } catch (error) {
+    if (error instanceof MaterializationBudgetError) {
+      throw error;
+    }
     return { error: sanitizeSingleLine((error as Error).message) };
+  }
+}
+
+async function verifyReplayEventLogs(sessionDir: string, replay: ReportReplay, core: SessionReport): Promise<void> {
+  const [events, commands] = await Promise.all([
+    digestNdjsonRecords(path.join(sessionDir, "events.ndjson"), isCapturedFileEvent, "file event"),
+    digestNdjsonRecords(path.join(sessionDir, "commands.ndjson"), isCapturedCommandEvent, "command event"),
+  ]);
+  if (
+    events.recordCount !== replay.eventCount ||
+    commands.recordCount !== replay.commandCount ||
+    events.digest !== replay.eventsDigest ||
+    commands.digest !== replay.commandsDigest ||
+    events.discardedLines !== core.integrity.discardedFileEventLines ||
+    commands.discardedLines !== core.integrity.discardedCommandEventLines
+  ) {
+    throw new Error("Large report event logs no longer match the finalized report.");
   }
 }
 
 async function readLargeReplayCore(
   sessionDir: string,
   id: string,
-  reportBytes: number
+  reportBytes: number,
+  maxMaterializedBytes?: number
 ): Promise<{ replay: ReportReplay; core: SessionReport }> {
-  const value = await readJsonFileLimited<unknown>(path.join(sessionDir, REPORT_REPLAY_FILE), INLINE_REPORT_BYTES);
+  const replayPath = path.join(sessionDir, REPORT_REPLAY_FILE);
+  const replayFile = await lstat(replayPath);
+  assertMaterializationBudget(replayPath, replayFile.size, maxMaterializedBytes);
+  const value = await readJsonFileLimited<unknown>(
+    replayPath,
+    Math.min(INLINE_REPORT_BYTES, maxMaterializedBytes ?? INLINE_REPORT_BYTES)
+  );
   if (!isReportReplay(value) || value.id !== id || value.reportBytes !== reportBytes) {
     throw new Error("Large report replay metadata is missing or invalid.");
   }
@@ -500,6 +674,7 @@ function isSessionChangeEvidence(value: unknown): value is SessionReport["change
   return (
     isRecord(value) &&
     typeof value.baselineAvailable === "boolean" &&
+    (value.baselineCapturedAt === undefined || isIsoDate(value.baselineCapturedAt)) &&
     (typeof value.headChanged === "boolean" || value.headChanged === null) &&
     (typeof value.indexChanged === "boolean" || value.indexChanged === null) &&
     (typeof value.branchChanged === "boolean" || value.branchChanged === null) &&

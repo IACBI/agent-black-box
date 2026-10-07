@@ -42,6 +42,10 @@ CLI rollback apply requires the latest completed session, eligible tracked modif
 
 Inline JSON reads stop at 32 MiB. Larger reports retain full JSON and reconstruct from bounded replay/original logs. Above 256 MiB or a 32 MiB replay body, finalization fails and raw logs remain. Legacy large reports use bounded direct parsing with higher memory. Search indices above 4 MiB are omitted.
 
-Structural reads/pruning validate reconstructed record counts/digests and discarded-line counts. Large-report streaming, completed-state recovery and archive preflight check the report digest/log sizes without replaying records. Streamed files must be regular and match their opened identity. Catalog metadata is not a full integrity scan.
+Structural reads, session verification and pruning validate reconstructed record counts/digests and discarded-line counts. For replay-backed large reports, session verification streams canonical digests including every accepted record field without retaining event/command arrays. Large-report display streaming, completed-state recovery and archive preflight check the report digest/log sizes without replaying records. Streamed files must be regular and match their opened identity. Catalog metadata is not a full integrity scan.
+
+`sessions verify --memory-budget-mb <8–4096> --concurrency <1–16>` optionally bounds encoded inputs/stream working data; see [Usage](USAGE.md) for quota calculation and exclusions. A budget refusal is an operational policy failure, not proof of corruption, and leaves reports/logs intact. Unbudgeted defaults, replay digest semantics, accepted-record limits, and stored report formats are unchanged.
+
+`status --capture-health`/`status --json` and doctor expose current persisted capture diagnostics without rewriting reports. Counters represent durable marker observations; overflow/write-failure markers do not reveal exact lost-event counts. `inspectionComplete` distinguishes complete inspection from partial evidence, and health excludes in-memory queues and unrecorded losses.
 
 Pruning rereads eligible reports before deletion. Archiving verifies copied bytes with streaming checksums, marks completion and keeps originals. Inspect interrupted quarantine/partial-archive directories before cleanup.

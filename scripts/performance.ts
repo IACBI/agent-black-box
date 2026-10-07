@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,7 +8,9 @@ import { DEFAULT_CONFIG } from "../src/config/defaults.js";
 import { buildSessionReport } from "../src/reports/markdown.js";
 import { writeReports } from "../src/reports/reportWriter.js";
 import { listSessionCatalog, readCatalogSessionReport } from "../src/session/sessionCatalog.js";
+import { digestNdjsonRecords, isCapturedFileEvent } from "../src/session/ndjson.js";
 import { getEventsPath, readFileEventsWithDiagnostics } from "../src/session/sessionManager.js";
+import { getSessionVerificationLimits, verifySessions } from "../src/session/sessionVerification.js";
 
 const EVENT_COUNT = 100_000;
 const MAX_DURATION_MS = 5_000;
@@ -59,6 +62,25 @@ try {
     throw new Error("NDJSON memory budget exceeded.");
   }
 
+  const digestStarted = performance.now();
+  const digest = await digestNdjsonRecords(getEventsPath(temporaryDirectory), isCapturedFileEvent, "file event");
+  const digestDuration = performance.now() - digestStarted;
+  const expectedDigest = createHash("sha256").update(JSON.stringify(result.records)).digest("hex");
+  if (digest.recordCount !== EVENT_COUNT || digest.discardedLines !== 0 || digest.digest !== expectedDigest) {
+    throw new Error("Streaming verification did not preserve the canonical record digest.");
+  }
+  if (digestDuration > MAX_DURATION_MS) {
+    throw new Error(`Streaming verification budget exceeded: ${Math.round(digestDuration)}ms > ${MAX_DURATION_MS}ms.`);
+  }
+  console.log(
+    JSON.stringify({
+      scenario: "digest-ndjson-events",
+      records: EVENT_COUNT,
+      durationMs: Math.round(digestDuration),
+      maxDurationMs: MAX_DURATION_MS,
+    })
+  );
+
   const reportEvents = result.records.slice(0, 5_000);
   const sessionDir = path.join(temporaryDirectory, "sessions", "session-performance");
   const sessionStartedAt = "2026-01-01T00:00:00.000Z";
@@ -94,6 +116,25 @@ try {
   }
   if (fallbackDuration > 30_000) {
     throw new Error(`Catalog fallback budget exceeded: ${Math.round(fallbackDuration)}ms > 30000ms.`);
+  }
+
+  const verificationOptions = { memoryBudgetMb: 8, concurrency: 16 };
+  const limits = getSessionVerificationLimits(verificationOptions);
+  const verificationStarted = performance.now();
+  const budgetedCatalog = await listSessionCatalog(temporaryDirectory, catalogConfig, limits);
+  const verified = await verifySessions(budgetedCatalog, verificationOptions);
+  const verificationDuration = performance.now() - verificationStarted;
+  if (
+    verified.verified !== 1 ||
+    verified.failed !== 0 ||
+    budgetedCatalog[0]?.startedAt !== sessionStartedAt ||
+    budgetedCatalog[0]?.commandCount !== 0 ||
+    budgetedCatalog[0]?.state !== "complete"
+  ) {
+    throw new Error("Budgeted streaming verification or catalog metadata did not preserve the complete session.");
+  }
+  if (verificationDuration > 30_000) {
+    throw new Error(`Budgeted verification exceeded its time budget: ${Math.round(verificationDuration)}ms > 30000ms.`);
   }
 
   const analysisFiles = Array.from({ length: 5_000 }, (_, index) => ({
@@ -149,6 +190,13 @@ try {
             durationMs: Math.round(fallbackDuration),
           },
           { scenario: "analyze-changed-files", files: analysisFiles.length, durationMs: Math.round(analysisDuration) },
+          {
+            scenario: "budgeted-session-verification",
+            events: reportEvents.length,
+            memoryBudgetMb: verificationOptions.memoryBudgetMb,
+            workers: limits.concurrency,
+            durationMs: Math.round(verificationDuration),
+          },
         ],
         maxDurationMsPerScenario: 30_000,
       },

@@ -2,6 +2,7 @@ import chokidar from "chokidar";
 import type { ActiveSession, AgentBlackBoxConfig, FileEvent, FileEventType } from "../types.js";
 import { appendFileEvent, finalizeSession, markCaptureLoss, readStopRequest } from "../session/sessionManager.js";
 import { isPathExcluded, toRepoRelative } from "../utils/paths.js";
+import { formatTerminalValue } from "../utils/terminal.js";
 
 const WATCH_EVENTS = new Set<string>(["add", "change", "unlink"]);
 export const MAX_PENDING_FILE_EVENTS = 10_000;
@@ -14,6 +15,7 @@ export async function runWatcher(session: ActiveSession, config: AgentBlackBoxCo
   let eventFlushPromise: Promise<void> | undefined;
   let finalizePromise: Promise<void> | undefined;
   let stopPoll: ReturnType<typeof setInterval> | undefined;
+  let stopPollPending = false;
   const lossMarkerWrites: Promise<void>[] = [];
 
   let resolveCompletion: (() => void) | undefined;
@@ -67,8 +69,8 @@ export async function runWatcher(session: ActiveSession, config: AgentBlackBoxCo
         droppedFileEvents: droppedFileEventCount,
         failedFileEventWrites: failedFileEventWriteCount,
       });
-      console.log(`Agent Black Box session stopped: ${report.id}`);
-      console.log(`Reports written to ${report.sessionDir}`);
+      console.log(`Agent Black Box session stopped: ${formatTerminalValue(report.id)}`);
+      console.log(`Reports written to ${formatTerminalValue(report.sessionDir)}`);
     })();
 
     void finalizePromise.then(
@@ -123,7 +125,7 @@ export async function runWatcher(session: ActiveSession, config: AgentBlackBoxCo
           if (failedFileEventWriteCount === 1) {
             lossMarkerWrites.push(recordCaptureLoss("writeFailure"));
           }
-          console.error(`Failed to record file event: ${(error as Error).message}`);
+          console.error(`Failed to record file event: ${formatTerminalValue(String((error as Error).message))}`);
         }
       }
     })().finally(() => {
@@ -134,7 +136,7 @@ export async function runWatcher(session: ActiveSession, config: AgentBlackBoxCo
   }
 
   watcher.on("error", (error) => {
-    console.error(`Watcher error: ${(error as Error).message}`);
+    console.error(`Watcher error: ${formatTerminalValue(String((error as Error).message))}`);
     if (!finalized) {
       void recordCaptureLoss("watcherError").finally(() => rejectCompletion?.(error));
     }
@@ -144,11 +146,15 @@ export async function runWatcher(session: ActiveSession, config: AgentBlackBoxCo
     try {
       await markCaptureLoss(session, kind);
     } catch (error) {
-      console.error(`Failed to record capture loss: ${(error as Error).message}`);
+      console.error(`Failed to record capture loss: ${formatTerminalValue(String((error as Error).message))}`);
     }
   }
 
   stopPoll = setInterval(() => {
+    if (stopPollPending) {
+      return;
+    }
+    stopPollPending = true;
     void readStopRequest(session.repoRoot, config)
       .then((request) => {
         if (request?.sessionId === session.id) {
@@ -157,20 +163,23 @@ export async function runWatcher(session: ActiveSession, config: AgentBlackBoxCo
         return undefined;
       })
       .catch((error: unknown) => {
-        console.error(`Failed to read stop request: ${(error as Error).message}`);
+        console.error(`Failed to read stop request: ${formatTerminalValue(String((error as Error).message))}`);
+      })
+      .finally(() => {
+        stopPollPending = false;
       });
   }, 500);
 
   const handleSigint = (): void => {
     void finalizeOnce("sigint").catch((error: unknown) => {
-      console.error(`Failed to finalize session: ${(error as Error).message}`);
+      console.error(`Failed to finalize session: ${formatTerminalValue(String((error as Error).message))}`);
       process.exitCode = 1;
     });
   };
 
   const handleSigterm = (): void => {
     void finalizeOnce("sigterm").catch((error: unknown) => {
-      console.error(`Failed to finalize session: ${(error as Error).message}`);
+      console.error(`Failed to finalize session: ${formatTerminalValue(String((error as Error).message))}`);
       process.exitCode = 1;
     });
   };
@@ -179,7 +188,7 @@ export async function runWatcher(session: ActiveSession, config: AgentBlackBoxCo
   process.once("SIGTERM", handleSigterm);
 
   watcher.once("ready", () => {
-    console.log(`Agent Black Box session started: ${session.id}`);
+    console.log(`Agent Black Box session started: ${formatTerminalValue(session.id)}`);
     console.log("Recording observable repository changes. Run `abb stop` from another terminal to finalize.");
   });
 

@@ -98,6 +98,58 @@ describe("watcher", () => {
     expect(mocks.watcher.close).toHaveBeenCalledTimes(1);
   });
 
+  it("escapes session paths and capture errors while retaining raw event and finalization values", async () => {
+    const controlSession = { ...session, id: "session-test\u001b[2J\n", sessionDir: "/repo/session\u009b31m\n" };
+    const fileError = new Error("write failed\u001b[2J\n");
+    const captureError = new Error("capture failed\u009b31m\n");
+    mocks.appendFileEvent.mockRejectedValueOnce(fileError);
+    mocks.markCaptureLoss.mockRejectedValueOnce(captureError);
+    mocks.finalizeSession.mockResolvedValueOnce({ id: controlSession.id, sessionDir: controlSession.sessionDir });
+    mocks.readStopRequest.mockResolvedValue({ sessionId: controlSession.id, requestedAt: "2026-01-01T00:00:01.000Z" });
+    const completion = runWatcher(controlSession, DEFAULT_CONFIG);
+    mocks.watcher.emit("ready");
+    mocks.watcher.emit("all", "change", "src/a\u001b[2J\n.ts");
+
+    await vi.advanceTimersByTimeAsync(500);
+    await completion;
+
+    expect(console.log).toHaveBeenCalledWith(`Agent Black Box session started: ${JSON.stringify(controlSession.id)}`);
+    expect(console.log).toHaveBeenCalledWith(`Agent Black Box session stopped: ${JSON.stringify(controlSession.id)}`);
+    expect(console.log).toHaveBeenCalledWith('Reports written to "/repo/session\\u009b31m\\n"');
+    expect(console.error).toHaveBeenCalledWith(`Failed to record file event: ${JSON.stringify(fileError.message)}`);
+    expect(console.error).toHaveBeenCalledWith('Failed to record capture loss: "capture failed\\u009b31m\\n"');
+    expect(mocks.appendFileEvent).toHaveBeenCalledWith(
+      controlSession,
+      expect.objectContaining({ path: "src/a\u001b[2J\n.ts" })
+    );
+    expect(mocks.finalizeSession).toHaveBeenCalledWith(
+      controlSession,
+      DEFAULT_CONFIG,
+      "stop-request",
+      expect.objectContaining({ failedFileEventWrites: 1 })
+    );
+  });
+
+  it("escapes watcher diagnostics while rejecting with the original error", async () => {
+    const completion = runWatcher(session, DEFAULT_CONFIG);
+    const error = new Error("watch failed\u001b[2J\n");
+    mocks.watcher.emit("error", error);
+
+    await expect(completion).rejects.toBe(error);
+    expect(console.error).toHaveBeenCalledWith(`Watcher error: ${JSON.stringify(error.message)}`);
+    expect(mocks.watcher.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves a plain-value watcher rejection without failing while formatting its diagnostic", async () => {
+    const completion = runWatcher(session, DEFAULT_CONFIG);
+    const rejection = "plain rejection";
+    mocks.watcher.emit("error", rejection);
+
+    await expect(completion).rejects.toBe(rejection);
+    expect(console.error).toHaveBeenCalledWith("Watcher error: undefined");
+    expect(mocks.watcher.close).toHaveBeenCalledTimes(1);
+  });
+
   it("closes the watcher and rejects when chokidar reports an error", async () => {
     const completion = runWatcher(session, DEFAULT_CONFIG);
     const error = new Error("permission denied");
@@ -109,6 +161,41 @@ describe("watcher", () => {
     expect(mocks.watcher.close).toHaveBeenCalledTimes(1);
     expect(console.error).toHaveBeenCalledWith("Watcher error: permission denied");
     expect(mocks.markCaptureLoss).toHaveBeenCalledWith(session, "watcherError");
+  });
+
+  it("waits for an in-flight stop request read before polling again", async () => {
+    let resolvePendingRead: (() => void) | undefined;
+    mocks.readStopRequest.mockReturnValueOnce(
+      new Promise<undefined>((resolve) => {
+        resolvePendingRead = () => resolve(undefined);
+      })
+    );
+    mocks.readStopRequest.mockResolvedValue({ sessionId: session.id, requestedAt: "2026-01-01T00:00:01.000Z" });
+    const completion = runWatcher(session, DEFAULT_CONFIG);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(mocks.readStopRequest).toHaveBeenCalledTimes(1);
+    expect(mocks.finalizeSession).not.toHaveBeenCalled();
+
+    resolvePendingRead?.();
+    await vi.advanceTimersByTimeAsync(500);
+    await completion;
+
+    expect(mocks.readStopRequest).toHaveBeenCalledTimes(2);
+    expect(mocks.finalizeSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("resumes stop polling after a failed read", async () => {
+    mocks.readStopRequest.mockRejectedValueOnce(new Error("temporary read failure"));
+    mocks.readStopRequest.mockResolvedValue({ sessionId: session.id, requestedAt: "2026-01-01T00:00:01.000Z" });
+    const completion = runWatcher(session, DEFAULT_CONFIG);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await completion;
+
+    expect(mocks.readStopRequest).toHaveBeenCalledTimes(2);
+    expect(mocks.finalizeSession).toHaveBeenCalledTimes(1);
+    expect(console.error).toHaveBeenCalledWith("Failed to read stop request: temporary read failure");
   });
 
   it("bounds pending file events during a burst", async () => {

@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Added opt-in working-data budgets and worker limits to streaming session verification, with bounded legacy catalog fallback and explicit budget refusals.
+- Added read-only persisted capture-health diagnostics to status JSON/text and doctor, with bounded inspection and private ownership fields omitted.
+- Added validated named staged CI policies for independent secret, coverage, and metadata-risk gates; existing built-in policies remain unchanged.
+- Serialized finalization/recovery claims, retained failed command-capture evidence, and made stop polling single-flight.
+- Hardened Windows command-interpreter resolution and terminal/rollback rendering; upgraded simple-git and pinned vulnerable transitive dependencies.
+- Expanded regression coverage and performance checks while preserving report formats and default behavior.
+
 ## 0.8.3
 
 - Added `abb sessions verify [session]` (and `verifySessions` in the library) to check stored session reports read-only, with `--json` output and a non-zero exit when a report fails.
