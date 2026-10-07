@@ -2,6 +2,7 @@ import { access, realpath } from "node:fs/promises";
 import path from "node:path";
 import type { AgentBlackBoxConfig, ConfigLoadResult } from "../types.js";
 import { CONFIG_FILE_NAME, CONFIG_SCHEMA_URL, CURRENT_CONFIG_VERSION, DEFAULT_CONFIG } from "./defaults.js";
+import { normalizeAnalysisPolicies } from "./analysisPolicies.js";
 import { pathExists, readTextFileLimited, writeTextFileAtomic } from "../utils/files.js";
 import { isPathInside } from "../utils/paths.js";
 
@@ -174,6 +175,7 @@ function normalizeConfig(parsed: unknown): Omit<ConfigLoadResult, "configPath" |
     "riskPatterns",
     "maxFileSizeKb",
     "retention",
+    "analysisPolicies",
   ]);
   for (const key of Object.keys(parsed)) {
     if (!knownKeys.has(key)) {
@@ -199,6 +201,7 @@ function normalizeConfig(parsed: unknown): Omit<ConfigLoadResult, "configPath" |
     riskPatterns: stringArrayOrDefault(parsed.riskPatterns, DEFAULT_CONFIG.riskPatterns, "riskPatterns", warnings),
     maxFileSizeKb: maxFileSizeOrDefault(parsed.maxFileSizeKb, warnings),
     ...normalizeRetention(parsed.retention, errors),
+    ...normalizeAnalysisPolicies(parsed.analysisPolicies, errors),
   };
 
   return {

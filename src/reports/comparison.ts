@@ -1,6 +1,7 @@
 import type { ChangedFile, RiskFinding } from "../types.js";
 import type { ComparedCommandCount, SessionComparison } from "../session/sessionComparison.js";
 import { escapeMarkdownText, markdownInlineCode, markdownTableCode } from "../utils/markdown.js";
+import { formatTerminalValue } from "../utils/terminal.js";
 
 export function generateSessionComparisonMarkdown(comparison: SessionComparison): string {
   return `# Agent Black Box Session Comparison
@@ -64,7 +65,7 @@ ${formatCommandCounts(comparison.commands.changedCounts)}
 
 function formatFiles(files: ChangedFile[]): string {
   return files.length > 0
-    ? files.map((file) => `- ${file.status}: ${markdownInlineCode(file.path)}`).join("\n")
+    ? files.map((file) => `- ${file.status}: ${markdownInlineCode(formatTerminalValue(file.path))}`).join("\n")
     : "None.";
 }
 
@@ -78,7 +79,7 @@ function formatChangedFiles(files: SessionComparison["files"]["changed"]): strin
     "| --- | --- | --- | ---: | ---: |",
     ...files.map(
       (file) =>
-        `| ${markdownTableCode(file.path)} | ${file.from.status} | ${file.to.status} | ${formatLineStats(file.from)} | ${formatLineStats(file.to)} |`
+        `| ${markdownTableCode(formatTerminalValue(file.path))} | ${file.from.status} | ${file.to.status} | ${formatLineStats(file.from)} | ${formatLineStats(file.to)} |`
     ),
   ].join("\n");
 }
@@ -88,7 +89,7 @@ function formatRisks(risks: RiskFinding[]): string {
     ? risks
         .map(
           (risk) =>
-            `- ${risk.severity.toUpperCase()} - ${markdownInlineCode(risk.path)} - ${escapeMarkdownText(risk.category)}: ${escapeMarkdownText(risk.reason)}`
+            `- ${risk.severity.toUpperCase()} - ${markdownInlineCode(formatTerminalValue(risk.path))} - ${escapeMarkdownText(risk.category)}: ${escapeMarkdownText(risk.reason)}`
         )
         .join("\n")
     : "None.";
@@ -104,7 +105,7 @@ function formatCommandCounts(commands: ComparedCommandCount[]): string {
     "| --- | --- | --- | ---: | ---: | ---: |",
     ...commands.map(
       (command) =>
-        `| ${markdownTableCode(command.command)} | ${markdownTableCode(command.cwd)} | ${formatCommandContext(command)} | ${command.exitCode ?? "unknown"} | ${command.fromCount} | ${command.toCount} |`
+        `| ${markdownTableCode(command.command)} | ${markdownTableCode(formatTerminalValue(command.cwd))} | ${formatCommandContext(command)} | ${command.exitCode ?? "unknown"} | ${command.fromCount} | ${command.toCount} |`
     ),
   ].join("\n");
 }

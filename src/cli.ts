@@ -2,6 +2,8 @@
 import { lstat, open, realpath } from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
+import { Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { Command } from "commander";
 import {
   analyzeChangedFiles,
@@ -64,12 +66,19 @@ import {
   retentionDateForDays,
 } from "./session/sessionRetention.js";
 import { filterSessionCatalog } from "./session/sessionSearch.js";
-import { renderSessionVerification, verifySessions } from "./session/sessionVerification.js";
+import {
+  getSessionVerificationLimits,
+  renderSessionVerification,
+  verifySessions,
+  type SessionVerificationOptions,
+} from "./session/sessionVerification.js";
+import { inspectSessionCaptureHealth, renderSessionCaptureHealth } from "./session/captureHealth.js";
 import { runWatcher } from "./watcher/watcher.js";
 import { pathExists } from "./utils/files.js";
 import { inspectTextFile } from "./utils/fileInspection.js";
 import { mapWithConcurrency } from "./utils/concurrency.js";
 import { resolveRepoPath } from "./utils/paths.js";
+import { escapeTerminalControls, formatTerminalValue } from "./utils/terminal.js";
 import type { SessionReport } from "./types.js";
 
 const program = new Command();
@@ -89,7 +98,7 @@ program
   .action(async () => {
     const root = (await getRepositoryRoot(process.cwd())) ?? process.cwd();
     const configPath = await createDefaultConfig(root);
-    console.log(`Created ${await displayPathFromCurrentDirectory(configPath)}`);
+    console.log(`Created ${formatTerminalValue(await displayPathFromCurrentDirectory(configPath))}`);
   });
 
 const configCommand = program.command("config").description("Validate or migrate Agent Black Box config.");
@@ -111,7 +120,7 @@ configCommand
     const root = (await getRepositoryRoot(process.cwd())) ?? process.cwd();
     const result = await migrateConfigFile(root, getConfigLoadOptions());
     console.log(renderConfigLoadResult(result));
-    console.log(`Migrated ${await displayPathFromCurrentDirectory(result.configPath)}`);
+    console.log(`Migrated ${formatTerminalValue(await displayPathFromCurrentDirectory(result.configPath))}`);
   });
 
 program
@@ -144,7 +153,7 @@ program
       await writeStopRequest(repoRoot, config, active.id);
       const completed = await waitForSessionToFinalize(repoRoot, config, active.sessionDir);
       if (completed) {
-        console.log(`Session stopped. Reports written to ${active.sessionDir}`);
+        console.log(`Session stopped. Reports written to ${formatTerminalValue(active.sessionDir)}`);
       } else {
         console.log("Stop requested. The foreground watcher has not finalized yet.");
       }
@@ -153,7 +162,7 @@ program
 
     const recovery = await recoverActiveSession(repoRoot, config);
     if (recovery.report) {
-      console.log(`Recovered session. Reports written to ${recovery.report.sessionDir}`);
+      console.log(`Recovered session. Reports written to ${formatTerminalValue(recovery.report.sessionDir)}`);
     } else {
       console.log("Completed session state cleanup.");
     }
@@ -170,7 +179,7 @@ program
     if (recovery.state === "no-active-session") {
       console.log("No session recovery is needed.");
     } else if (recovery.report) {
-      console.log(`Recovered session. Reports written to ${recovery.report.sessionDir}`);
+      console.log(`Recovered session. Reports written to ${formatTerminalValue(recovery.report.sessionDir)}`);
     } else {
       console.log("Completed session state cleanup.");
     }
@@ -179,21 +188,59 @@ program
 program
   .command("status")
   .description("Show active session status.")
-  .action(async () => {
+  .option("--capture-health", "inspect persisted capture-loss and command-completion markers")
+  .option("--json", "print structured session status and capture health")
+  .action(async (options: { captureHealth?: boolean; json?: boolean }) => {
     const repoRoot = await requireRepositoryRoot(process.cwd());
     const config = await loadRuntimeConfig(repoRoot);
     const recovery = await inspectSessionRecoveryState(repoRoot, config);
+    const captureHealth =
+      (options.captureHealth || options.json) &&
+      recovery.active &&
+      ["active", "recoverable", "already-complete"].includes(recovery.status)
+        ? await inspectSessionCaptureHealth(recovery.active)
+        : null;
+    if (options.json) {
+      console.log(
+        escapeTerminalControls(
+          JSON.stringify(
+            {
+              state: recovery.status,
+              message: recovery.message,
+              session: recovery.active
+                ? {
+                    id: recovery.active.id,
+                    startedAt: recovery.active.startedAt,
+                    sessionDir: recovery.active.sessionDir,
+                  }
+                : null,
+              captureHealth,
+            },
+            null,
+            2
+          )
+        )
+      );
+      return;
+    }
     if (!recovery.active) {
       console.log(`State: ${recovery.status}`);
-      console.log(recovery.message);
+      console.log(formatTerminalValue(recovery.message));
       return;
     }
 
     console.log(`Session: ${recovery.active.id}`);
     console.log(`State: ${recovery.status}`);
     console.log(`Started: ${recovery.active.startedAt}`);
-    console.log(`Reports directory: ${recovery.active.sessionDir}`);
-    console.log(recovery.message);
+    console.log(`Reports directory: ${formatTerminalValue(recovery.active.sessionDir)}`);
+    console.log(formatTerminalValue(recovery.message));
+    if (options.captureHealth) {
+      console.log(
+        captureHealth
+          ? renderSessionCaptureHealth(captureHealth)
+          : "Capture health: unavailable for this session state."
+      );
+    }
   });
 
 program
@@ -207,14 +254,14 @@ program
       const recovery = await recoverActiveSession(repoRoot, config);
       console.log(
         recovery.report
-          ? `Recovered session. Reports written to ${recovery.report.sessionDir}`
+          ? `Recovered session. Reports written to ${formatTerminalValue(recovery.report.sessionDir)}`
           : recovery.state === "no-active-session"
             ? "No session recovery is needed."
             : "Completed session state cleanup."
       );
     }
     const report = await runDoctor(process.cwd(), getConfigLoadOptions());
-    console.log(renderDoctorReport(report));
+    console.log(escapeTerminalControls(renderDoctorReport(report)));
     process.exitCode = report.ok ? 0 : 1;
   });
 
@@ -225,7 +272,7 @@ program
   .option("--staged", "analyze staged Git blobs instead of working-tree contents")
   .option("--baseline <ref>", "with --staged, report new content findings relative to a Git commit")
   .option("--fail-on <severity>", "exit with code 1 at or above low, medium, or high")
-  .option("--policy <profile>", "CI policy with --staged --baseline: new-secrets or complete-review")
+  .option("--policy <profile>", "built-in or configured CI policy; requires --staged --baseline")
   .action(
     async (options: { format: string; staged?: boolean; baseline?: string; failOn?: string; policy?: string }) => {
       if (options.baseline && !options.staged) {
@@ -238,7 +285,7 @@ program
       const config = await loadRuntimeConfig(repoRoot);
       const format = parseAnalyzeFormat(options.format);
       const failOn = parseRiskSeverity(options.failOn);
-      const policy = parseAnalysisPolicyProfile(options.policy);
+      const policy = parseAnalysisPolicyProfile(options.policy, config.analysisPolicies);
       const files = options.staged
         ? await collectStagedAnalysisInputFiles(repoRoot, config)
         : await collectAnalysisInputFiles(
@@ -261,7 +308,10 @@ program
       }
 
       if (policy) {
-        result = { ...result, policyEvaluation: evaluateAnalysisPolicy(result, files, policy) };
+        result = {
+          ...result,
+          policyEvaluation: evaluateAnalysisPolicy(result, files, policy, config.analysisPolicies),
+        };
       }
 
       console.log(renderAnalysis(result, format));
@@ -353,7 +403,7 @@ program
       return;
     }
 
-    console.log(generateRisksMarkdown(report, riskFilter));
+    console.log(escapeTerminalControls(generateRisksMarkdown(report, riskFilter)));
   });
 
 program
@@ -425,12 +475,12 @@ program
       });
 
       if (!options.output) {
-        console.log(content);
+        console.log(options.format === "json" ? content : escapeTerminalControls(content));
         return;
       }
 
       const exportPath = await writeSessionExport(options.output, content, { force: options.force });
-      console.log(`Export written to ${exportPath}`);
+      console.log(`Export written to ${formatTerminalValue(exportPath)}`);
     }
   );
 
@@ -542,7 +592,7 @@ sessionsCommand
     }
     const keep = parseSessionListLimit(options.keep, "--keep") ?? config.retention?.keep ?? 1;
     const plan = planSessionRetention(await listSessionCatalog(repoRoot, config), before, keep);
-    console.log(renderSessionRetentionPlan(plan));
+    console.log(escapeTerminalControls(renderSessionRetentionPlan(plan)));
     if (!options.apply || plan.sessions.length === 0) {
       return;
     }
@@ -584,7 +634,7 @@ sessionsCommand
     }
     const keep = parseSessionListLimit(options.keep, "--keep") ?? config.retention?.keep ?? 1;
     const plan = planSessionRetention(await listSessionCatalog(repoRoot, config), before, keep);
-    console.log(renderSessionArchivePlan(plan, archiveDir));
+    console.log(escapeTerminalControls(renderSessionArchivePlan(plan, archiveDir)));
     if (!options.apply || plan.sessions.length === 0) {
       return;
     }
@@ -614,7 +664,9 @@ sessionsCommand
   .action(async (session: string, options: { json?: boolean }) => {
     const repoRoot = await requireRepositoryRoot(process.cwd());
     const report = await readSelectedSessionReport(repoRoot, session);
-    console.log(options.json ? JSON.stringify(report, null, 2) : generateSummaryMarkdown(report));
+    console.log(
+      options.json ? JSON.stringify(report, null, 2) : escapeTerminalControls(generateSummaryMarkdown(report))
+    );
   });
 
 sessionsCommand
@@ -630,7 +682,11 @@ sessionsCommand
     const fromReport = await readCatalogSessionReport(resolveSessionEntry(entries, from));
     const toReport = await readCatalogSessionReport(resolveSessionEntry(entries, to));
     const comparison = buildSessionComparison(fromReport, toReport);
-    console.log(options.json ? JSON.stringify(comparison, null, 2) : generateSessionComparisonMarkdown(comparison));
+    console.log(
+      options.json
+        ? JSON.stringify(comparison, null, 2)
+        : escapeTerminalControls(generateSessionComparisonMarkdown(comparison))
+    );
   });
 
 sessionsCommand
@@ -638,17 +694,30 @@ sessionsCommand
   .description("Check the integrity of stored session reports without modifying them.")
   .argument("[session]", "session ID, unique prefix, or latest; all sessions when omitted")
   .option("--json", "print structured JSON")
-  .action(async (session: string | undefined, options: { json?: boolean }) => {
-    const repoRoot = await requireRepositoryRoot(process.cwd());
-    const config = await loadRuntimeConfig(repoRoot);
-    const entries = await listSessionCatalog(repoRoot, config);
-    const selected = session === undefined ? entries : [resolveSessionEntry(entries, session)];
-    const summary = await verifySessions(selected);
-    console.log(options.json ? JSON.stringify(summary, null, 2) : renderSessionVerification(summary).trimEnd());
-    if (summary.failed > 0) {
-      process.exitCode = 1;
+  .option("--memory-budget-mb <mb>", "working-data byte budget in MiB (8–4096); excludes V8 object overhead")
+  .option("--concurrency <count>", "maximum parallel verifications (1–16, default 4); reduced by the memory budget")
+  .action(
+    async (session: string | undefined, options: { json?: boolean; memoryBudgetMb?: string; concurrency?: string }) => {
+      const verificationOptions: SessionVerificationOptions = {
+        memoryBudgetMb: parseSessionListLimit(options.memoryBudgetMb, "--memory-budget-mb"),
+        concurrency: parseSessionListLimit(options.concurrency, "--concurrency"),
+      };
+      const limits = getSessionVerificationLimits(verificationOptions);
+      const repoRoot = await requireRepositoryRoot(process.cwd());
+      const config = await loadRuntimeConfig(repoRoot);
+      const entries = await listSessionCatalog(repoRoot, config, { maxMaterializedBytes: limits.maxMaterializedBytes });
+      const selected = session === undefined ? entries : [resolveSessionEntry(entries, session)];
+      const summary = await verifySessions(selected, verificationOptions);
+      console.log(
+        options.json
+          ? JSON.stringify(summary, null, 2)
+          : escapeTerminalControls(renderSessionVerification(summary).trimEnd())
+      );
+      if (summary.failed > 0) {
+        process.exitCode = 1;
+      }
     }
-  });
+  );
 
 async function printSessionReportFile(fileName: string, selector?: string): Promise<void> {
   const repoRoot = await requireRepositoryRoot(process.cwd());
@@ -676,12 +745,19 @@ async function printSessionReportFile(fileName: string, selector?: string): Prom
     ) {
       throw new Error(`${fileName} changed before it could be opened.`);
     }
-    await new Promise<void>((resolve, reject) => {
-      const source = handle.createReadStream({ autoClose: false });
-      source.once("error", reject);
-      source.once("end", resolve);
-      source.pipe(process.stdout, { end: false });
-    });
+    const source = handle.createReadStream({ autoClose: false });
+    if (fileName === "session.json") {
+      await pipeline(source, process.stdout, { end: false });
+    } else {
+      source.setEncoding("utf8");
+      const terminalSafe = new Transform({
+        decodeStrings: false,
+        transform(chunk: string, _encoding, callback) {
+          callback(null, escapeTerminalControls(chunk));
+        },
+      });
+      await pipeline(source, terminalSafe, process.stdout, { end: false });
+    }
   } finally {
     await handle.close();
   }
@@ -727,11 +803,11 @@ async function loadRuntimeConfig(repoRoot: string) {
 function renderConfigLoadResult(result: Awaited<ReturnType<typeof loadConfigWithMeta>>): string {
   const lines = ["Agent Black Box Config", ""];
 
-  lines.push(`Path: ${result.configPath}`);
+  lines.push(`Path: ${formatTerminalValue(result.configPath)}`);
   lines.push(`Exists: ${result.exists ? "yes" : "no"}`);
   lines.push(`Config version: ${result.config.configVersion}`);
-  lines.push(`Schema: ${result.config.$schema ?? "none"}`);
-  lines.push(`Session directory: ${result.config.sessionDir}`);
+  lines.push(`Schema: ${formatTerminalValue(result.config.$schema ?? "none")}`);
+  lines.push(`Session directory: ${formatTerminalValue(result.config.sessionDir)}`);
 
   if (result.migrated) {
     lines.push("Migration: legacy config can be migrated to the current schema.");
@@ -739,12 +815,12 @@ function renderConfigLoadResult(result: Awaited<ReturnType<typeof loadConfigWith
 
   if (result.warnings.length > 0) {
     lines.push("");
-    lines.push(formatConfigProblems("Warnings", result.warnings));
+    lines.push(formatConfigProblems("Warnings", result.warnings.map(formatTerminalValue)));
   }
 
   if (result.errors.length > 0) {
     lines.push("");
-    lines.push(formatConfigProblems("Errors", result.errors));
+    lines.push(formatConfigProblems("Errors", result.errors.map(formatTerminalValue)));
     lines.push("");
     lines.push("Result: invalid");
   } else {
@@ -844,7 +920,11 @@ function renderAnalysis(result: WatcherlessAnalysisResult, format: AnalyzeFormat
     lines.push(`Content scanned: ${result.coverage.scannedTextFiles} ${result.coverage.source} file(s).`);
     lines.push(`Content skipped: ${result.coverage.skipped.length} file(s).`);
     if (result.coverage.skipped.length > 0) {
-      lines.push(...result.coverage.skipped.slice(0, 20).map((file) => `- ${file.path}: ${file.reason}`));
+      lines.push(
+        ...result.coverage.skipped
+          .slice(0, 20)
+          .map((file) => `- ${formatTerminalValue(file.path)}: ${formatTerminalValue(file.reason)}`)
+      );
       if (result.coverage.skipped.length > 20) {
         lines.push(`- ${result.coverage.skipped.length - 20} additional skipped file(s) omitted from text output.`);
       }
@@ -857,21 +937,31 @@ function renderAnalysis(result: WatcherlessAnalysisResult, format: AnalyzeFormat
     lines.push(`Baseline text scanned: ${comparison.scannedTextFiles} file(s).`);
     lines.push(`Absent at baseline: ${comparison.absentFiles} file(s).`);
     lines.push(`Baseline content skipped: ${comparison.skipped.length} file(s).`);
-    lines.push(...comparison.skipped.slice(0, 20).map((file) => `- ${file.path}: ${file.reason}`));
+    lines.push(
+      ...comparison.skipped
+        .slice(0, 20)
+        .map((file) => `- ${formatTerminalValue(file.path)}: ${formatTerminalValue(file.reason)}`)
+    );
     lines.push(`Baseline rename sources: ${comparison.renameSources.length} file(s).`);
     lines.push(
       ...comparison.renameSources
         .slice(0, 20)
-        .map((source) => `- ${source.path} <- ${source.sourcePath}: ${source.suppressedExistingSecrets} suppressed.`)
+        .map(
+          (source) =>
+            `- ${formatTerminalValue(source.path)} <- ${formatTerminalValue(source.sourcePath)}: ${source.suppressedExistingSecrets} suppressed.`
+        )
     );
   }
   if (result.policyEvaluation) {
     const evaluation = result.policyEvaluation;
-    lines.push(`Policy ${evaluation.profile}: ${evaluation.failed ? "failed" : "passed"}.`);
+    lines.push(`Policy ${formatTerminalValue(evaluation.profile)}: ${evaluation.failed ? "failed" : "passed"}.`);
     lines.push(`New secret findings: ${evaluation.newSecretCount}.`);
-    if (evaluation.profile === "complete-review") {
+    if (evaluation.profile === "complete-review" || evaluation.severityRiskCount !== undefined) {
       lines.push(`Skipped staged content: ${evaluation.skippedStagedFiles} file(s).`);
       lines.push(`Skipped baseline content: ${evaluation.skippedBaselineFiles} file(s).`);
+    }
+    if (evaluation.severityRiskCount !== undefined) {
+      lines.push(`Risk findings matching the policy threshold/categories: ${evaluation.severityRiskCount}.`);
     }
   }
   if (result.findings.length > 0) {
@@ -883,7 +973,7 @@ function renderAnalysis(result: WatcherlessAnalysisResult, format: AnalyzeFormat
 
 function renderAnalysisFinding(finding: AnalysisFinding): string {
   const line = finding.line === undefined ? "" : `:${finding.line}`;
-  return `[${finding.severity}] ${finding.path}${line} — ${finding.category}: ${finding.reason}`;
+  return `[${finding.severity}] ${formatTerminalValue(finding.path)}${line} — ${formatTerminalValue(finding.category)}: ${formatTerminalValue(finding.reason)}`;
 }
 
 function toSarif(result: WatcherlessAnalysisResult): Record<string, unknown> {
@@ -937,6 +1027,6 @@ function meetsSeverityThreshold(
 }
 
 program.parseAsync(process.argv).catch((error: unknown) => {
-  console.error((error as Error).message);
+  console.error(escapeTerminalControls(String((error as Error).message)));
   process.exitCode = 1;
 });

@@ -9,7 +9,8 @@ import { collectGitSnapshot } from "../git/git.js";
 import { indexFileChangeEvidence } from "../session/changeEvidence.js";
 import { mapWithConcurrency } from "../utils/concurrency.js";
 import { readJsonFileLimited, writeJsonFile } from "../utils/files.js";
-import { isPathInside, resolveRepoPath, shellQuotePath } from "../utils/paths.js";
+import { isPathInside, resolveRepoPath } from "../utils/paths.js";
+import { formatTerminalValue, renderPosixCommand } from "../utils/terminal.js";
 
 export interface RollbackPlan {
   requestedFiles: string[];
@@ -285,13 +286,16 @@ export function renderRollbackPlan(plan: RollbackPlan): string {
   if (plan.restorableFiles.length > 0) {
     lines.push("Files that can be restored after confirmation:");
     for (const file of plan.restorableFiles) {
-      lines.push(`- ${file.status}: ${file.path}`);
+      lines.push(`- ${file.status}: ${formatTerminalValue(file.path)}`);
     }
     lines.push("");
     lines.push("Command preview:");
     lines.push("```sh");
     lines.push(
-      `git restore --source=HEAD --staged --worktree -- ${plan.restorableFiles.map((file) => shellQuotePath(toLiteralGitPathspec(file.path))).join(" ")}`
+      renderPosixCommand(
+        "git restore --source=HEAD --staged --worktree --",
+        plan.restorableFiles.map((file) => toLiteralGitPathspec(file.path))
+      )
     );
     lines.push("```");
   } else {
@@ -302,7 +306,7 @@ export function renderRollbackPlan(plan: RollbackPlan): string {
     lines.push("");
     lines.push("Skipped files:");
     for (const file of plan.skippedFiles) {
-      lines.push(`- ${file.path}: ${file.reason}`);
+      lines.push(`- ${formatTerminalValue(file.path)}: ${formatTerminalValue(file.reason)}`);
     }
   }
 

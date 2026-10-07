@@ -3,6 +3,8 @@ import { copyFile, mkdir, readFile, readdir, symlink, writeFile } from "node:fs/
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONFIG } from "../src/config/defaults.js";
+import * as sessionManager from "../src/session/sessionManager.js";
+import * as files from "../src/utils/files.js";
 import {
   buildWindowsCommandLine,
   formatCommand,
@@ -19,10 +21,89 @@ import {
   getSessionLockPath,
   readCommandEvents,
   finalizeSession,
+  recoverActiveSession,
 } from "../src/session/sessionManager.js";
 import { createTempDir, initGitRepo, removeTempDir } from "./testUtils.js";
 
 describe("command recorder", () => {
+  it.each(["succeeds", "fails"])(
+    "preserves marker cleanup errors when completion-marker rename %s",
+    async (outcome) => {
+      const dir = await createTempDir();
+      const removeFile = files.removeFileIfExists;
+      const remove = vi.spyOn(files, "removeFileIfExists");
+      const cleanupError = new Error("inflight marker unlink failed");
+      try {
+        initGitRepo(dir);
+        const session = await createSession(dir, DEFAULT_CONFIG);
+        remove.mockImplementation(async (filePath) => {
+          if (path.basename(filePath).startsWith("command-inflight-")) {
+            if (outcome === "fails") {
+              await mkdir(
+                path.join(
+                  path.dirname(filePath),
+                  path.basename(filePath).replace("command-inflight-", "command-completed-")
+                )
+              );
+            }
+            throw cleanupError;
+          }
+          return removeFile(filePath);
+        });
+
+        const result = await recordAndRunCommand([process.execPath, "--version"], dir).catch((error: unknown) => error);
+        const markers = await readdir(session.sessionDir);
+        expect(await readCommandEvents(session.sessionDir)).toHaveLength(1);
+        expect(markers.filter((name) => name.startsWith("command-failed-"))).toEqual([]);
+        if (outcome === "succeeds") {
+          expect(result).toBe(cleanupError);
+          expect(markers.filter((name) => name.startsWith("command-inflight-"))).toEqual([]);
+          expect(markers.filter((name) => name.startsWith("command-completed-"))).toHaveLength(1);
+          const report = await finalizeSession(session, DEFAULT_CONFIG, "test");
+          expect(report.commands).toHaveLength(1);
+          expect(report.integrity.warnings).toEqual([]);
+        } else {
+          expect(result).toBeInstanceOf(AggregateError);
+          const errors = (result as AggregateError).errors;
+          expect(errors).toHaveLength(2);
+          expect(errors[0]).toBe(cleanupError);
+          expect(errors[1]).toBeInstanceOf(Error);
+          expect(markers.filter((name) => name.startsWith("command-inflight-"))).toHaveLength(1);
+        }
+      } finally {
+        remove.mockRestore();
+        await removeTempDir(dir);
+      }
+    },
+    15_000
+  );
+
+  it("preserves failed capture evidence without blocking finalization in a live wrapper process", async () => {
+    const dir = await createTempDir();
+    const append = vi.spyOn(sessionManager, "appendCommandEvent");
+    try {
+      initGitRepo(dir);
+      const session = await createSession(dir, DEFAULT_CONFIG);
+      append.mockRejectedValueOnce(new Error("command event write failed"));
+      await expect(recordAndRunCommand([process.execPath, "--version"], dir)).rejects.toThrow(
+        "command event write failed"
+      );
+      const markers = await readdir(session.sessionDir);
+      expect(markers.filter((name) => name.startsWith("command-inflight-"))).toEqual([]);
+      expect(markers.filter((name) => name.startsWith("command-failed-"))).toHaveLength(1);
+
+      const lock = JSON.parse(await readFile(getSessionLockPath(dir, DEFAULT_CONFIG), "utf8"));
+      await writeFile(getActiveSessionPath(dir, DEFAULT_CONFIG), JSON.stringify({ ...session, pid: 999_999 }));
+      await writeFile(getSessionLockPath(dir, DEFAULT_CONFIG), JSON.stringify({ ...lock, pid: 999_999 }));
+      const recovered = await recoverActiveSession(dir, DEFAULT_CONFIG);
+      expect(recovered.report?.commands).toEqual([]);
+      expect(recovered.report?.integrity.warnings).toContain("Failed to persist 1 wrapped command completion(s).");
+    } finally {
+      append.mockRestore();
+      await removeTempDir(dir);
+    }
+  }, 15_000);
+
   it("redacts the whole header value even when it contains an equals sign", () => {
     expect(
       redactCommandParts([
@@ -230,6 +311,34 @@ describe("command recorder", () => {
         expect(await recordAndRunCommand([scriptPath, "%USERNAME%"], dir)).toBe(1);
         expect(JSON.parse(await readFile(outputPath, "utf8"))).toEqual(args);
       } finally {
+        await removeTempDir(dir);
+      }
+    },
+    15_000
+  );
+
+  it.skipIf(process.platform !== "win32")(
+    "does not execute a repository cmd.exe when ComSpec is missing or a bare name",
+    async () => {
+      const dir = await createTempDir();
+      vi.stubEnv("NoDefaultCurrentDirectoryInExePath", undefined);
+      try {
+        initGitRepo(dir);
+        const scriptPath = path.join(dir, "trusted-script.cmd");
+        await writeFile(scriptPath, "@echo off\r\nexit /b 0\r\n", "utf8");
+        // Node rejects cmd.exe's /d option, so a zero exit proves the trusted interpreter ran.
+        await copyFile(process.execPath, path.join(dir, "cmd.exe"));
+        await createSession(dir, DEFAULT_CONFIG);
+
+        for (const interpreter of [undefined, "cmd.exe"]) {
+          vi.stubEnv("ComSpec", interpreter);
+          expect(await recordAndRunCommand([scriptPath], dir)).toBe(0);
+        }
+
+        vi.stubEnv("ComSpec", ".\\cmd.exe");
+        expect(await recordAndRunCommand([scriptPath], dir)).toBe(1);
+      } finally {
+        vi.unstubAllEnvs();
         await removeTempDir(dir);
       }
     },

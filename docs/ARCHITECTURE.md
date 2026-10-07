@@ -25,13 +25,15 @@ A local TypeScript CLI for reviewing Git state, file events and explicitly wrapp
 
 Watcherless analysis reads worktree files; staged analysis reads index blobs. Fixed-commit baselines suppress matching secret-like lines by occurrence count and use Git-established rename sources. `new-secrets`/`complete-review` define CI criteria and required coverage. Recorded/watcherless heuristics remain separate; see [Usage](USAGE.md).
 
+Optional named `analysisPolicies` are validated and selected explicitly. Metadata-risk severity/category gates complement independent secret and coverage gates; evaluation retains all findings. Existing built-in policy behavior and result shapes are preserved.
+
 ## Safety boundaries
 
 Runtime requires no external API, telemetry or private agent integration. Detectors redact supported patterns and emit heuristic signals. Commands execute caller-selected executables, without a sandbox.
 
 Storage stays physically inside the repository unless explicitly allowed for trusted local external paths; UNC/network storage is blocked. Inspection rejects linked files/external ancestors; command cwd stays inside the physical repository. Same-user path races remain possible.
 
-State/config/metadata reads are bounded and validated. Stop/recovery require matching state/lock ownership; corrupt/ambiguous state is preserved. Recovery verifies completed reports before clearing stale state. Initialization publishes a fully written file exclusively through a hard link. State/reports and forced exports use atomic rename; ordinary exports use exclusive creation. See [Reports](REPORTS.md) for verification levels.
+State/config/metadata reads are bounded and validated. Stop/recovery require matching state/lock ownership; corrupt/ambiguous state is preserved. Exclusive per-session generation claims serialize finalization and recovery, with the primary lock held through cleanup. Dead claims remain immutable; incomplete or unreadable claims require manual inspection. Failed command writes retain durable markers so recovery reports capture loss without waiting for the wrapper process. Recovery verifies completed reports before clearing stale state. Initialization publishes a fully written file exclusively through a hard link. State/reports and forced exports use atomic rename; ordinary exports use exclusive creation. See [Reports](REPORTS.md) for verification levels.
 
 Rollback defaults to guidance. CLI apply requires the latest session, eligible tracked files and typed confirmation; pre-existing changes are excluded. HEAD/index/file identity is rechecked before restore to HEAD. Library caller boundaries are in [Security](../SECURITY.md).
 
@@ -41,6 +43,10 @@ Watching excludes heavy/generated/storage directories and bounds its queue. NDJS
 
 Inspection classifies text/binary/large/missing/non-regular paths. CLI worktree, staged and baseline reads cap bytes at the configured limit or 256 KiB, whichever is smaller. The public analyzer defaults to 262,144 JavaScript string characters; callers can configure that limit. Untracked estimates read small text files. Git/recorded-secret inspection uses deterministic concurrency capped at eight workers and available CPUs.
 
-Reports retain full JSON under a 256 MiB policy; see [Reports](REPORTS.md) for replay/index limits. Pruning materializes bounded records and uses more memory than listing/streaming. Retention defaults do not schedule background work.
+Reports retain full JSON under a 256 MiB policy; see [Reports](REPORTS.md) for replay/index limits. Replay verification streams canonical record digests without retaining log arrays. Full reads, finalization and pruning still materialize records. Catalog metadata uses batches of 32; report fallback parsing runs one report at a time to avoid simultaneous large allocations. Retention defaults do not schedule background work.
+
+Verification optionally budgets encoded JSON inputs and stream buffers, reducing worker count and metadata batches before inspection. Budgeted catalog fallback derives metadata from the compact core and streamed log digests. Inputs exceeding their quota fail before parsing; inability to obtain catalog timestamps prevents an ambiguous `latest` selection. The quota excludes decoded strings, parsed objects, retained catalog/results, and V8 overhead; it is not an RSS cap.
+
+Capture-health inspection walks at most 10,000 directory entries and checks durable marker metadata without reading logs or mutating storage. Unknown/linked/malformed markers prevent a healthy conclusion; persisted failures remain degraded even during an incomplete inspection. Doctor and opt-in status diagnostics expose this bounded evidence, not live watcher-buffer health.
 
 Durations use a monotonic clock; index fingerprints store metadata/blob identities. `pnpm perf` measures regression budgets, not peak-memory or cross-platform guarantees.

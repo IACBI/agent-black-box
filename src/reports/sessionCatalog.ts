@@ -1,4 +1,5 @@
 import type { SessionCatalogEntry } from "../session/sessionCatalog.js";
+import { formatTerminalValue } from "../utils/terminal.js";
 
 export function renderSessionCatalog(
   entries: SessionCatalogEntry[],
@@ -19,8 +20,8 @@ export function renderSessionCatalog(
             `commands ${entry.commandCount ?? 0}`,
             `risk ${entry.riskScore ?? 0}/100 (${entry.maxRiskSeverity ?? "none"})`,
           ].join(" | ")
-        : (entry.warning ?? `started ${entry.startedAt ?? "unknown"}`);
-    lines.push(`- ${entry.id} [${entry.state}${latest}] | ${details}`);
+        : formatTerminalValue(entry.warning ?? `started ${entry.startedAt ?? "unknown"}`);
+    lines.push(`- ${formatTerminalValue(entry.id)} [${entry.state}${latest}] | ${details}`);
   }
 
   return `${lines.join("\n")}\n`;

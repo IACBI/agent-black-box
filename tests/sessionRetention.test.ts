@@ -20,6 +20,23 @@ import { pathExists } from "../src/utils/files.js";
 import { createTempDir, removeTempDir } from "./testUtils.js";
 
 describe("session retention", () => {
+  it("keeps control-bearing preview fields visible without adding misleading lines", () => {
+    const plan = {
+      before: "2026-01-04",
+      keep: 1,
+      sessions: [{ id: "session-old\nforged", startedAt: "2026-01-01T00:00:00.000Z" }],
+    };
+    const preview = renderSessionRetentionPlan(plan);
+    const archive = renderSessionArchivePlan(plan, "archive/\u001b[2J\ncopy");
+
+    expect(preview).toContain('"session-old\\nforged"');
+    expect(preview).not.toContain("\nforged");
+    expect(archive).toContain('Archive destination: "archive/\\u001b[2J\\ncopy"');
+    expect(archive).not.toContain("\u001b");
+    expect(archive).not.toContain("\ncopy");
+    expect(plan.sessions[0]?.id).toBe("session-old\nforged");
+  });
+
   it("only selects older complete sessions and leaves preview read-only", async () => {
     const repo = await createTempDir("abb-retention-");
     try {

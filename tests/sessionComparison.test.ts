@@ -64,6 +64,29 @@ describe("session comparison", () => {
     const report = makeReport("session-same", "2026-01-01T00:00:00.000Z", [], [], [], undefined, undefined);
     expect(() => buildSessionComparison(report, report)).toThrow("two different sessions");
   });
+
+  it("renders distinct escaped filenames and working directories without changing comparison values", () => {
+    const paths = ["src/a\n.ts", "src/a\\n.ts"];
+    const from = makeReport("session-from", "2026-01-01T00:00:00.000Z", [], [], [], undefined, undefined);
+    const to = makeReport(
+      "session-to",
+      "2026-01-02T00:00:00.000Z",
+      paths.map((path) => ({ path, status: "modified" })),
+      paths.map((path) => ({ path, severity: "low", category: "test", score: 1, reason: "test" })),
+      paths.map((cwd) => ({ ...command("test", 0), cwd })),
+      undefined,
+      undefined
+    );
+    const comparison = buildSessionComparison(from, to);
+    const before = JSON.stringify(comparison);
+    const markdown = generateSessionComparisonMarkdown(comparison);
+    for (const path of paths) {
+      expect(markdown).toContain(JSON.stringify(path));
+    }
+    expect(comparison.files.onlyInTo.map((file) => file.path)).toEqual(paths);
+    expect(comparison.commands.changedCounts.map((entry) => entry.cwd)).toEqual(paths);
+    expect(JSON.stringify(comparison)).toBe(before);
+  });
 });
 
 function makeReport(

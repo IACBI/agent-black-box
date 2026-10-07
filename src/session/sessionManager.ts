@@ -29,6 +29,8 @@ const EVENTS_FILE = "events.ndjson";
 const COMMANDS_FILE = "commands.ndjson";
 const COMMAND_CLOSING_FILE = "commands-closing";
 const INFLIGHT_COMMAND_PATTERN = /^command-inflight-(\d+)-[0-9a-f-]+$/;
+const FAILED_COMMAND_PATTERN = /^command-failed-(\d+)-[0-9a-f-]+$/;
+const FINALIZATION_CLAIM_PATTERN = /^finalization-claim-([1-9]\d*)\.json$/;
 const CAPTURE_LOSS_MARKERS = {
   overflow: "capture-loss-overflow",
   writeFailure: "capture-loss-write-failure",
@@ -270,7 +272,7 @@ export async function recoverActiveSession(
     throw new Error("Recovery state did not include an active session.");
   }
   if (recovery.status === "already-complete") {
-    await clearSessionState(active, config);
+    await withFinalizationOwnership(active, config, () => clearSessionState(active, config));
     return { state: recovery.status };
   }
 
@@ -366,6 +368,17 @@ export async function finalizeSession(
     failedFileEventWrites: 0,
   }
 ): Promise<SessionReport> {
+  return withFinalizationOwnership(active, config, () =>
+    finalizeOwnedSession(active, config, finalizedBy, captureLoss)
+  );
+}
+
+async function finalizeOwnedSession(
+  active: ActiveSession,
+  config: AgentBlackBoxConfig,
+  finalizedBy: string,
+  captureLoss: { droppedFileEvents: number; failedFileEventWrites: number }
+): Promise<SessionReport> {
   await markCommandsClosing(active.sessionDir);
   const commandWarnings = await waitForInFlightCommands(active.sessionDir);
   const captureLossMarkers = await Promise.all(
@@ -434,9 +447,7 @@ export async function finalizeSession(
     report.integrity.warnings.push("Rollback safety snapshot could not be saved; automatic restore is unavailable.");
   }
   await writeReports(report);
-  await removeFileIfExists(getActiveSessionPath(active.repoRoot, config));
-  await removeFileIfExists(getStopRequestPath(active.repoRoot, config));
-  await releaseSessionLock(active.repoRoot, config, active);
+  await clearSessionState(active, config);
 
   return report;
 }
@@ -466,15 +477,20 @@ async function fileExistsStrict(filePath: string): Promise<boolean> {
 
 async function waitForInFlightCommands(sessionDir: string): Promise<string[]> {
   while (true) {
-    const markerNames = (await readdir(sessionDir)).filter((name) => INFLIGHT_COMMAND_PATTERN.test(name));
+    const names = await readdir(sessionDir);
+    const markerNames = names.filter((name) => INFLIGHT_COMMAND_PATTERN.test(name));
     const liveMarkers = markerNames.filter((name) => {
       const pid = Number(INFLIGHT_COMMAND_PATTERN.exec(name)?.[1]);
       return isProcessRunning(pid);
     });
     if (liveMarkers.length === 0) {
-      return markerNames.length > 0
-        ? [`${markerNames.length} wrapped command(s) ended before their completion could be recorded.`]
-        : [];
+      const failedCount = names.filter((name) => FAILED_COMMAND_PATTERN.test(name)).length;
+      return [
+        ...(markerNames.length > 0
+          ? [`${markerNames.length} wrapped command(s) ended before their completion could be recorded.`]
+          : []),
+        ...(failedCount > 0 ? [`Failed to persist ${failedCount} wrapped command completion(s).`] : []),
+      ];
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
@@ -525,14 +541,97 @@ async function acquireSessionLock(repoRoot: string, config: AgentBlackBoxConfig,
 }
 
 async function clearSessionState(active: ActiveSession, config: AgentBlackBoxConfig): Promise<void> {
-  const current = await readActiveSession(active.repoRoot, config);
-  if (!current || !activeMatches(current, active)) {
-    throw new Error("Session ownership changed during recovery; state was left untouched.");
-  }
+  await assertSessionOwnership(active, config);
 
   await removeFileIfExists(getActiveSessionPath(active.repoRoot, config));
   await removeFileIfExists(getStopRequestPath(active.repoRoot, config));
   await releaseSessionLock(active.repoRoot, config, active);
+}
+
+async function assertSessionOwnership(active: ActiveSession, config: AgentBlackBoxConfig): Promise<void> {
+  const current = await readActiveSession(active.repoRoot, config);
+  const lock = await readSessionLock(active.repoRoot, config);
+  if (!current || !activeMatches(current, active) || !lock || !lockMatchesActive(lock, active)) {
+    throw new Error("Session ownership changed during recovery; state was left untouched.");
+  }
+}
+
+async function withFinalizationOwnership<T>(
+  active: ActiveSession,
+  config: AgentBlackBoxConfig,
+  operation: () => Promise<T>
+): Promise<T> {
+  await assertSessionOwnership(active, config);
+  const claimPath = await acquireFinalizationClaim(active);
+  try {
+    await assertSessionOwnership(active, config);
+    return await operation();
+  } finally {
+    await removeFileIfExists(claimPath);
+  }
+}
+
+async function acquireFinalizationClaim(active: ActiveSession): Promise<string> {
+  while (true) {
+    const generations = (await readdir(active.sessionDir))
+      .filter((name) => name.startsWith("finalization-claim-"))
+      .map((name) => FINALIZATION_CLAIM_PATTERN.exec(name)?.[1])
+      .map(Number);
+    if (
+      generations.length > 1_000 ||
+      generations.some((generation) => !Number.isSafeInteger(generation) || generation < 1 || generation >= 1_000_000)
+    ) {
+      throw new Error("Session finalization claim history is invalid; state was left untouched.");
+    }
+    const generation = generations.reduce((highest, candidate) => Math.max(highest, candidate), 0);
+    for (const previousGeneration of generations) {
+      const previousPath = path.join(active.sessionDir, `finalization-claim-${previousGeneration}.json`);
+      const previous = await readStateFile<SessionLock>(previousPath, isSessionLock);
+      // A live owner releases its own immutable claim. A dead claim is never removed or replaced:
+      // contenders instead compete to create one successor, avoiding stale-lock deletion races.
+      if (!previous.value && !previous.corrupted && !(await fileExistsStrict(previousPath))) {
+        continue;
+      }
+      if (
+        !previous.value ||
+        previous.value.sessionId !== active.id ||
+        previous.value.sessionDir !== active.sessionDir
+      ) {
+        throw new Error("Session finalization claim is unreadable or inconsistent; state was left untouched.");
+      }
+      if (isProcessRunning(previous.value.pid)) {
+        throw new Error(`Session ${active.id} is already being finalized.`);
+      }
+    }
+    const claimPath = path.join(active.sessionDir, `finalization-claim-${generation + 1}.json`);
+    let handle;
+    try {
+      handle = await open(claimPath, "wx", 0o600);
+    } catch (error) {
+      if (isFileExistsError(error)) {
+        continue;
+      }
+      throw error;
+    }
+    try {
+      await handle.writeFile(
+        `${JSON.stringify({
+          sessionId: active.id,
+          sessionDir: active.sessionDir,
+          createdAt: new Date().toISOString(),
+          pid: process.pid,
+          ownerToken: randomUUID(),
+        } satisfies SessionLock)}\n`,
+        "utf8"
+      );
+    } catch (error) {
+      await handle.close();
+      await removeFileIfExists(claimPath);
+      throw error;
+    }
+    await handle.close();
+    return claimPath;
+  }
 }
 
 async function releaseSessionLock(repoRoot: string, config: AgentBlackBoxConfig, active: ActiveSession): Promise<void> {

@@ -5,6 +5,8 @@ import { CONFIG_FILE_NAME, DEFAULT_CONFIG } from "../config/defaults.js";
 import { configExists, type ConfigLoadOptions, loadConfigWithMeta } from "../config/config.js";
 import { getRepositoryRoot } from "../git/git.js";
 import { getSessionRoot, inspectSessionRecoveryState } from "../session/sessionManager.js";
+import { inspectSessionCaptureHealth, renderSessionCaptureHealth } from "../session/captureHealth.js";
+import { formatTerminalValue } from "../utils/terminal.js";
 
 export type DoctorStatus = "pass" | "warn" | "fail";
 
@@ -56,7 +58,19 @@ export async function runDoctor(cwd: string, configOptions?: ConfigLoadOptions):
 
   checks.push(await checkWritable(repoRoot, "Repository write access"));
   checks.push(await checkSessionDirectory(repoRoot, config));
-  checks.push(await checkSessionRecovery(repoRoot, config));
+  const recovery = await inspectSessionRecoveryState(repoRoot, config);
+  checks.push(checkSessionRecovery(recovery));
+  if (
+    recovery.active &&
+    (recovery.status === "active" || recovery.status === "recoverable" || recovery.status === "already-complete")
+  ) {
+    const captureHealth = await inspectSessionCaptureHealth(recovery.active);
+    checks.push({
+      name: "Capture health",
+      status: captureHealth.status === "healthy" ? "pass" : "warn",
+      message: renderSessionCaptureHealth(captureHealth),
+    });
+  }
 
   return {
     ok: checks.every((check) => check.status !== "fail"),
@@ -69,7 +83,9 @@ export function renderDoctorReport(report: DoctorReport): string {
   const lines = ["Agent Black Box Doctor", ""];
 
   for (const check of report.checks) {
-    lines.push(`${formatStatus(check.status)} ${check.name}: ${check.message}`);
+    lines.push(
+      `${formatStatus(check.status)} ${formatTerminalValue(String(check.name))}: ${formatTerminalValue(String(check.message))}`
+    );
   }
 
   lines.push("");
@@ -136,8 +152,7 @@ async function checkSessionDirectory(repoRoot: string, config: AgentBlackBoxConf
   }
 }
 
-async function checkSessionRecovery(repoRoot: string, config: AgentBlackBoxConfig): Promise<DoctorCheck> {
-  const state = await inspectSessionRecoveryState(repoRoot, config);
+function checkSessionRecovery(state: Awaited<ReturnType<typeof inspectSessionRecoveryState>>): DoctorCheck {
   if (state.status === "no-active-session" || state.status === "active") {
     return pass("Session state", state.message);
   }

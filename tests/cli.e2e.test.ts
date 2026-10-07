@@ -27,6 +27,166 @@ describe("CLI end-to-end", () => {
     await Promise.all(spawnedProcesses.splice(0).map((child) => stopChild(child)));
   });
 
+  it("reports persisted capture health without exposing ownership or modifying session state", async () => {
+    const repo = await createTempDir("abb-capture-health-cli-");
+    try {
+      initGitRepo(repo);
+      const config = { ...DEFAULT_CONFIG, sessionDir: ".agent-black-box/sessions\u009b\u2028\u2029" };
+      await writeFile(path.join(repo, ".agentblackbox.json"), JSON.stringify(config));
+      const absent = await runCli(repo, ["status", "--json"]);
+      expect(absent.exitCode).toBe(0);
+      expect(JSON.parse(absent.stdout)).toMatchObject({
+        state: "no-active-session",
+        session: null,
+        captureHealth: null,
+      });
+      const session = await createSession(repo, config);
+      const activeBefore = await readFile(getActiveSessionPath(repo, config), "utf8");
+      const lockBefore = await readFile(getSessionLockPath(repo, config), "utf8");
+      const healthy = await runCli(repo, ["status", "--json"]);
+      expect(healthy.exitCode).toBe(0);
+      expect(JSON.parse(healthy.stdout)).toMatchObject({
+        session: { id: session.id, sessionDir: session.sessionDir },
+        captureHealth: { status: "healthy", scope: "persisted-markers", inspectionComplete: true },
+      });
+      expect(healthy.stdout).not.toContain("ownerToken");
+      expect(healthy.stdout).not.toContain(session.ownerToken);
+      for (const character of ["\u009b", "\u2028", "\u2029"]) {
+        expect(healthy.stdout).not.toContain(character);
+      }
+      expect(healthy.stdout).toContain("\\u009b\\u2028\\u2029");
+      await writeFile(path.join(session.sessionDir, "capture-loss-overflow"), "");
+      await writeFile(
+        path.join(session.sessionDir, `command-failed-${process.pid}-00000000-0000-4000-8000-000000000000`),
+        ""
+      );
+      const degraded = await runCli(repo, ["status", "--json"]);
+      expect(degraded.exitCode).toBe(0);
+      expect(JSON.parse(degraded.stdout).captureHealth).toMatchObject({
+        status: "degraded",
+        counters: { watcherOverflow: 1, failedCommands: 1 },
+      });
+      const text = await runCli(repo, ["status", "--capture-health"]);
+      expect(text.exitCode).toBe(0);
+      expect(text.stdout).toContain("Capture health: degraded.");
+      expect(text.stdout).toContain("Only persisted markers are inspected");
+      const plain = await runCli(repo, ["status"]);
+      expect(plain.exitCode).toBe(0);
+      expect(plain.stdout).not.toContain("Capture health:");
+      expect(await readFile(getActiveSessionPath(repo, config), "utf8")).toBe(activeBefore);
+      expect(await readFile(getSessionLockPath(repo, config), "utf8")).toBe(lockBefore);
+    } finally {
+      await removeTempDir(repo);
+    }
+  }, 45_000);
+
+  it("applies configured staged CI policies to JSON and SARIF while retaining findings", async () => {
+    const repo = await createTempDir("abb-configured-policy-cli-");
+    try {
+      initGitRepo(repo);
+      execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: repo });
+      execFileSync("git", ["config", "user.name", "Test"], { cwd: repo });
+      await writeFile(path.join(repo, "README.md"), "baseline\n");
+      execFileSync("git", ["add", "README.md"], { cwd: repo });
+      execFileSync("git", ["commit", "-m", "baseline"], { cwd: repo });
+      await writeFile(
+        path.join(repo, ".agentblackbox.json"),
+        JSON.stringify({
+          ...DEFAULT_CONFIG,
+          analysisPolicies: {
+            "ci-review": { minSeverity: "medium", categories: ["CI/CD file"] },
+            "ci-high": { minSeverity: "high", categories: ["CI/CD file"] },
+          },
+        })
+      );
+      await mkdir(path.join(repo, ".github", "workflows"), { recursive: true });
+      await writeFile(path.join(repo, ".github", "workflows", "build.yml"), "name: Build\n");
+      execFileSync("git", ["add", ".github/workflows/build.yml"], { cwd: repo });
+      const baseArgs = ["analyze", "--staged", "--baseline", "HEAD", "--policy"];
+      const review = await runCli(repo, [...baseArgs, "ci-review", "--format", "json"]);
+      expect(review.exitCode).toBe(1);
+      const result = JSON.parse(review.stdout);
+      expect(result.policyEvaluation).toMatchObject({
+        profile: "ci-review",
+        failed: true,
+        newSecretCount: 0,
+        severityRiskCount: 1,
+      });
+      const high = await runCli(repo, [...baseArgs, "ci-high", "--format", "json"]);
+      expect(high.exitCode).toBe(0);
+      expect(JSON.parse(high.stdout).policyEvaluation).toMatchObject({ failed: false, severityRiskCount: 0 });
+      expect(JSON.parse(high.stdout).findings).toEqual(result.findings);
+      const sarif = await runCli(repo, [...baseArgs, "ci-review", "--format", "sarif"]);
+      expect(sarif.exitCode).toBe(1);
+      expect(JSON.parse(sarif.stdout).runs[0].properties.analysisPolicy).toMatchObject({
+        profile: "ci-review",
+        severityRiskCount: 1,
+      });
+      const text = await runCli(repo, [...baseArgs, "ci-review"]);
+      expect(text.exitCode).toBe(1);
+      expect(text.stdout).toContain("Risk findings matching the policy threshold/categories: 1.");
+      const unknown = await runCli(repo, [...baseArgs, "ci-missing"]);
+      expect(unknown.exitCode).toBe(1);
+      expect(unknown.stdout).toBe("");
+      expect(unknown.stderr).toContain("--policy must be one of");
+    } finally {
+      await removeTempDir(repo);
+    }
+  }, 45_000);
+
+  it("enforces opt-in verification budgets without treating large reports as corrupt", async () => {
+    const repo = await createTempDir("abb-verification-budget-cli-");
+    try {
+      initGitRepo(repo);
+      const session = await createSession(repo, DEFAULT_CONFIG);
+      await finalizeSession(session, DEFAULT_CONFIG, "test");
+      const budgetArgs = ["--memory-budget-mb", "8", "--concurrency", "16", "--json"];
+      const small = await runCli(repo, ["sessions", "verify", "latest", ...budgetArgs]);
+      expect(small.exitCode).toBe(0);
+      expect(JSON.parse(small.stdout)).toMatchObject({ verified: 1, failed: 0 });
+      const reportPath = path.join(session.sessionDir, "session.json");
+      const report = JSON.parse(await readFile(reportPath, "utf8"));
+      report.git.diffSummaryText = "x".repeat(2 * 1024 * 1024);
+      const oversized = JSON.stringify(report);
+      await writeFile(reportPath, oversized);
+      const limited = await runCli(repo, ["sessions", "verify", session.id, ...budgetArgs]);
+      expect(limited.exitCode).toBe(1);
+      const summary = JSON.parse(limited.stdout);
+      expect(summary).toMatchObject({ verified: 0, failed: 1 });
+      expect(summary.sessions[0].message).toContain("budget");
+      await rm(path.join(session.sessionDir, "session-metadata.json"));
+      const legacy = await runCli(repo, ["sessions", "verify", session.id, ...budgetArgs]);
+      expect(legacy.exitCode).toBe(1);
+      expect(JSON.parse(legacy.stdout).sessions[0].message).toContain("budget");
+      const ambiguous = await runCli(repo, ["sessions", "verify", "latest", ...budgetArgs]);
+      expect(ambiguous.exitCode).toBe(1);
+      expect(ambiguous.stderr).toContain("Latest session cannot be determined");
+      const unlimited = await runCli(repo, ["sessions", "verify", session.id, "--json"]);
+      expect(unlimited.exitCode).toBe(0);
+      expect(JSON.parse(unlimited.stdout)).toMatchObject({ verified: 1, failed: 0 });
+      expect(await readFile(reportPath, "utf8")).toBe(oversized);
+    } finally {
+      await removeTempDir(repo);
+    }
+  }, 45_000);
+
+  it.each([
+    ["--memory-budget-mb", "7", "between 8 and 4096"],
+    ["--concurrency", "17", "between 1 and 16"],
+    ["--memory-budget-mb", "8.5", "positive integer"],
+  ])("rejects invalid verification option %s=%s even without sessions", async (option, value, message) => {
+    const repo = await createTempDir("abb-invalid-budget-cli-");
+    try {
+      initGitRepo(repo);
+      const result = await runCli(repo, ["sessions", "verify", option, value]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(message);
+    } finally {
+      await removeTempDir(repo);
+    }
+  });
+
   it("refuses to send a stop request when live session ownership does not match", async () => {
     const repo = await createTempDir("abb-stop-ownership-");
     try {
@@ -88,6 +248,53 @@ describe("CLI end-to-end", () => {
         expect(result.ruleId).toBe("possible-secret:Possible secret");
         expect(result.locations[0]?.physicalLocation.artifactLocation.uri).toBe("settings%20%231%25.ts");
       }
+    } finally {
+      await removeTempDir(repo);
+    }
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "escapes control filenames in text analysis without changing JSON paths",
+    async () => {
+      const repo = await createTempDir("abb-terminal-analysis-");
+      try {
+        initGitRepo(repo);
+        const fileName = "settings\u001b[2J\n.ts";
+        await writeFile(path.join(repo, fileName), 'const password = "test_credential_value_987654321";\n');
+        const text = await runCli(repo, ["analyze"]);
+        expect(text.exitCode).toBe(0);
+        expect(text.stdout).not.toContain("\u001b");
+        expect(text.stdout).toContain(JSON.stringify(fileName));
+        const json = await runCli(repo, ["analyze", "--format", "json"]);
+        expect(JSON.parse(json.stdout).findings[0]?.path).toBe(fileName);
+        const sarif = await runCli(repo, ["analyze", "--format", "sarif"]);
+        expect(JSON.parse(sarif.stdout).runs[0]?.results[0]?.locations[0]?.physicalLocation.artifactLocation.uri).toBe(
+          encodeURIComponent(fileName)
+        );
+      } finally {
+        await removeTempDir(repo);
+      }
+    }
+  );
+
+  it("escapes terminal controls when streaming Markdown reports while retaining JSON data", async () => {
+    const repo = await createTempDir("abb-terminal-report-");
+    try {
+      initGitRepo(repo);
+      const session = await createSession(repo, DEFAULT_CONFIG);
+      const report = await finalizeSession(session, DEFAULT_CONFIG, "test");
+      await writeFile(path.join(session.sessionDir, "summary.md"), "# Summary\n\u001b[2J\u009b31m\n");
+      const summary = await runCli(repo, ["summary"]);
+      expect(summary.exitCode).toBe(0);
+      expect(summary.stdout).toContain("# Summary\n\\u001b[2J\\u009b31m\n");
+      expect(summary.stdout).not.toContain("\u001b");
+      await writeFile(
+        path.join(session.sessionDir, "session.json"),
+        JSON.stringify({ ...report, finalizedBy: "test\u009b" })
+      );
+      const json = await runCli(repo, ["report"]);
+      expect(json.exitCode).toBe(0);
+      expect(JSON.parse(json.stdout).finalizedBy).toBe("test\u009b");
     } finally {
       await removeTempDir(repo);
     }

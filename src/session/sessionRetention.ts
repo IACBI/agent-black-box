@@ -11,6 +11,7 @@ import {
 } from "./sessionCatalog.js";
 import { getActiveSessionPath, getSessionLockPath, getSessionRoot } from "./sessionManager.js";
 import { isPathInside } from "../utils/paths.js";
+import { formatTerminalValue } from "../utils/terminal.js";
 
 export interface SessionRetentionPlan {
   before: string;
@@ -50,8 +51,10 @@ export function retentionDateForDays(days: number, now = new Date()): string {
 
 export function renderSessionRetentionPlan(plan: SessionRetentionPlan): string {
   const lines = [
-    `Completed sessions before ${plan.before} (UTC), keeping the newest ${plan.keep}:`,
-    ...plan.sessions.map((session) => `- ${session.id} | started ${session.startedAt}`),
+    `Completed sessions before ${formatTerminalValue(plan.before)} (UTC), keeping the newest ${plan.keep}:`,
+    ...plan.sessions.map(
+      (session) => `- ${formatTerminalValue(session.id)} | started ${formatTerminalValue(session.startedAt)}`
+    ),
     `${plan.sessions.length} session(s) eligible for deletion.`,
   ];
   return `${lines.join("\n")}\n`;
@@ -184,9 +187,11 @@ export async function archiveSessionRetention(
 
 export function renderSessionArchivePlan(plan: SessionRetentionPlan, archiveDir: string): string {
   const lines = [
-    `Completed sessions before ${plan.before} (UTC), keeping the newest ${plan.keep}:`,
-    `Archive destination: ${archiveDir}`,
-    ...plan.sessions.map((session) => `- ${session.id} | started ${session.startedAt}`),
+    `Completed sessions before ${formatTerminalValue(plan.before)} (UTC), keeping the newest ${plan.keep}:`,
+    `Archive destination: ${formatTerminalValue(archiveDir)}`,
+    ...plan.sessions.map(
+      (session) => `- ${formatTerminalValue(session.id)} | started ${formatTerminalValue(session.startedAt)}`
+    ),
     `${plan.sessions.length} session(s) eligible for archival. Original sessions remain in place.`,
   ];
   return `${lines.join("\n")}\n`;

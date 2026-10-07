@@ -130,6 +130,21 @@ describe("rollback planner", () => {
     expect(preview).toContain("-- ':(top,literal)src/[special].ts'");
   });
 
+  it("renders distinct visible control paths and copyable POSIX restore previews", () => {
+    const controlPath = "src/a\u001b[2J\n.txt";
+    const preview = renderRollbackPlan({
+      requestedFiles: [],
+      restorableFiles: [{ path: controlPath, status: "modified" }],
+      skippedFiles: [{ path: "src/a\\u001b[2J\\n.txt", reason: "not eligible\u009b31m" }],
+    });
+    expect(preview).not.toContain("\u001b");
+    expect(preview).not.toContain("\u009b");
+    expect(preview).toContain('- modified: "src/a\\u001b[2J\\n.txt"');
+    expect(preview).toContain("src/a\\\\u001b[2J\\\\n.txt");
+    expect(preview).toContain("printf '%b_' ':(top,literal)src/a\\0033[2J\\0012.txt'");
+    expect(preview).toContain('git restore --source=HEAD --staged --worktree -- "${abb_arg_1%_}"');
+  });
+
   it("applies a literal rollback pathspec to the intended tracked file", async () => {
     const repo = await createTempDir("abb-rollback-");
     try {

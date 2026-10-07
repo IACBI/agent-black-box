@@ -1,4 +1,5 @@
 import type { SessionCatalogEntry } from "./sessionCatalog.js";
+import { escapeTerminalControls, formatTerminalValue } from "../utils/terminal.js";
 
 export interface SessionBrowserIO {
   ask(prompt: string): Promise<string>;
@@ -40,9 +41,11 @@ export async function browseSessionCatalog(
       const selected = visible[Number(answer) - 1];
       if (selected) {
         if (selected.state !== "complete") {
-          io.write(`Session ${selected.id} is ${selected.state}: ${selected.warning ?? "no finalized report"}.\n`);
+          io.write(
+            `Session ${formatTerminalValue(selected.id)} is ${selected.state}: ${formatTerminalValue(selected.warning ?? "no finalized report")}.\n`
+          );
         } else {
-          io.write(`${await showReport(selected)}\n`);
+          io.write(`${escapeTerminalControls(await showReport(selected))}\n`);
         }
         continue;
       }
@@ -62,8 +65,8 @@ function renderSessionBrowserPage(
     const summary =
       entry.state === "complete"
         ? `${entry.startedAt ?? "unknown time"} | risk ${entry.riskScore ?? 0}/100 (${entry.maxRiskSeverity ?? "none"})`
-        : (entry.warning ?? entry.startedAt ?? "no finalized report");
-    lines.push(`${index + 1}. ${entry.id} [${entry.state}] | ${summary}`);
+        : formatTerminalValue(entry.warning ?? entry.startedAt ?? "no finalized report");
+    lines.push(`${index + 1}. ${formatTerminalValue(entry.id)} [${entry.state}] | ${summary}`);
   });
   return `${lines.join("\n")}\n`;
 }

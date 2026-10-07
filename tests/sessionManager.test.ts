@@ -1,7 +1,8 @@
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONFIG } from "../src/config/defaults.js";
+import * as reportWriter from "../src/reports/reportWriter.js";
 import {
   createSession,
   getActiveSessionPath,
@@ -31,6 +32,125 @@ import { pathExists } from "../src/utils/files.js";
 import { createTempDir, initGitRepo, removeTempDir } from "./testUtils.js";
 
 describe("session manager", () => {
+  it.each(["unclaimed", "dead-claim"])(
+    "serializes %s recovery and protects replacement state",
+    async (kind) => {
+      const dir = await createTempDir();
+      let releaseReports: (() => void) | undefined;
+      let recovering: ReturnType<typeof recoverActiveSession> | undefined;
+      const writeReports = reportWriter.writeReports;
+      const writer = vi.spyOn(reportWriter, "writeReports");
+      try {
+        initGitRepo(dir);
+        const session = await createSession(dir, DEFAULT_CONFIG);
+        const stale = { ...session, pid: 999_999 };
+        const lock = await readSessionLock(dir, DEFAULT_CONFIG);
+        await writeFile(getActiveSessionPath(dir, DEFAULT_CONFIG), JSON.stringify(stale));
+        await writeFile(getSessionLockPath(dir, DEFAULT_CONFIG), JSON.stringify({ ...lock, pid: stale.pid }));
+        if (kind === "dead-claim") {
+          await writeFile(
+            path.join(session.sessionDir, "finalization-claim-1.json"),
+            JSON.stringify({ ...lock, pid: stale.pid })
+          );
+        }
+        writer.mockImplementationOnce(async (report) => {
+          await new Promise<void>((resolve) => {
+            releaseReports = resolve;
+          });
+          await writeReports(report);
+        });
+        recovering = recoverActiveSession(dir, DEFAULT_CONFIG);
+        await vi.waitFor(() => expect(releaseReports).toBeDefined(), { timeout: 10_000 });
+        await expect(recoverActiveSession(dir, DEFAULT_CONFIG)).rejects.toThrow("already being finalized");
+        await expect(createSession(dir, DEFAULT_CONFIG)).rejects.toThrow("before starting another");
+        releaseReports?.();
+        await recovering;
+
+        const replacement = await createSession(dir, DEFAULT_CONFIG);
+        await expect(finalizeSession(stale, DEFAULT_CONFIG, "delayed-recovery")).rejects.toThrow("ownership changed");
+        expect((await readActiveSession(dir, DEFAULT_CONFIG))?.id).toBe(replacement.id);
+        expect((await readSessionLock(dir, DEFAULT_CONFIG))?.sessionId).toBe(replacement.id);
+        expect((await inspectSessionRecoveryState(dir, DEFAULT_CONFIG)).status).toBe("active");
+      } finally {
+        releaseReports?.();
+        await recovering?.catch(() => undefined);
+        writer.mockRestore();
+        await removeTempDir(dir);
+      }
+    },
+    30_000
+  );
+
+  it("releases failed finalization ownership so the same process can retry recovery", async () => {
+    const dir = await createTempDir();
+    const writer = vi.spyOn(reportWriter, "writeReports");
+    try {
+      initGitRepo(dir);
+      const session = await createSession(dir, DEFAULT_CONFIG);
+      const lock = await readSessionLock(dir, DEFAULT_CONFIG);
+      await writeFile(getActiveSessionPath(dir, DEFAULT_CONFIG), JSON.stringify({ ...session, pid: 999_999 }));
+      await writeFile(getSessionLockPath(dir, DEFAULT_CONFIG), JSON.stringify({ ...lock, pid: 999_999 }));
+      writer.mockRejectedValueOnce(new Error("report write failed"));
+
+      await expect(recoverActiveSession(dir, DEFAULT_CONFIG)).rejects.toThrow("report write failed");
+      expect((await readdir(session.sessionDir)).filter((name) => name.startsWith("finalization-claim-"))).toEqual([]);
+      expect((await inspectSessionRecoveryState(dir, DEFAULT_CONFIG)).status).toBe("recoverable");
+      await expect(recoverActiveSession(dir, DEFAULT_CONFIG)).resolves.toMatchObject({ report: { id: session.id } });
+    } finally {
+      writer.mockRestore();
+      await removeTempDir(dir);
+    }
+  });
+
+  it.each(["dead", "live", "corrupt"])("handles a %s finalization claim without deleting it", async (kind) => {
+    const dir = await createTempDir();
+    try {
+      initGitRepo(dir);
+      const session = await createSession(dir, DEFAULT_CONFIG);
+      const lock = await readSessionLock(dir, DEFAULT_CONFIG);
+      const claimPath = path.join(session.sessionDir, "finalization-claim-1.json");
+      const claimText =
+        kind === "corrupt" ? "{not-json}" : JSON.stringify({ ...lock, pid: kind === "live" ? process.pid : 999_999 });
+      await writeFile(claimPath, claimText);
+      if (kind === "dead") {
+        await expect(finalizeSession(session, DEFAULT_CONFIG, "test")).resolves.toMatchObject({ id: session.id });
+      } else {
+        await expect(finalizeSession(session, DEFAULT_CONFIG, "test")).rejects.toThrow(
+          kind === "live" ? "already being finalized" : "claim is unreadable"
+        );
+        expect((await readActiveSession(dir, DEFAULT_CONFIG))?.id).toBe(session.id);
+      }
+      expect(await readFile(claimPath, "utf8")).toBe(claimText);
+      expect((await readdir(session.sessionDir)).filter((name) => name.startsWith("finalization-claim-"))).toEqual([
+        "finalization-claim-1.json",
+      ]);
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
+  it("rejects ambiguous finalization claims when an earlier generation still has a live owner", async () => {
+    const dir = await createTempDir();
+    try {
+      initGitRepo(dir);
+      const session = await createSession(dir, DEFAULT_CONFIG);
+      const lock = await readSessionLock(dir, DEFAULT_CONFIG);
+      await writeFile(path.join(session.sessionDir, "finalization-claim-1.json"), JSON.stringify(lock));
+      await writeFile(
+        path.join(session.sessionDir, "finalization-claim-2.json"),
+        JSON.stringify({ ...lock, pid: 999_999 })
+      );
+
+      await expect(finalizeSession(session, DEFAULT_CONFIG, "test")).rejects.toThrow("already being finalized");
+      expect((await readActiveSession(dir, DEFAULT_CONFIG))?.id).toBe(session.id);
+      expect((await readdir(session.sessionDir)).filter((name) => name.startsWith("finalization-claim-"))).toHaveLength(
+        2
+      );
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
   it("does not treat a process with denied signal permissions as stale", () => {
     const kill = vi.spyOn(process, "kill").mockImplementation(() => {
       throw Object.assign(new Error("permission denied"), { code: "EPERM" });
