@@ -11,6 +11,7 @@ import {
   planSessionRetention,
   renderSessionArchivePlan,
   renderSessionRetentionPlan,
+  resolveArchiveDestination,
   retentionDateForDays,
 } from "../src/session/sessionRetention.js";
 import { getActiveSessionPath } from "../src/session/sessionManager.js";
@@ -172,6 +173,65 @@ describe("session retention", () => {
     } finally {
       await removeTempDir(repo);
     }
+  });
+
+  describe("resolving the archive destination", () => {
+    it("uses an explicit destination as given, even outside the repository", async () => {
+      const repo = await createTempDir("abb-archive-dest-");
+      const external = await createTempDir("abb-archive-external-");
+      try {
+        await expect(resolveArchiveDestination(repo, external, ".agent-black-box/archive")).resolves.toBe(external);
+      } finally {
+        await removeTempDir(repo);
+        await removeTempDir(external);
+      }
+    });
+
+    it("accepts a configured destination inside the repository, existing or not yet created", async () => {
+      const repo = await createTempDir("abb-archive-dest-");
+      try {
+        await mkdir(path.join(repo, "archive"));
+        await expect(resolveArchiveDestination(repo, undefined, "archive")).resolves.toBe("archive");
+        await expect(resolveArchiveDestination(repo, undefined, ".agent-black-box/new/deep")).resolves.toBe(
+          ".agent-black-box/new/deep"
+        );
+        await expect(resolveArchiveDestination(repo, undefined, undefined)).resolves.toBeUndefined();
+      } finally {
+        await removeTempDir(repo);
+      }
+    });
+
+    it("rejects a configured destination that leaves the repository", async () => {
+      const repo = await createTempDir("abb-archive-dest-");
+      const external = await createTempDir("abb-archive-external-");
+      try {
+        await expect(resolveArchiveDestination(repo, undefined, external)).rejects.toThrow("inside the repository");
+        await expect(resolveArchiveDestination(repo, undefined, "../outside-archive")).rejects.toThrow(
+          "inside the repository"
+        );
+        await expect(resolveArchiveDestination(repo, undefined, "   ")).rejects.toThrow("non-empty local path");
+        await expect(resolveArchiveDestination(repo, undefined, "//server/share/archive")).rejects.toThrow(
+          "non-empty local path"
+        );
+      } finally {
+        await removeTempDir(repo);
+        await removeTempDir(external);
+      }
+    });
+
+    it("rejects a configured destination that reaches outside the repository through a link", async () => {
+      const repo = await createTempDir("abb-archive-dest-");
+      const external = await createTempDir("abb-archive-external-");
+      try {
+        await symlink(external, path.join(repo, "linked"), process.platform === "win32" ? "junction" : "dir");
+        await expect(resolveArchiveDestination(repo, undefined, "linked/archive")).rejects.toThrow(
+          "inside the repository"
+        );
+      } finally {
+        await removeTempDir(repo);
+        await removeTempDir(external);
+      }
+    });
   });
 
   it("rejects an archive destination inside the session root", async () => {

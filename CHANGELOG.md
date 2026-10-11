@@ -2,12 +2,29 @@
 
 ## Unreleased
 
+- Added opt-in history read/search budgets, visible unavailable-metadata diagnostics, and exact parsed-byte verification for budgeted large reports without changing storage limits or defaults.
+- Added explicit initial staged analysis and managed hook opt-ins for first-commit policy enforcement and persisted trusted external-storage authorization.
+- Exposed Git-verified rename sources on text/SARIF findings while preserving destination locations and JSON comparison contracts.
+- Fixed filesystem failure classification, report publication settlement, credential redaction gaps and large Git baseline read/write limits; batched baseline tree lookups with bounded arguments.
 - Added opt-in working-data budgets and worker limits to streaming session verification, with bounded legacy catalog fallback and explicit budget refusals.
 - Added read-only persisted capture-health diagnostics to status JSON/text and doctor, with bounded inspection and private ownership fields omitted.
 - Added validated named staged CI policies for independent secret, coverage, and metadata-risk gates; existing built-in policies remain unchanged.
 - Serialized finalization/recovery claims, retained failed command-capture evidence, and made stop polling single-flight.
 - Hardened Windows command-interpreter resolution and terminal/rollback rendering; upgraded simple-git and pinned vulnerable transitive dependencies.
 - Expanded regression coverage and performance checks while preserving report formats and default behavior.
+- Added `abb hook install|uninstall|status`, a managed Git pre-commit hook that runs `abb analyze --staged` with a chosen policy. It never replaces a hook it did not write without `--force` (which keeps a `pre-commit.pre-abb` backup), refuses hooks directories outside the repository, validates the policy name before it reaches the shell script, and fails open when `abb` is not on PATH.
+- Added `secretPatterns` and `secretAllowlist` to `.agentblackbox.json` (and the JSON schema). Patterns are screened for empty matches, backreferences, and nested quantifiers and are applied to recorded sessions, `abb analyze` (both sides of a baseline comparison), and command redaction. Allowlist entries require a reason; hidden findings are counted in `analyze` output and as `riskSummary.allowlistedSecretCount` in session reports.
+- Added `abb pr-comment` (a size-capped, escaped Markdown summary for a pull request) and `abb export --format sarif` (SARIF 2.1.0 for a recorded session, with stable fingerprints and capture warnings). Neither uploads anything.
+- Secret detection now catches assignments whose keyword is part of a longer name (`OPENAI_API_KEY=`) or a quoted key (`"apiKey":`), and recognises private-key headers, Stripe live keys, Google API keys, and LLM API keys.
+- Command redaction now covers passwords in any URL scheme, `passphrase`/`pwd`/`credential` names, credentials inside script arguments (`sh -c "export TOKEN=..."`), bare provider tokens, and the short credential flags of `curl`, `mysql`, `redis-cli`, `sshpass`, and `docker`/`podman login`.
+- Fixed rollback path identity on POSIX: a file named `a\b` is no longer recorded or restored as `a/b`. Backslashes still separate path components on Windows and in exclude patterns.
+- A `retention.archiveDir` from repository configuration must now stay inside the repository; an external destination needs an explicit `--to`.
+- Made bidirectional marks and overrides visible in terminal output and Markdown reports, and resolved Windows commands with dotted names such as `python3.12` through PATHEXT.
+- Staged and baseline analysis read blobs through one `git cat-file --batch` process, the watcher writes bursts of file events in ordered batches, markdown escaping is linear-time, and finalization overlaps independent reads. Output is unchanged.
+- `package.json` now declares `main` and `types` so the library can be imported by package name; `release:validate` checks the entry points, the CLI shebang, and that the CLI version matches `package.json`.
+- Non-forced exports are created with owner-only permissions, and the release workflow no longer persists checkout credentials.
+- Moved analysis rendering and working-tree collection out of `src/cli.ts`, removed duplicated helpers, and enabled `noUncheckedIndexedAccess`, `noImplicitOverride`, `noImplicitReturns`, and `noFallthroughCasesInSwitch` for source and scripts.
+- End-to-end tests now run the compiled CLI and isolate Git from the developer's global configuration; the documentation test compares every CLI command and long option with the docs.
 
 ## 0.8.3
 

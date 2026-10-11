@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { analyzeChangedFiles } from "../src/analyze/analyzer.js";
@@ -14,6 +14,130 @@ import { DEFAULT_CONFIG } from "../src/config/defaults.js";
 import { createTempDir, initGitRepo, removeTempDir } from "./testUtils.js";
 
 describe("staged analysis", () => {
+  it("preserves baseline content, classifications, exact paths, order, and duplicates across batches", async () => {
+    const repo = await createTempDir();
+    try {
+      initGitRepo(repo);
+      execFileSync("git", ["config", "user.email", "tests@example.invalid"], { cwd: repo });
+      execFileSync("git", ["config", "user.name", "Agent Black Box Tests"], { cwd: repo });
+      execFileSync("git", ["config", "core.autocrlf", "false"], { cwd: repo });
+      const paths = [
+        ...Array.from({ length: 130 }, (_, index) => `batch-${index}-${"segment-".repeat(12)}.txt`),
+        "literal[1].txt",
+        "literal1.txt",
+        "çalışma #%.txt",
+        ...(process.platform === "win32" ? [] : ["with\ttab.txt", "with\nnewline.txt", "star*.txt", "question?.txt"]),
+      ];
+      const contents = new Map(paths.map((filePath, index) => [filePath, `baseline content ${index}\n`]));
+      await Promise.all(paths.map((filePath) => writeFile(path.join(repo, filePath), contents.get(filePath)!)));
+      await writeFile(path.join(repo, "deleted.txt"), "deleted baseline\n");
+      await writeFile(path.join(repo, "binary.dat"), Buffer.from([0, 1, 2]));
+      await writeFile(path.join(repo, "oversized.txt"), "a".repeat(300_000));
+      await mkdir(path.join(repo, "replaced-directory"));
+      await writeFile(path.join(repo, "replaced-directory", "child.txt"), "unrequested descendant\n");
+      execFileSync("git", ["add", "-A"], { cwd: repo });
+      execFileSync("git", ["commit", "-m", "baseline"], { cwd: repo });
+      const commit = await resolveBaselineCommit(repo, "HEAD");
+      await Promise.all(
+        paths.map((filePath) => writeFile(path.join(repo, filePath), `updated ${contents.get(filePath)}`))
+      );
+      await rm(path.join(repo, "deleted.txt"));
+      await writeFile(path.join(repo, "binary.dat"), Buffer.from([0, 3, 4]));
+      await writeFile(path.join(repo, "oversized.txt"), "b".repeat(300_000));
+      await rm(path.join(repo, "replaced-directory"), { recursive: true });
+      await writeFile(path.join(repo, "replaced-directory"), "new regular file\n");
+      execFileSync("git", ["add", "-A"], { cwd: repo });
+      const staged = await collectStagedAnalysisInputFiles(repo, DEFAULT_CONFIG);
+      const duplicate = staged.find((file) => file.path === paths[0])!;
+      const requested = [...staged.slice().reverse(), duplicate];
+
+      const baseline = await collectBaselineAnalysisInputFiles(repo, requested, DEFAULT_CONFIG, commit);
+
+      expect(baseline.map((file) => file.path)).toEqual(requested.map((file) => file.path));
+      for (const filePath of paths) {
+        const matching = baseline.filter((file) => file.path === filePath);
+        expect(matching).toHaveLength(filePath === duplicate.path ? 2 : 1);
+        for (const file of matching) {
+          expect(file).toMatchObject({ kind: "text", content: contents.get(filePath) });
+        }
+      }
+      expect(baseline.find((file) => file.path === "deleted.txt")).toMatchObject({ status: "deleted" });
+      expect(baseline.find((file) => file.path === "binary.dat")).toMatchObject({ kind: "binary" });
+      expect(baseline.find((file) => file.path === "oversized.txt")).toMatchObject({ kind: "large" });
+      expect(baseline.find((file) => file.path === "replaced-directory")).toMatchObject({ kind: "missing" });
+      expect(baseline.filter((file) => file.kind !== "text").every((file) => file.content === undefined)).toBe(true);
+    } finally {
+      await removeTempDir(repo);
+    }
+  }, 30_000);
+
+  it("preserves Git-proven source paths and content across many renamed files", async () => {
+    const repo = await createTempDir();
+    try {
+      initGitRepo(repo);
+      execFileSync("git", ["config", "user.email", "tests@example.invalid"], { cwd: repo });
+      execFileSync("git", ["config", "user.name", "Agent Black Box Tests"], { cwd: repo });
+      execFileSync("git", ["config", "core.autocrlf", "false"], { cwd: repo });
+      const contents = Array.from({ length: 70 }, (_, index) => `unique baseline for module ${index}\n`);
+      await Promise.all(contents.map((content, index) => writeFile(path.join(repo, `old-${index}.txt`), content)));
+      execFileSync("git", ["add", "-A"], { cwd: repo });
+      execFileSync("git", ["commit", "-m", "baseline"], { cwd: repo });
+      const commit = await resolveBaselineCommit(repo, "HEAD");
+      await Promise.all(
+        contents.map((_, index) => rename(path.join(repo, `old-${index}.txt`), path.join(repo, `new-${index}.txt`)))
+      );
+      execFileSync("git", ["add", "-A"], { cwd: repo });
+      const staged = await collectStagedAnalysisInputFiles(repo, DEFAULT_CONFIG);
+
+      const baseline = await collectBaselineAnalysisInputFiles(repo, staged, DEFAULT_CONFIG, commit);
+
+      expect(baseline).toHaveLength(contents.length);
+      for (const [index, content] of contents.entries()) {
+        expect(baseline.find((file) => file.path === `new-${index}.txt`)).toEqual({
+          path: `new-${index}.txt`,
+          status: "renamed",
+          kind: "text",
+          content,
+          baselineSourcePath: `old-${index}.txt`,
+        });
+      }
+    } finally {
+      await removeTempDir(repo);
+    }
+  }, 30_000);
+
+  it.skipIf(process.platform === "win32")("keeps symbolic-link baseline entries unscanned", async () => {
+    const repo = await createTempDir();
+    try {
+      initGitRepo(repo);
+      execFileSync("git", ["config", "user.email", "tests@example.invalid"], { cwd: repo });
+      execFileSync("git", ["config", "user.name", "Agent Black Box Tests"], { cwd: repo });
+      await writeFile(path.join(repo, "first.txt"), "first target\n");
+      await writeFile(path.join(repo, "second.txt"), "second target\n");
+      await symlink("first.txt", path.join(repo, "link.txt"));
+      execFileSync("git", ["add", "-A"], { cwd: repo });
+      execFileSync("git", ["commit", "-m", "baseline"], { cwd: repo });
+      const commit = await resolveBaselineCommit(repo, "HEAD");
+      await rm(path.join(repo, "link.txt"));
+      await symlink("second.txt", path.join(repo, "link.txt"));
+      execFileSync("git", ["add", "-A"], { cwd: repo });
+      const staged = await collectStagedAnalysisInputFiles(repo, DEFAULT_CONFIG);
+
+      const baseline = await collectBaselineAnalysisInputFiles(repo, staged, DEFAULT_CONFIG, commit);
+
+      expect(baseline).toEqual([
+        {
+          path: "link.txt",
+          status: "modified",
+          kind: "not-file",
+          analysisSkipReason: "The baseline entry is not a regular file.",
+        },
+      ]);
+    } finally {
+      await removeTempDir(repo);
+    }
+  });
+
   it.each([
     { maxFileSizeKb: 1, maxBytes: 1024 },
     { maxFileSizeKb: 500, maxBytes: 256 * 1024 },

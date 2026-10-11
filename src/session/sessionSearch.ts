@@ -1,9 +1,10 @@
 import path from "node:path";
 import type { RiskSeverity, SessionReport } from "../types.js";
 import { mapWithConcurrency } from "../utils/concurrency.js";
-import { readJsonFileLimited } from "../utils/files.js";
+import { meetsSeverity } from "../utils/severity.js";
 import { selectSessionRelevantChanges } from "./changeEvidence.js";
 import { readCatalogSessionReport, type SessionCatalogEntry, type SessionCatalogState } from "./sessionCatalog.js";
+import { readJsonFileWithinBudget, validateMaterializationLimit } from "./reportStorage.js";
 
 export const SESSION_SEARCH_FILE = "session-search.json";
 export const MAX_SESSION_SEARCH_BYTES = 4 * 1024 * 1024;
@@ -38,8 +39,10 @@ export function buildSessionSearchIndex(report: SessionReport): SessionSearchInd
 
 export async function filterSessionCatalog(
   entries: readonly SessionCatalogEntry[],
-  filters: SessionSearchFilters
+  filters: SessionSearchFilters,
+  options: { maxMaterializedBytes?: number } = {}
 ): Promise<SessionCatalogEntry[]> {
+  validateMaterializationLimit(options.maxMaterializedBytes);
   const since = filters.since ? parseSinceDate(filters.since) : undefined;
   if (filters.limit !== undefined && (!Number.isSafeInteger(filters.limit) || filters.limit < 1)) {
     throw new Error("--limit must be a positive integer.");
@@ -49,27 +52,40 @@ export async function filterSessionCatalog(
       throw new Error("History search terms must be 1–256 characters on one line.");
     }
   }
-  const severityRank = { none: 0, low: 1, medium: 2, high: 3 } as const;
-  const candidates = entries.filter(
+  const stateCandidates = entries.filter((entry) => filters.state === undefined || entry.state === filters.state);
+  if (
+    stateCandidates.some(
+      (entry) =>
+        entry.metadataUnavailable &&
+        (since !== undefined ||
+          filters.limit !== undefined ||
+          (filters.minSeverity !== undefined && entry.state === "complete"))
+    )
+  ) {
+    throw new Error(
+      "History date, severity, and limit filters require catalog metadata unavailable under the working-data policy. Increase --memory-budget-mb or list sessions without these filters."
+    );
+  }
+  const candidates = stateCandidates.filter(
     (entry) =>
-      (filters.state === undefined || entry.state === filters.state) &&
       (since === undefined || (entry.startedAt !== undefined && Date.parse(entry.startedAt) >= since)) &&
       (filters.minSeverity === undefined ||
-        (entry.state === "complete" &&
-          severityRank[entry.maxRiskSeverity ?? "none"] >= severityRank[filters.minSeverity]))
+        (entry.state === "complete" && meetsSeverity(entry.maxRiskSeverity ?? "none", filters.minSeverity)))
   );
   if (!filters.file && !filters.command && !filters.category) {
     return filters.limit === undefined ? candidates : candidates.slice(0, filters.limit);
   }
 
   const filtered: SessionCatalogEntry[] = [];
-  for (let offset = 0; offset < candidates.length; offset += 8) {
-    const batch = candidates.slice(offset, offset + 8);
-    const matches = await mapWithConcurrency(batch, 8, async (entry) => {
+  // A fallback can consume the entire report allowance; budgeted searches keep one read active.
+  const concurrency = options.maxMaterializedBytes === undefined ? 8 : 1;
+  for (let offset = 0; offset < candidates.length; offset += concurrency) {
+    const batch = candidates.slice(offset, offset + concurrency);
+    const matches = await mapWithConcurrency(batch, concurrency, async (entry) => {
       if (entry.state !== "complete") {
         return false;
       }
-      const index = await readSearchIndex(entry);
+      const index = await readSearchIndex(entry, options.maxMaterializedBytes);
       return (
         matchesTerm(index.paths, filters.file) &&
         matchesTerm(index.commands, filters.command) &&
@@ -84,19 +100,20 @@ export async function filterSessionCatalog(
   return filtered;
 }
 
-async function readSearchIndex(entry: SessionCatalogEntry): Promise<SessionSearchIndex> {
+async function readSearchIndex(entry: SessionCatalogEntry, maxMaterializedBytes?: number): Promise<SessionSearchIndex> {
   try {
-    const value = await readJsonFileLimited<unknown>(
+    const value = await readJsonFileWithinBudget<unknown>(
       path.join(entry.sessionDir, SESSION_SEARCH_FILE),
-      MAX_SESSION_SEARCH_BYTES
+      MAX_SESSION_SEARCH_BYTES,
+      maxMaterializedBytes
     );
     if (isSessionSearchIndex(value) && value.id === entry.id) {
       return value;
     }
   } catch {
-    // Older sessions and oversized indices are searched through their validated report.
+    // Older sessions and oversized indices are searched through their report under the same quota.
   }
-  return buildSessionSearchIndex(await readCatalogSessionReport(entry));
+  return buildSessionSearchIndex(await readCatalogSessionReport(entry, { maxMaterializedBytes }));
 }
 
 function isSessionSearchIndex(value: unknown): value is SessionSearchIndex {

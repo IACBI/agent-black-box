@@ -46,6 +46,22 @@ export function gitExecutable(): string {
   return executable;
 }
 
+/**
+ * Environment for a Git child process started outside simple-git: the caller's variables without the
+ * `GIT_*` ones, except the local storage and discovery settings that {@link createGit} also keeps.
+ * Variables such as `GIT_EXTERNAL_DIFF` or `GIT_SSH_COMMAND` can make Git run a program of the caller's choosing.
+ */
+export function gitProcessEnvironment(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const allowed = new Set<string>(LOCAL_GIT_ENVIRONMENT);
+  const filtered: NodeJS.ProcessEnv = {};
+  for (const [name, value] of Object.entries(env)) {
+    if (!name.toUpperCase().startsWith("GIT_") || allowed.has(name.toUpperCase())) {
+      filtered[name] = value;
+    }
+  }
+  return filtered;
+}
+
 export function createGit(baseDir: string): SimpleGit {
   const binary = gitExecutable();
   // The default validation rejects paths such as "C:\Program Files\Git\..."; this value is an

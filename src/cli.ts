@@ -5,20 +5,16 @@ import { createInterface } from "node:readline/promises";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { Command } from "commander";
-import {
-  analyzeChangedFiles,
-  type AnalysisFinding,
-  type AnalysisCoverage,
-  type AnalysisInputFile,
-  type WatcherlessAnalysisResult,
-} from "./analyze/analyzer.js";
+import { analyzeChangedFiles, type WatcherlessAnalysisResult } from "./analyze/analyzer.js";
 import { compareAnalysisWithBaseline } from "./analyze/baseline.js";
 import { evaluateAnalysisPolicy, parseAnalysisPolicyProfile } from "./analyze/policy.js";
+import { parseAnalyzeFormat, renderAnalysis } from "./analyze/render.js";
 import {
   collectBaselineAnalysisInputFiles,
   collectStagedAnalysisInputFiles,
   resolveBaselineCommit,
 } from "./analyze/staged.js";
+import { collectAnalysisInputFiles, summarizeAnalysisCoverage } from "./analyze/worktree.js";
 import { recordAndRunCommand } from "./commands/commandRecorder.js";
 import {
   createDefaultConfig,
@@ -31,8 +27,20 @@ import {
 import { renderDoctorReport, runDoctor } from "./doctor/doctor.js";
 import { parseExportFormat, parseRiskSeverity, renderSessionExport, writeSessionExport } from "./export/exporter.js";
 import { collectGitSnapshot, requireRepositoryRoot, getRepositoryRoot } from "./git/git.js";
+import { createGit } from "./git/executable.js";
+import {
+  buildPreCommitHookScript,
+  getPreCommitHookStatus,
+  installPreCommitHook,
+  renderHookInstallResult,
+  renderHookStatus,
+  renderHookUninstallResult,
+  uninstallPreCommitHook,
+  type HookInstallOptions,
+} from "./hooks/preCommitHook.js";
 import { generateSessionComparisonMarkdown } from "./reports/comparison.js";
 import { filterRiskFindings, generateRisksMarkdown, generateSummaryMarkdown } from "./reports/markdown.js";
+import { generatePullRequestComment } from "./reports/prComment.js";
 import { renderSessionCatalog, toPublicSessionCatalog } from "./reports/sessionCatalog.js";
 import {
   applyVerifiedRollbackPlan,
@@ -42,6 +50,7 @@ import {
   verifyRollbackSafetyState,
 } from "./rollback/rollback.js";
 import {
+  createSession,
   inspectSessionRecoveryState,
   readActiveSession,
   recoverActiveSession,
@@ -53,6 +62,7 @@ import {
   resolveSession,
   resolveSessionEntry,
   verifyCatalogSessionReportFile,
+  type SessionCatalogOptions,
   type SessionCatalogState,
 } from "./session/sessionCatalog.js";
 import { buildSessionComparison } from "./session/sessionComparison.js";
@@ -63,6 +73,7 @@ import {
   planSessionRetention,
   renderSessionArchivePlan,
   renderSessionRetentionPlan,
+  resolveArchiveDestination,
   retentionDateForDays,
 } from "./session/sessionRetention.js";
 import { filterSessionCatalog } from "./session/sessionSearch.js";
@@ -75,11 +86,13 @@ import {
 import { inspectSessionCaptureHealth, renderSessionCaptureHealth } from "./session/captureHealth.js";
 import { runWatcher } from "./watcher/watcher.js";
 import { pathExists } from "./utils/files.js";
-import { inspectTextFile } from "./utils/fileInspection.js";
-import { mapWithConcurrency } from "./utils/concurrency.js";
-import { resolveRepoPath } from "./utils/paths.js";
+import { meetsSeverity } from "./utils/severity.js";
 import { escapeTerminalControls, formatTerminalValue } from "./utils/terminal.js";
-import type { SessionReport } from "./types.js";
+import { sleep } from "./utils/timing.js";
+import { compileSecretRules } from "./risks/secretRules.js";
+import type { AgentBlackBoxConfig, ConfigLoadResult, SessionReport } from "./types.js";
+
+const CAPTURE_HEALTH_STATES = ["active", "recoverable", "already-complete"];
 
 const program = new Command();
 
@@ -129,7 +142,6 @@ program
   .action(async () => {
     const repoRoot = await requireRepositoryRoot(process.cwd());
     const config = await loadRuntimeConfig(repoRoot);
-    const { createSession } = await import("./session/sessionManager.js");
     const session = await createSession(repoRoot, config);
     await runWatcher(session, config);
   });
@@ -195,9 +207,7 @@ program
     const config = await loadRuntimeConfig(repoRoot);
     const recovery = await inspectSessionRecoveryState(repoRoot, config);
     const captureHealth =
-      (options.captureHealth || options.json) &&
-      recovery.active &&
-      ["active", "recoverable", "already-complete"].includes(recovery.status)
+      (options.captureHealth || options.json) && recovery.active && CAPTURE_HEALTH_STATES.includes(recovery.status)
         ? await inspectSessionCaptureHealth(recovery.active)
         : null;
     if (options.json) {
@@ -271,14 +281,25 @@ program
   .option("--format <format>", "output format: text, json, or sarif", "text")
   .option("--staged", "analyze staged Git blobs instead of working-tree contents")
   .option("--baseline <ref>", "with --staged, report new content findings relative to a Git commit")
+  .option("--initial", "with --staged in a repository without a HEAD commit, treat all content as new")
   .option("--fail-on <severity>", "exit with code 1 at or above low, medium, or high")
-  .option("--policy <profile>", "built-in or configured CI policy; requires --staged --baseline")
+  .option("--policy <profile>", "built-in or configured CI policy; requires --staged and --baseline or --initial")
   .action(
-    async (options: { format: string; staged?: boolean; baseline?: string; failOn?: string; policy?: string }) => {
+    async (options: {
+      format: string;
+      staged?: boolean;
+      baseline?: string;
+      initial?: boolean;
+      failOn?: string;
+      policy?: string;
+    }) => {
       if (options.baseline && !options.staged) {
         throw new Error("--baseline requires --staged.");
       }
-      if (options.policy && (!options.staged || !options.baseline)) {
+      if (options.initial && (!options.staged || options.baseline !== undefined)) {
+        throw new Error("--initial requires --staged and cannot be combined with --baseline.");
+      }
+      if (options.policy && (!options.staged || (!options.baseline && !options.initial))) {
         throw new Error("--policy requires --staged and --baseline.");
       }
       const repoRoot = await requireRepositoryRoot(process.cwd());
@@ -286,6 +307,12 @@ program
       const format = parseAnalyzeFormat(options.format);
       const failOn = parseRiskSeverity(options.failOn);
       const policy = parseAnalysisPolicyProfile(options.policy, config.analysisPolicies);
+      if (options.initial) {
+        const status = await createGit(repoRoot).raw(["status", "--porcelain=v2", "--branch", "--untracked-files=no"]);
+        if (!status.split("\n").includes("# branch.oid (initial)")) {
+          throw new Error("--initial requires a repository without a HEAD commit; use --baseline HEAD instead.");
+        }
+      }
       const files = options.staged
         ? await collectStagedAnalysisInputFiles(repoRoot, config)
         : await collectAnalysisInputFiles(
@@ -293,9 +320,11 @@ program
             (await collectGitSnapshot(repoRoot, config.exclude)).changedFiles,
             config.maxFileSizeKb * 1024
           );
+      const analysisOptions = { secretRules: compileSecretRules(config) };
       let result: WatcherlessAnalysisResult = {
-        ...analyzeChangedFiles(files),
+        ...analyzeChangedFiles(files, analysisOptions),
         coverage: summarizeAnalysisCoverage(files, options.staged ? "index" : "worktree"),
+        ...(options.initial ? { initialCommitAnalysis: true as const } : {}),
       };
       if (options.baseline) {
         const commit = await resolveBaselineCommit(repoRoot, options.baseline);
@@ -304,7 +333,7 @@ program
         );
         const comparedFiles = files.filter((file) => secretPaths.has(file.path));
         const baselineFiles = await collectBaselineAnalysisInputFiles(repoRoot, comparedFiles, config, commit);
-        result = compareAnalysisWithBaseline(comparedFiles, baselineFiles, result, commit);
+        result = compareAnalysisWithBaseline(comparedFiles, baselineFiles, result, commit, analysisOptions);
       }
 
       if (policy) {
@@ -315,7 +344,7 @@ program
       }
 
       console.log(renderAnalysis(result, format));
-      if ((failOn && meetsSeverityThreshold(result.summary.maxSeverity, failOn)) || result.policyEvaluation?.failed) {
+      if ((failOn && meetsSeverity(result.summary.maxSeverity, failOn)) || result.policyEvaluation?.failed) {
         process.exitCode = 1;
       }
     }
@@ -383,10 +412,7 @@ program
 
     const repoRoot = await requireRepositoryRoot(process.cwd());
     const report = await readSelectedSessionReport(repoRoot, options.session);
-    const riskFilter = {
-      minSeverity: parseRiskSeverity(options.minSeverity),
-      ...(options.category ? { category: options.category } : {}),
-    };
+    const riskFilter = buildRiskFilter(options);
 
     if (options.json) {
       console.log(
@@ -448,12 +474,12 @@ program
 
 program
   .command("export")
-  .description("Export the latest session as bundled Markdown or structured JSON.")
-  .option("--format <format>", "export format: markdown or json", "markdown")
+  .description("Export the latest session as bundled Markdown, structured JSON, or SARIF.")
+  .option("--format <format>", "export format: markdown, json, or sarif", "markdown")
   .option("--output <path>", "write export to a file instead of stdout")
   .option("--force", "overwrite an existing output file")
-  .option("--min-severity <severity>", "filter risks in Markdown exports by low, medium, or high")
-  .option("--category <category>", "filter risks in Markdown exports by category")
+  .option("--min-severity <severity>", "filter risks in Markdown and SARIF exports by low, medium, or high")
+  .option("--category <category>", "filter risks in Markdown and SARIF exports by category")
   .option("--session <id>", "select a session ID, unique prefix, or latest")
   .action(
     async (options: {
@@ -466,16 +492,11 @@ program
     }) => {
       const repoRoot = await requireRepositoryRoot(process.cwd());
       const report = await readSelectedSessionReport(repoRoot, options.session);
-      const content = renderSessionExport(report, {
-        format: parseExportFormat(options.format),
-        riskFilter: {
-          minSeverity: parseRiskSeverity(options.minSeverity),
-          ...(options.category ? { category: options.category } : {}),
-        },
-      });
+      const format = parseExportFormat(options.format);
+      const content = renderSessionExport(report, { format, riskFilter: buildRiskFilter(options) });
 
       if (!options.output) {
-        console.log(options.format === "json" ? content : escapeTerminalControls(content));
+        console.log(format === "markdown" ? escapeTerminalControls(content) : content);
         return;
       }
 
@@ -484,98 +505,134 @@ program
     }
   );
 
+program
+  .command("pr-comment")
+  .description("Print a compact pull request comment for a session; pipe it to `gh pr comment --body-file -`.")
+  .option("--output <path>", "write the comment to a file instead of stdout")
+  .option("--force", "overwrite an existing output file")
+  .option("--session <id>", "select a session ID, unique prefix, or latest")
+  .action(async (options: { output?: string; force?: boolean; session?: string }) => {
+    const repoRoot = await requireRepositoryRoot(process.cwd());
+    const comment = generatePullRequestComment(await readSelectedSessionReport(repoRoot, options.session));
+    if (!options.output) {
+      process.stdout.write(escapeTerminalControls(comment));
+      return;
+    }
+    const commentPath = await writeSessionExport(options.output, comment, { force: options.force });
+    console.log(`Pull request comment written to ${formatTerminalValue(commentPath)}`);
+  });
+
+const hookCommand = program.command("hook").description("Manage the Git pre-commit hook that runs abb analyze.");
+
+hookCommand
+  .command("install")
+  .description("Install a managed pre-commit hook that analyzes staged changes.")
+  .option("--policy <profile>", "analysis policy the hook enforces", "new-secrets")
+  .option(
+    "--first-commit <mode>",
+    "first commit: high severity fallback, or the selected policy (high or policy)",
+    "high"
+  )
+  .option("--force", "back up and replace a pre-commit hook that abb did not create")
+  .action(async (options: { policy: string; force?: boolean; firstCommit: string }) => {
+    const repoRoot = await requireRepositoryRoot(process.cwd());
+    const firstCommit = options.firstCommit;
+    if (firstCommit !== "high" && firstCommit !== "policy") {
+      throw new Error("--first-commit must be high or policy.");
+    }
+    const hookOptions: HookInstallOptions = {
+      ...options,
+      firstCommit,
+      allowExternalSessionDir: getConfigLoadOptions().allowExternalSessionDir === true,
+    };
+    buildPreCommitHookScript(options.policy, hookOptions);
+    const config = await loadRuntimeConfig(repoRoot);
+    parseAnalysisPolicyProfile(options.policy, config.analysisPolicies);
+    console.log(renderHookInstallResult(await installPreCommitHook(repoRoot, hookOptions)));
+  });
+
+hookCommand
+  .command("uninstall")
+  .description("Remove the managed pre-commit hook and restore any hook it replaced.")
+  .action(async () => {
+    const repoRoot = await requireRepositoryRoot(process.cwd());
+    const result = await uninstallPreCommitHook(repoRoot);
+    console.log(renderHookUninstallResult(result));
+    process.exitCode = result.action === "foreign" ? 1 : 0;
+  });
+
+hookCommand
+  .command("status")
+  .description("Show whether the managed pre-commit hook is installed.")
+  .action(async () => {
+    const repoRoot = await requireRepositoryRoot(process.cwd());
+    console.log(renderHookStatus(await getPreCommitHookStatus(repoRoot)));
+  });
+
 const sessionsCommand = program.command("sessions").description("List, inspect, and compare recorded sessions.");
 
-sessionsCommand
-  .command("list")
-  .description("List complete, incomplete, and corrupt sessions.")
-  .option("--json", "print structured JSON")
-  .option("--state <state>", "only include complete, incomplete, or corrupt sessions")
-  .option("--since <date>", "only include sessions started on or after YYYY-MM-DD (UTC)")
-  .option("--min-severity <severity>", "only include sessions at or above low, medium, or high risk")
-  .option("--file <text>", "find session-relevant paths containing text")
-  .option("--command <text>", "find recorded redacted commands containing text")
-  .option("--category <text>", "find risk categories containing text")
+addSessionFilterOptions(
+  sessionsCommand
+    .command("list")
+    .description("List complete, incomplete, and corrupt sessions.")
+    .option("--json", "print structured JSON")
+)
   .option("--limit <count>", "show at most this many matching sessions")
-  .action(
-    async (options: {
-      json?: boolean;
-      state?: string;
-      since?: string;
-      minSeverity?: string;
-      file?: string;
-      command?: string;
-      category?: string;
-      limit?: string;
-    }) => {
-      const repoRoot = await requireRepositoryRoot(process.cwd());
-      const config = await loadRuntimeConfig(repoRoot);
-      const entries = await listSessionCatalog(repoRoot, config);
-      const filtered = await filterSessionCatalog(entries, {
-        state: parseSessionState(options.state),
-        since: options.since,
-        minSeverity: parseRiskSeverity(options.minSeverity),
-        file: options.file,
-        command: options.command,
-        category: options.category,
+  .option("--memory-budget-mb <mb>", "working-data byte budget in MiB (8–4096); excludes V8 object overhead")
+  .action(async (options: SessionFilterOptions & { json?: boolean; limit?: string; memoryBudgetMb?: string }) => {
+    const repoRoot = await requireRepositoryRoot(process.cwd());
+    const config = await loadRuntimeConfig(repoRoot);
+    const readOptions = getHistoryReadOptions(options.memoryBudgetMb);
+    const entries = await listSessionCatalog(repoRoot, config, readOptions);
+    const filtered = await filterSessionCatalog(
+      entries,
+      {
+        ...buildSessionFilters(options),
         limit: parseSessionListLimit(options.limit),
-      });
-      const latestCompleteId = entries.find((entry) => entry.state === "complete")?.id;
-      console.log(
-        options.json
-          ? JSON.stringify(toPublicSessionCatalog(filtered, latestCompleteId), null, 2)
-          : renderSessionCatalog(filtered, latestCompleteId)
-      );
-    }
-  );
+      },
+      readOptions
+    );
+    // Suppress renderer defaults even if filtering hides the entries with unknown timestamps.
+    const latestCompleteId = entries.some((entry) => entry.state === "complete" && entry.metadataUnavailable)
+      ? ""
+      : entries.find((entry) => entry.state === "complete")?.id;
+    console.log(
+      options.json
+        ? JSON.stringify(toPublicSessionCatalog(filtered, latestCompleteId), null, 2)
+        : renderSessionCatalog(filtered, latestCompleteId)
+    );
+  });
 
-sessionsCommand
-  .command("browse")
-  .description("Browse filtered session history in an interactive terminal.")
-  .option("--state <state>", "only include complete, incomplete, or corrupt sessions")
-  .option("--since <date>", "only include sessions started on or after YYYY-MM-DD (UTC)")
-  .option("--min-severity <severity>", "only include sessions at or above low, medium, or high risk")
-  .option("--file <text>", "find session-relevant paths containing text")
-  .option("--command <text>", "find recorded redacted commands containing text")
-  .option("--category <text>", "find risk categories containing text")
+addSessionFilterOptions(
+  sessionsCommand.command("browse").description("Browse filtered session history in an interactive terminal.")
+)
   .option("--page-size <count>", "sessions per page (1–50)", "10")
-  .action(
-    async (options: {
-      state?: string;
-      since?: string;
-      minSeverity?: string;
-      file?: string;
-      command?: string;
-      category?: string;
-      pageSize: string;
-    }) => {
-      if (!process.stdin.isTTY || !process.stdout.isTTY) {
-        throw new Error("Session browsing requires an interactive terminal.");
-      }
-      const repoRoot = await requireRepositoryRoot(process.cwd());
-      const config = await loadRuntimeConfig(repoRoot);
-      const entries = await filterSessionCatalog(await listSessionCatalog(repoRoot, config), {
-        state: parseSessionState(options.state),
-        since: options.since,
-        minSeverity: parseRiskSeverity(options.minSeverity),
-        file: options.file,
-        command: options.command,
-        category: options.category,
-      });
-      const pageSize = parseSessionListLimit(options.pageSize, "--page-size") ?? 10;
-      const prompt = createInterface({ input: process.stdin, output: process.stdout });
-      try {
-        await browseSessionCatalog(
-          entries,
-          pageSize,
-          { ask: (question) => prompt.question(question), write: (text) => process.stdout.write(text) },
-          async (entry) => generateSummaryMarkdown(await readCatalogSessionReport(entry))
-        );
-      } finally {
-        prompt.close();
-      }
+  .option("--memory-budget-mb <mb>", "working-data byte budget in MiB (8–4096); excludes V8 object overhead")
+  .action(async (options: SessionFilterOptions & { pageSize: string; memoryBudgetMb?: string }) => {
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+      throw new Error("Session browsing requires an interactive terminal.");
     }
-  );
+    const repoRoot = await requireRepositoryRoot(process.cwd());
+    const config = await loadRuntimeConfig(repoRoot);
+    const readOptions = getHistoryReadOptions(options.memoryBudgetMb);
+    const entries = await filterSessionCatalog(
+      await listSessionCatalog(repoRoot, config, readOptions),
+      buildSessionFilters(options),
+      readOptions
+    );
+    const pageSize = parseSessionListLimit(options.pageSize, "--page-size") ?? 10;
+    const prompt = createInterface({ input: process.stdin, output: process.stdout });
+    try {
+      await browseSessionCatalog(
+        entries,
+        pageSize,
+        { ask: (question) => prompt.question(question), write: (text) => process.stdout.write(text) },
+        async (entry) => generateSummaryMarkdown(await readCatalogSessionReport(entry, readOptions))
+      );
+    } finally {
+      prompt.close();
+    }
+  });
 
 sessionsCommand
   .command("prune")
@@ -586,29 +643,22 @@ sessionsCommand
   .action(async (options: { before?: string; keep?: string; apply?: boolean }) => {
     const repoRoot = await requireRepositoryRoot(process.cwd());
     const config = await loadRuntimeConfig(repoRoot);
-    const before = options.before ?? (config.retention?.days && retentionDateForDays(config.retention.days));
-    if (!before) {
-      throw new Error("--before is required unless retention.days is configured.");
-    }
-    const keep = parseSessionListLimit(options.keep, "--keep") ?? config.retention?.keep ?? 1;
+    const { before, keep } = resolveRetentionSelection(options, config);
     const plan = planSessionRetention(await listSessionCatalog(repoRoot, config), before, keep);
     console.log(escapeTerminalControls(renderSessionRetentionPlan(plan)));
     if (!options.apply || plan.sessions.length === 0) {
       return;
     }
-    if (!process.stdin.isTTY || !process.stdout.isTTY) {
-      throw new Error("Session deletion requires an interactive terminal.");
-    }
     const confirmation = `delete ${plan.sessions.length} sessions`;
-    const prompt = createInterface({ input: process.stdin, output: process.stdout });
-    try {
-      const answer = await prompt.question(`Type "${confirmation}" to delete these sessions: `);
-      if (answer !== confirmation) {
-        console.log("Session deletion cancelled.");
-        return;
-      }
-    } finally {
-      prompt.close();
+    if (
+      !(await confirmTyped(
+        confirmation,
+        `Type "${confirmation}" to delete these sessions: `,
+        "Session deletion requires an interactive terminal."
+      ))
+    ) {
+      console.log("Session deletion cancelled.");
+      return;
     }
     await applySessionRetention(repoRoot, config, plan);
     console.log(`${plan.sessions.length} completed session(s) deleted.`);
@@ -624,33 +674,26 @@ sessionsCommand
   .action(async (options: { before?: string; keep?: string; to?: string; apply?: boolean }) => {
     const repoRoot = await requireRepositoryRoot(process.cwd());
     const config = await loadRuntimeConfig(repoRoot);
-    const before = options.before ?? (config.retention?.days && retentionDateForDays(config.retention.days));
-    if (!before) {
-      throw new Error("--before is required unless retention.days is configured.");
-    }
-    const archiveDir = options.to ?? config.retention?.archiveDir;
+    const { before, keep } = resolveRetentionSelection(options, config);
+    const archiveDir = await resolveArchiveDestination(repoRoot, options.to, config.retention?.archiveDir);
     if (!archiveDir) {
       throw new Error("--to is required unless retention.archiveDir is configured.");
     }
-    const keep = parseSessionListLimit(options.keep, "--keep") ?? config.retention?.keep ?? 1;
     const plan = planSessionRetention(await listSessionCatalog(repoRoot, config), before, keep);
     console.log(escapeTerminalControls(renderSessionArchivePlan(plan, archiveDir)));
     if (!options.apply || plan.sessions.length === 0) {
       return;
     }
-    if (!process.stdin.isTTY || !process.stdout.isTTY) {
-      throw new Error("Session archiving requires an interactive terminal.");
-    }
     const confirmation = `archive ${plan.sessions.length} sessions`;
-    const prompt = createInterface({ input: process.stdin, output: process.stdout });
-    try {
-      const answer = await prompt.question(`Type "${confirmation}" to copy these sessions: `);
-      if (answer !== confirmation) {
-        console.log("Session archiving cancelled.");
-        return;
-      }
-    } finally {
-      prompt.close();
+    if (
+      !(await confirmTyped(
+        confirmation,
+        `Type "${confirmation}" to copy these sessions: `,
+        "Session archiving requires an interactive terminal."
+      ))
+    ) {
+      console.log("Session archiving cancelled.");
+      return;
     }
     await archiveSessionRetention(repoRoot, config, plan, archiveDir);
     console.log(`${plan.sessions.length} completed session(s) archived; originals remain in place.`);
@@ -661,9 +704,10 @@ sessionsCommand
   .description("Show a session summary or normalized JSON report.")
   .argument("<session>", "session ID, unique prefix, or latest")
   .option("--json", "print the normalized session JSON report")
-  .action(async (session: string, options: { json?: boolean }) => {
+  .option("--memory-budget-mb <mb>", "working-data byte budget in MiB (8–4096); excludes V8 object overhead")
+  .action(async (session: string, options: { json?: boolean; memoryBudgetMb?: string }) => {
     const repoRoot = await requireRepositoryRoot(process.cwd());
-    const report = await readSelectedSessionReport(repoRoot, session);
+    const report = await readSelectedSessionReport(repoRoot, session, getHistoryReadOptions(options.memoryBudgetMb));
     console.log(
       options.json ? JSON.stringify(report, null, 2) : escapeTerminalControls(generateSummaryMarkdown(report))
     );
@@ -675,12 +719,14 @@ sessionsCommand
   .argument("<from>", "from session ID or unique prefix")
   .argument("<to>", "to session ID or unique prefix")
   .option("--json", "print structured comparison JSON")
-  .action(async (from: string, to: string, options: { json?: boolean }) => {
+  .option("--memory-budget-mb <mb>", "working-data byte budget in MiB (8–4096); excludes V8 object overhead")
+  .action(async (from: string, to: string, options: { json?: boolean; memoryBudgetMb?: string }) => {
     const repoRoot = await requireRepositoryRoot(process.cwd());
     const config = await loadRuntimeConfig(repoRoot);
-    const entries = await listSessionCatalog(repoRoot, config);
-    const fromReport = await readCatalogSessionReport(resolveSessionEntry(entries, from));
-    const toReport = await readCatalogSessionReport(resolveSessionEntry(entries, to));
+    const readOptions = getHistoryReadOptions(options.memoryBudgetMb);
+    const entries = await listSessionCatalog(repoRoot, config, readOptions);
+    const fromReport = await readCatalogSessionReport(resolveSessionEntry(entries, from), readOptions);
+    const toReport = await readCatalogSessionReport(resolveSessionEntry(entries, to), readOptions);
     const comparison = buildSessionComparison(fromReport, toReport);
     console.log(
       options.json
@@ -764,14 +810,29 @@ async function printSessionReportFile(fileName: string, selector?: string): Prom
   process.stdout.write("\n");
 }
 
-async function readSelectedSessionReport(repoRoot: string, selector?: string): Promise<SessionReport> {
+async function readSelectedSessionReport(
+  repoRoot: string,
+  selector?: string,
+  options: SessionCatalogOptions = {}
+): Promise<SessionReport> {
   const config = await loadRuntimeConfig(repoRoot);
-  return readCatalogSessionReport(await resolveSession(repoRoot, config, selector));
+  return readCatalogSessionReport(await resolveSession(repoRoot, config, selector, options), options);
+}
+
+function getHistoryReadOptions(memoryBudgetMb: string | undefined): SessionCatalogOptions {
+  if (memoryBudgetMb === undefined) {
+    return {};
+  }
+  const limits = getSessionVerificationLimits({
+    memoryBudgetMb: parseSessionListLimit(memoryBudgetMb, "--memory-budget-mb"),
+    concurrency: 1,
+  });
+  return { maxMaterializedBytes: limits.maxMaterializedBytes };
 }
 
 async function waitForSessionToFinalize(
   repoRoot: string,
-  config: Awaited<ReturnType<typeof loadConfig>>,
+  config: AgentBlackBoxConfig,
   sessionDir: string
 ): Promise<boolean> {
   const sessionPath = path.join(sessionDir, "session.json");
@@ -780,7 +841,7 @@ async function waitForSessionToFinalize(
     if (!active && (await pathExists(sessionPath))) {
       return true;
     }
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await sleep(250);
   }
 
   return false;
@@ -796,11 +857,11 @@ function getConfigLoadOptions(): ConfigLoadOptions {
   return { allowExternalSessionDir: options.allowExternalSessionDir === true };
 }
 
-async function loadRuntimeConfig(repoRoot: string) {
+async function loadRuntimeConfig(repoRoot: string): Promise<AgentBlackBoxConfig> {
   return loadConfig(repoRoot, getConfigLoadOptions());
 }
 
-function renderConfigLoadResult(result: Awaited<ReturnType<typeof loadConfigWithMeta>>): string {
+function renderConfigLoadResult(result: ConfigLoadResult): string {
   const lines = ["Agent Black Box Config", ""];
 
   lines.push(`Path: ${formatTerminalValue(result.configPath)}`);
@@ -852,181 +913,67 @@ function parseSessionListLimit(value: string | undefined, optionName = "--limit"
   return Number(value);
 }
 
-type AnalyzeFormat = "text" | "json" | "sarif";
-
-function parseAnalyzeFormat(value: string): AnalyzeFormat {
-  if (value === "text" || value === "json" || value === "sarif") {
-    return value;
-  }
-  throw new Error("--format must be one of: text, json, sarif.");
+interface SessionFilterOptions {
+  state?: string;
+  since?: string;
+  minSeverity?: string;
+  file?: string;
+  command?: string;
+  category?: string;
 }
 
-async function collectAnalysisInputFiles(
-  repoRoot: string,
-  changedFiles: ReadonlyArray<SessionReport["git"]["changedFiles"][number]>,
-  maxFileSizeBytes: number
-): Promise<AnalysisInputFile[]> {
-  const safeMaxFileSizeBytes = Math.min(maxFileSizeBytes, 256 * 1024);
-  return mapWithConcurrency(changedFiles, 4, async (file) => {
-    if (file.status === "deleted") {
-      return file;
-    }
-
-    const absolutePath = resolveRepoPath(repoRoot, file.path);
-    if (!absolutePath) {
-      return file;
-    }
-
-    const inspection = await inspectTextFile(absolutePath, safeMaxFileSizeBytes, safeMaxFileSizeBytes, repoRoot);
-    return {
-      ...file,
-      kind: inspection.kind,
-      ...(inspection.reason === undefined ? {} : { analysisSkipReason: inspection.reason }),
-      ...(inspection.text === undefined ? {} : { content: inspection.text }),
-    };
-  });
+function addSessionFilterOptions(command: Command): Command {
+  return command
+    .option("--state <state>", "only include complete, incomplete, or corrupt sessions")
+    .option("--since <date>", "only include sessions started on or after YYYY-MM-DD (UTC)")
+    .option("--min-severity <severity>", "only include sessions at or above low, medium, or high risk")
+    .option("--file <text>", "find session-relevant paths containing text")
+    .option("--command <text>", "find recorded redacted commands containing text")
+    .option("--category <text>", "find risk categories containing text");
 }
 
-function summarizeAnalysisCoverage(files: AnalysisInputFile[], source: AnalysisCoverage["source"]): AnalysisCoverage {
-  let scannedTextFiles = 0;
-  const skipped: AnalysisCoverage["skipped"] = [];
-  for (const file of files) {
-    if (file.status === "deleted") {
-      skipped.push({ path: file.path, reason: "Deleted files have no current content to scan." });
-    } else if (file.kind === "text" && file.content !== undefined) {
-      scannedTextFiles += 1;
-    } else {
-      skipped.push({
-        path: file.path,
-        reason: file.analysisSkipReason ?? "Text content was unavailable for this changed path.",
-      });
-    }
-  }
-  return { source, scannedTextFiles, skipped };
-}
-
-function renderAnalysis(result: WatcherlessAnalysisResult, format: AnalyzeFormat): string {
-  if (format === "json") {
-    return JSON.stringify(result, null, 2);
-  }
-  if (format === "sarif") {
-    return JSON.stringify(toSarif(result), null, 2);
-  }
-
-  const lines = ["Agent Black Box Analysis", "", `Findings: ${result.summary.findingCount}`];
-  lines.push(`Maximum severity: ${result.summary.maxSeverity}`);
-  lines.push(`Score: ${result.summary.score}`);
-  if (result.coverage) {
-    lines.push(`Content scanned: ${result.coverage.scannedTextFiles} ${result.coverage.source} file(s).`);
-    lines.push(`Content skipped: ${result.coverage.skipped.length} file(s).`);
-    if (result.coverage.skipped.length > 0) {
-      lines.push(
-        ...result.coverage.skipped
-          .slice(0, 20)
-          .map((file) => `- ${formatTerminalValue(file.path)}: ${formatTerminalValue(file.reason)}`)
-      );
-      if (result.coverage.skipped.length > 20) {
-        lines.push(`- ${result.coverage.skipped.length - 20} additional skipped file(s) omitted from text output.`);
-      }
-    }
-  }
-  if (result.baselineComparison) {
-    const comparison = result.baselineComparison;
-    lines.push(`Baseline commit: ${comparison.commit}`);
-    lines.push(`Existing secret findings suppressed: ${comparison.suppressedExistingSecrets}.`);
-    lines.push(`Baseline text scanned: ${comparison.scannedTextFiles} file(s).`);
-    lines.push(`Absent at baseline: ${comparison.absentFiles} file(s).`);
-    lines.push(`Baseline content skipped: ${comparison.skipped.length} file(s).`);
-    lines.push(
-      ...comparison.skipped
-        .slice(0, 20)
-        .map((file) => `- ${formatTerminalValue(file.path)}: ${formatTerminalValue(file.reason)}`)
-    );
-    lines.push(`Baseline rename sources: ${comparison.renameSources.length} file(s).`);
-    lines.push(
-      ...comparison.renameSources
-        .slice(0, 20)
-        .map(
-          (source) =>
-            `- ${formatTerminalValue(source.path)} <- ${formatTerminalValue(source.sourcePath)}: ${source.suppressedExistingSecrets} suppressed.`
-        )
-    );
-  }
-  if (result.policyEvaluation) {
-    const evaluation = result.policyEvaluation;
-    lines.push(`Policy ${formatTerminalValue(evaluation.profile)}: ${evaluation.failed ? "failed" : "passed"}.`);
-    lines.push(`New secret findings: ${evaluation.newSecretCount}.`);
-    if (evaluation.profile === "complete-review" || evaluation.severityRiskCount !== undefined) {
-      lines.push(`Skipped staged content: ${evaluation.skippedStagedFiles} file(s).`);
-      lines.push(`Skipped baseline content: ${evaluation.skippedBaselineFiles} file(s).`);
-    }
-    if (evaluation.severityRiskCount !== undefined) {
-      lines.push(`Risk findings matching the policy threshold/categories: ${evaluation.severityRiskCount}.`);
-    }
-  }
-  if (result.findings.length > 0) {
-    lines.push("");
-    lines.push(...result.findings.map(renderAnalysisFinding));
-  }
-  return lines.join("\n");
-}
-
-function renderAnalysisFinding(finding: AnalysisFinding): string {
-  const line = finding.line === undefined ? "" : `:${finding.line}`;
-  return `[${finding.severity}] ${formatTerminalValue(finding.path)}${line} — ${formatTerminalValue(finding.category)}: ${formatTerminalValue(finding.reason)}`;
-}
-
-function toSarif(result: WatcherlessAnalysisResult): Record<string, unknown> {
+function buildSessionFilters(options: SessionFilterOptions) {
   return {
-    version: "2.1.0",
-    $schema: "https://json.schemastore.org/sarif-2.1.0.json",
-    runs: [
-      {
-        ...(result.coverage || result.baselineComparison || result.policyEvaluation
-          ? {
-              properties: {
-                ...(result.coverage ? { analysisCoverage: result.coverage } : {}),
-                ...(result.baselineComparison ? { analysisBaselineComparison: result.baselineComparison } : {}),
-                ...(result.policyEvaluation ? { analysisPolicy: result.policyEvaluation } : {}),
-              },
-            }
-          : {}),
-        tool: {
-          driver: {
-            name: "Agent Black Box",
-            informationUri: "https://github.com/IACBI/agent-black-box",
-            rules: [...new Set(result.findings.map((finding) => `${finding.kind}:${finding.category}`))].map((id) => ({
-              id,
-            })),
-          },
-        },
-        results: result.findings.map((finding) => ({
-          ruleId: `${finding.kind}:${finding.category}`,
-          level: finding.severity === "high" ? "error" : finding.severity === "medium" ? "warning" : "note",
-          message: { text: finding.reason },
-          locations: [
-            {
-              physicalLocation: {
-                artifactLocation: { uri: finding.path.split("/").map(encodeURIComponent).join("/") },
-                ...(finding.line === undefined ? {} : { region: { startLine: finding.line } }),
-              },
-            },
-          ],
-        })),
-      },
-    ],
+    state: parseSessionState(options.state),
+    since: options.since,
+    minSeverity: parseRiskSeverity(options.minSeverity),
+    file: options.file,
+    command: options.command,
+    category: options.category,
   };
 }
 
-function meetsSeverityThreshold(
-  actual: WatcherlessAnalysisResult["summary"]["maxSeverity"],
-  threshold: string
-): boolean {
-  const severityOrder = { none: 0, low: 1, medium: 2, high: 3 };
-  return severityOrder[actual] >= severityOrder[threshold as keyof typeof severityOrder];
+function buildRiskFilter(options: { minSeverity?: string; category?: string }) {
+  return {
+    minSeverity: parseRiskSeverity(options.minSeverity),
+    ...(options.category ? { category: options.category } : {}),
+  };
+}
+
+function resolveRetentionSelection(
+  options: { before?: string; keep?: string },
+  config: AgentBlackBoxConfig
+): { before: string; keep: number } {
+  const before = options.before ?? (config.retention?.days && retentionDateForDays(config.retention.days));
+  if (!before) {
+    throw new Error("--before is required unless retention.days is configured.");
+  }
+  return { before, keep: parseSessionListLimit(options.keep, "--keep") ?? config.retention?.keep ?? 1 };
+}
+
+async function confirmTyped(expected: string, question: string, notInteractiveMessage: string): Promise<boolean> {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    throw new Error(notInteractiveMessage);
+  }
+  const prompt = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return (await prompt.question(question)) === expected;
+  } finally {
+    prompt.close();
+  }
 }
 
 program.parseAsync(process.argv).catch((error: unknown) => {
-  console.error(escapeTerminalControls(String((error as Error).message)));
+  console.error(escapeTerminalControls(error instanceof Error ? error.message : String(error)));
   process.exitCode = 1;
 });

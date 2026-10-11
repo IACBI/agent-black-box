@@ -5,7 +5,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { analyzeChangedFiles } from "../src/analyze/analyzer.js";
 import { DEFAULT_CONFIG } from "../src/config/defaults.js";
-import { buildSessionReport } from "../src/reports/markdown.js";
+import { buildSessionReport, generateTimelineMarkdown } from "../src/reports/markdown.js";
 import { writeReports } from "../src/reports/reportWriter.js";
 import { listSessionCatalog, readCatalogSessionReport } from "../src/session/sessionCatalog.js";
 import { digestNdjsonRecords, isCapturedFileEvent } from "../src/session/ndjson.js";
@@ -151,6 +151,33 @@ try {
   if (analysisDuration > 30_000) {
     throw new Error(`Large-repository analysis budget exceeded: ${Math.round(analysisDuration)}ms > 30000ms.`);
   }
+  // Every tenth path carries Markdown and terminal-control characters so escaping stays on the measured path.
+  const timelineEvents = result.records.map((event, index) =>
+    index % 10 === 0 ? { ...event, path: `docs/odd|name_[${index}]\`*\u001b[31m.md` } : event
+  );
+  const timelineReport = buildSessionReport(
+    { id: "session-timeline", repoRoot: temporaryDirectory, sessionDir, startedAt: sessionStartedAt },
+    "2026-01-01T00:01:00.000Z",
+    "benchmark",
+    timelineEvents,
+    [],
+    { repoRoot: temporaryDirectory, statusText: "", diffSummaryText: "", changedFiles: [] },
+    [],
+    []
+  );
+  const timelineStarted = performance.now();
+  const timelineMarkdown = generateTimelineMarkdown(timelineReport);
+  const timelineDuration = performance.now() - timelineStarted;
+  if (timelineMarkdown.split("\n- ").length - 1 < timelineEvents.length * 2) {
+    throw new Error("Timeline Markdown omitted file events.");
+  }
+  if (timelineMarkdown.includes("\u001b")) {
+    throw new Error("Timeline Markdown leaked a terminal control character.");
+  }
+  if (timelineDuration > 30_000) {
+    throw new Error(`Timeline Markdown budget exceeded: ${Math.round(timelineDuration)}ms > 30000ms.`);
+  }
+
   const adversarialCharacters = 256 * 1024;
   const adversarialStarted = performance.now();
   const adversarial = analyzeChangedFiles([
@@ -190,6 +217,12 @@ try {
             durationMs: Math.round(fallbackDuration),
           },
           { scenario: "analyze-changed-files", files: analysisFiles.length, durationMs: Math.round(analysisDuration) },
+          {
+            scenario: "timeline-markdown",
+            events: timelineEvents.length,
+            outputMb: Math.round((timelineMarkdown.length / 1024 / 1024) * 10) / 10,
+            durationMs: Math.round(timelineDuration),
+          },
           {
             scenario: "budgeted-session-verification",
             events: reportEvents.length,

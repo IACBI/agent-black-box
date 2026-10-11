@@ -32,6 +32,8 @@ abb doctor
 | `retention.days`, `retention.keep` | Optional integers from 1 to 100000                                               |
 | `retention.archiveDir`             | Optional trusted local archive destination                                       |
 | `analysisPolicies`                 | Optional named staged CI policies; selected explicitly with `analyze --policy`   |
+| `secretPatterns`                   | Optional extra secret patterns; see [Custom secret rules](#custom-secret-rules)  |
+| `secretAllowlist`                  | Optional documented exceptions; see [Custom secret rules](#custom-secret-rules)  |
 
 Non-empty custom `exclude` and `riskPatterns` arrays replace defaults; empty arrays fall back to defaults. See [default risk patterns](https://github.com/IACBI/agent-black-box/blob/main/src/config/defaults.ts). Matching is case-insensitive and uses path components/segments, not glob expressions. If you move storage to another repository directory, add its parent to `exclude` to avoid recording its output.
 
@@ -48,6 +50,32 @@ abb --allow-external-session-dir start
 ```
 
 The override is not saved in configuration. UNC/network storage is rejected.
+
+### Custom secret rules
+
+Both detectors (recorded sessions and `analyze`) and command redaction read two optional keys:
+
+```json
+{
+  "secretPatterns": [
+    { "name": "Internal service token", "pattern": "corp_[a-z0-9]{16}" },
+    { "name": "Legacy token", "pattern": "legacy-[a-z]{6}", "ignoreCase": true }
+  ],
+  "secretAllowlist": [
+    { "path": "tests/fixtures", "reason": "synthetic credentials used by the test suite" },
+    { "contains": "AKIAIOSFODNN7EXAMPLE", "reason": "the documented AWS example key" },
+    { "path": "docs", "contains": "sk-example-only", "reason": "placeholder in the guide" }
+  ]
+}
+```
+
+**Patterns** are JavaScript regular expressions matched against one line at a time (only the first 4,096 characters of a line). A match is reported as `Possible <name> detected.` without the matched text, and the same expression redacts matches from recorded commands, labels, groups, and phases. Up to 32 patterns of at most 256 characters are accepted. A pattern is refused when it is not a valid expression, matches the empty string, uses a backreference, or nests a quantifier inside a quantified group such as `(a+)+`. That last check is a best-effort screen against catastrophic backtracking, not a proof, so keep patterns simple and anchored by a literal prefix.
+
+**Allowlist** entries hide findings with a recorded reason. An entry needs `path`, `contains`, or both, and always a `reason`. `path` uses the same case-insensitive path and segment matching as `exclude`; `contains` is literal text the line must include (8 to 256 characters, so a short value cannot allow far too much). When both are present, both must match. Never put a real secret in `contains`: the file is normally committed. Up to 256 entries are accepted.
+
+Hidden findings are not silent. `analyze` JSON and SARIF carry `secretAllowlist.suppressedFindings` (the text output prints it), and a recorded session shows "Possible secrets hidden by the configured allowlist" in `summary.md` and `risks.md` and `riskSummary.allowlistedSecretCount` in `session.json`. The allowlist only affects possible-secret findings; metadata risks such as a changed `.env` file are unchanged, and baseline comparison applies the same rules to both sides.
+
+An invalid rule is a configuration error: `abb config validate` reports it and commands that load the configuration stop, rather than scanning without the rule.
 
 ## Record and finalize
 
@@ -70,11 +98,13 @@ abb risks
 
 A session stores the starting Git baseline, so an understood dirty worktree is supported and existing changes are marked as pre-existing. Session IDs are opaque; obtain them from history rather than constructing timestamp-based IDs.
 
+The starting Git baseline is limited to 32 MiB of serialized UTF-8 JSON. An oversized baseline prevents session creation before ownership state is published; stored baselines exceeding this limit are reported as unavailable evidence.
+
 `run` accepts `--cwd`, `--label`, `--group`, and `--phase`. Pass executable arguments after `--`; native executables run without a shell. The working directory must remain physically inside the repository, including through symlinks/junctions. Standard input/output are inherited, not stored. The child exit code is propagated; startup failure returns 1 and is recorded. Durations use a monotonic clock; timestamps use system time.
 
 On Windows, `.cmd`/`.bat` scripts run through a `cmd.exe` wrapper. Batch arguments containing percent signs, line breaks, or NUL are rejected. Bare command names, native or script, resolve through absolute PATH entries in PATHEXT order (`.COM`, `.EXE`, `.BAT`, `.CMD` as ordered there). Executables and scripts in the current or repository directory are never picked up implicitly, and an unresolved name is recorded as `ENOENT`; pass an explicit path such as `abb run -- .\scripts\task.bat` for repository files. Compound shell syntax is not interpreted for native executables.
 
-Command metadata is redacted before writing. Supported forms include sensitive assignments/flags, headers, JSON arguments with sensitive keys, URL credentials, and sensitive query parameters. Labels, groups, and phases receive the same best-effort redaction. Arbitrary command syntax is not guaranteed secret-free.
+Command metadata is redacted before writing. Supported forms include sensitive assignments/flags (including `passphrase`, `pwd`, and `credential` names), headers, JSON arguments with sensitive keys, URL credentials in any scheme such as `postgres://user:password@host` (only the password is hidden for non-HTTP schemes, so `ssh://git@host` stays readable), and sensitive query parameters. Arguments that are scripts (`sh -c "export TOKEN=..."`) are scanned for assignments, headers, and `--password value` flags. Short credential flags are recognised per tool: `curl -u/--user`, `mysql`/`mysqldump`/`mysqladmin`/`mariadb -pSECRET`, `redis-cli -a`, `sshpass -p`, and `docker`/`podman login -p`. Provider token shapes (AWS, GitHub, Slack, Stripe, Google, LLM API keys, JWTs) are hidden wherever they appear, and your own `secretPatterns` apply too. Labels, groups, and phases receive the same best-effort redaction. Arbitrary command syntax is not guaranteed secret-free.
 
 `stop` verifies active state and lock ownership, requests finalization, and waits for the watcher. In-flight recorded commands delay finalization. After roughly ten seconds the CLI can report that finalization is pending; the watcher continues. Use `status` to check progress.
 
@@ -93,15 +123,20 @@ abb analyze --format sarif --fail-on high
 abb analyze --staged --baseline HEAD --policy complete-review --format sarif
 ```
 
-| Option                 | Behavior                                                            |
-| ---------------------- | ------------------------------------------------------------------- |
-| `--format <format>`    | `text` (default), `json`, or `sarif`                                |
-| `--staged`             | Read index blobs instead of working-tree content                    |
-| `--baseline <ref>`     | With `--staged`, compare against a resolved Git commit              |
-| `--fail-on <severity>` | Exit 1 for a finding at or above `low`, `medium`, or `high`         |
-| `--policy <profile>`   | Built-in or configured named policy; requires `--staged --baseline` |
+| Option                 | Behavior                                                                                   |
+| ---------------------- | ------------------------------------------------------------------------------------------ |
+| `--format <format>`    | `text` (default), `json`, or `sarif`                                                       |
+| `--staged`             | Read index blobs instead of working-tree content                                           |
+| `--baseline <ref>`     | With `--staged`, compare against a resolved Git commit                                     |
+| `--initial`            | With `--staged` and no HEAD commit, treat all staged content as new; excludes `--baseline` |
+| `--fail-on <severity>` | Exit 1 for a finding at or above `low`, `medium`, or `high`                                |
+| `--policy <profile>`   | Built-in or configured named policy; requires `--staged` with `--baseline` or `--initial`  |
 
 Baseline comparison suppresses identical existing secret-like lines up to their baseline occurrence count. Git-verified renames can use the previous path as the baseline. Metadata risks remain visible; excluded baseline paths and unverified rename relationships do not suppress content findings.
+
+Text findings show a verified rename's baseline source path; SARIF findings carry it in `result.properties.baselineSourcePath`, while their primary location remains the staged destination. JSON retains the existing `baselineComparison.renameSources` contract.
+
+For a repository's first commit, use `abb analyze --staged --initial --policy complete-review`. `--initial` requires an unborn HEAD, treats every staged finding as new, and applies staged coverage gates without manufacturing a baseline. JSON includes `initialCommitAnalysis: true`; SARIF includes it in run properties. Repositories with a HEAD commit must use `--baseline`.
 
 `new-secrets` fails on newly detected possible secrets. `complete-review` also fails when non-deleted staged content or needed baseline content could not be scanned. Combining `--fail-on` and a policy fails when either condition applies. Operational errors return 1; findings alone do not fail the command without a threshold/policy.
 
@@ -127,43 +162,70 @@ abb analyze --staged --baseline HEAD --policy ci-review --format sarif
 
 Profiles default to `failOnNewSecrets: true` and `requireCompleteCoverage: false`. Setting `failOnNewSecrets: false` explicitly disables the secret gate for that profile. `minSeverity` optionally gates metadata-risk findings; `categories` narrows only that gate using exact, case-insensitive category names and requires `minSeverity`. Secret and coverage gates remain independent. Filtering a gate does not remove findings from the report. JSON/SARIF include `severityRiskCount` for custom profiles; built-in result shapes and behavior remain unchanged.
 
-At most 32 profiles are allowed; names match `[a-z][a-z0-9-]{0,63}`. Built-in names cannot be overridden, unknown fields/names fail validation, and category lists contain 1–32 non-empty strings of at most 128 characters. Policies never run automatically; choose one explicitly. The same staged/index and baseline requirements apply to every profile.
+At most 32 profiles are allowed; names match `[a-z][a-z0-9-]{0,63}`. Built-in names cannot be overridden, unknown fields/names fail validation, and category lists contain 1–32 non-empty strings of at most 128 characters. Policies never run automatically; choose one explicitly. The same staged/index and baseline-or-initial requirements apply to every profile.
 
-To block risky commits locally, call the same policy from `.git/hooks/pre-commit` (make it executable and keep `abb` on PATH). The first commit has no baseline commit, so it uses a severity threshold instead:
+### Git pre-commit hook
+
+`abb hook install` writes a managed `pre-commit` hook that blocks a commit when staged content fails a policy:
 
 ```sh
-#!/bin/sh
-if git rev-parse --verify --quiet HEAD >/dev/null; then
-  exec abb analyze --staged --baseline HEAD --policy new-secrets
-fi
-exec abb analyze --staged --fail-on high
+abb hook install                   # policy new-secrets
+abb hook install --policy ci-review # a named policy from analysisPolicies
+abb hook install --policy ci-review --first-commit policy
+abb --allow-external-session-dir hook install # authorize trusted local external storage for this hook
+abb hook status
+abb hook uninstall
 ```
+
+The hook runs `abb analyze --staged --baseline HEAD --policy <policy>`. The first commit of a repository has no baseline commit, so it runs `abb analyze --staged --fail-on high` instead. Custom patterns and the allowlist from `.agentblackbox.json` apply, so a documented exception lets a commit through.
+
+`--first-commit high` is the default and preserves that fallback. Choose `--first-commit policy` to run `abb analyze --staged --initial --policy <policy>` for the first commit as well. A configured policy can explicitly disable its secret gate, so choose its gates deliberately. Both opt-ins are shown by `hook status`; reinstalling without them returns to the default script.
+
+- **Fail-open.** If `abb` is not on PATH (a GUI Git client, a fresh clone, another Node setup) the hook prints a notice and lets the commit proceed. Treat CI as the enforcement point and the hook as a convenience.
+- **Foreign hooks are protected.** The hook is recognised by a marker line. `install` refuses to replace a `pre-commit` file that it did not write; `--force` backs it up to `pre-commit.pre-abb` first (and refuses if that backup already exists). `uninstall` removes only a managed hook and restores `pre-commit.pre-abb` when it exists; any other hook is left alone and the command exits 1.
+- **Reinstalling is safe.** An identical hook reports "already up to date"; a different policy updates it. `status` reports `absent`, `managed`, `managed-outdated` (re-run `install`), or `foreign`. On POSIX, missing execute permission also marks a managed hook as outdated, and reinstalling repairs it.
+- **Where it writes.** `core.hooksPath` and linked worktrees are honoured. The hooks directory must be inside the repository (or its Git directory): a shared global `core.hooksPath` is refused, because installing there would change every repository that uses it. A symbolic-link `pre-commit` is never written through.
+- **Configuration and policy are checked before installation.** Policy names match `[a-z][a-z0-9-]{0,63}` and must select a built-in or configured profile. Invalid configuration or an unknown policy leaves existing hooks and backups unchanged. External session storage is refused unless installation explicitly uses the global `--allow-external-session-dir` option. The generated hook then retains that fixed flag for future runs; network and UNC storage remain blocked. Only authorize storage configured by a repository you trust.
+
+The generated script is POSIX `sh`; Git for Windows runs hooks with its bundled shell, so it works on Windows too.
 
 Worktree, staged, and baseline CLI reads are capped at the smaller of `maxFileSizeKb` and 256 KiB. Deleted, binary, oversized, unsafe, or unavailable content is reported as skipped. Text summarizes coverage; JSON and SARIF retain structured coverage, policy, and rename-comparison details. Findings contain locations and fixed descriptions, not matched values.
 
-Recorded-session detection and `analyze` use different heuristics. For example, recording can flag an environment-variable password assignment that analysis excludes, while analysis recognizes some token/private-key forms absent from the recording detector. Neither is a comprehensive security scanner.
+Recorded-session detection and `analyze` use different heuristics. For example, recording can flag an environment-variable password assignment that analysis excludes, while analysis recognizes some token forms (such as `github_pat_`) that recording does not. Both recognise private-key headers, and both apply your `secretPatterns` and `secretAllowlist`. Neither is a comprehensive security scanner.
 
 ## Read and export reports
 
 All commands below accept `--session <id>`: full ID, unique prefix, or `latest` (default).
 
-| Command        | Result / additional options                                                                                       |
-| -------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `abb report`   | Full stored session JSON                                                                                          |
-| `abb summary`  | Review summary                                                                                                    |
-| `abb commands` | Recorded command metadata                                                                                         |
-| `abb timeline` | File events and commands                                                                                          |
-| `abb risks`    | Risk report; `--min-severity low\|medium\|high`, `--category <category>`, `--json`                                |
-| `abb rollback` | Advisory restore plan; interactive options below                                                                  |
-| `abb export`   | Bundled Markdown (default) or full JSON via `--format markdown\|json`; `--output <path>`, `--force`, risk filters |
+| Command          | Result / additional options                                                                                                      |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `abb report`     | Full stored session JSON                                                                                                         |
+| `abb summary`    | Review summary                                                                                                                   |
+| `abb commands`   | Recorded command metadata                                                                                                        |
+| `abb timeline`   | File events and commands                                                                                                         |
+| `abb risks`      | Risk report; `--min-severity low\|medium\|high`, `--category <category>`, `--json`                                               |
+| `abb rollback`   | Advisory restore plan; interactive options below                                                                                 |
+| `abb export`     | Bundled Markdown (default), full JSON, or SARIF via `--format markdown\|json\|sarif`; `--output <path>`, `--force`, risk filters |
+| `abb pr-comment` | Compact Markdown for a pull request comment; `--output <path>`, `--force`                                                        |
 
-Risk category filtering matches an exact category case-insensitively. Severity/category filters narrow risk findings, not overall summaries or the separate possible-secret list. Export filters apply only to the Markdown risk section; JSON remains a full report.
+Risk category filtering matches an exact category case-insensitively. Severity/category filters narrow risk findings, not overall summaries or the separate possible-secret list. Export risk filters apply to the Markdown risk section and to the risk results of a SARIF export, never to possible secrets; JSON remains a full report.
 
 ```sh
 abb risks --session latest --min-severity high --json
 abb export --session latest --output review.md
 abb export --format json --output review.json
 ```
+
+### Pull request comments and SARIF export
+
+`abb pr-comment` prints a compact, GitHub-flavoured Markdown summary of one session: a verdict line, the highest-severity risks, possible-secret locations (never values), recorded commands with exit codes, and any capture-loss or integrity warnings, so a reviewer sees when the recording was incomplete. It starts with the marker `<!-- agent-black-box:session-summary -->` so tooling can find and update its own comment, and it is capped below GitHub's 65,536-character limit (cut at a line boundary with a visible notice). Repository text is escaped, bidirectional and zero-width characters are made visible, and `@` mentions are defused. Nothing is sent anywhere; posting is your command:
+
+```sh
+abb pr-comment | gh pr comment --body-file -
+abb pr-comment --output comment.md
+```
+
+`abb export --format sarif` writes a SARIF 2.1.0 log of one session for code-scanning tools: risks become `session-risk:<category>` results, possible secrets become `possible-secret` results at their line, results carry a stable fingerprint, and run properties include the session ID, the risk summary, and capture warnings. Matched values never appear.
 
 Exports write to stdout unless `--output` is supplied. Existing destinations require `--force`, which atomically replaces the destination file; a destination leaf symlink is replaced rather than writing through to its target. File formats, evidence fields, integrity verification, and storage limits are defined in [Reports](REPORTS.md).
 
@@ -190,6 +252,16 @@ abb sessions compare <from> <to> --json
 
 `show` and `compare` accept full IDs, unique prefixes, or `latest`; both support `--json`. Comparison summarizes path, risk, command-frequency, and HEAD differences. Content history filters use a bounded metadata search index, with validated-report fallback for older sessions.
 
+`list`, `browse`, `show` and `compare` accept optional `--memory-budget-mb <8–4096>`. History uses one read worker, reserves the verification stream buffers described below, and allocates half the remaining budget to encoded JSON inputs and their buffered copies. Budgeted content searches read one index or fallback report at a time; full replay-backed reads share the input quota between stored JSON and replay metadata, validate the exact parsed bytes and records, and stream log digests.
+
+```sh
+abb sessions list --file src/auth --memory-budget-mb 64 --json
+abb sessions show latest --memory-budget-mb 64 --json
+abb sessions compare <from> <to> --memory-budget-mb 128 --json
+```
+
+A quota refusal fails visibly and leaves evidence intact. Plain listings may show a complete session with metadata unavailable and a warning; they never substitute zero counts or a guessed `latest` marker. Metadata-dependent filters and limits refuse ambiguous results. Browser selections that exceed the quota display the refusal and let you continue or quit; corruption still fails. Increase the budget to inspect that report. These are encoded-input limits, not a heap/RSS cap: parsed reports retained for comparison, catalog/results, decoded strings and V8 overhead remain outside the quota. Defaults are unchanged without the option.
+
 To check that stored sessions are intact without changing them, use `abb sessions verify [session]`. It validates each completed report with the same checks used before pruning, notes missing derived Markdown reports, skips incomplete sessions, and exits 1 if any report fails. `--json` prints the structured result.
 
 ```sh
@@ -209,7 +281,7 @@ abb sessions prune --before 2026-01-01 --keep 2
 
 These commands preview completed sessions started before the UTC cutoff (exclusive). Use `--before` or configure `retention.days`; `--keep` defaults to `retention.keep` or 1. Both require `--apply`, an interactive terminal, and typed confirmation to execute. Incomplete/corrupt sessions are excluded and active state, links, and the preview are rechecked before mutation.
 
-Archive requires `--to` or `retention.archiveDir`, outside the session root. It verifies copied files with checksums, never overwrites an existing session ID, and writes `.abb-archive-complete.json` only after verification. Originals remain in place. Prune validates full replay-record integrity before deletion. An interrupted prune can leave `.pruning-*` under the session root; an interrupted archive can lack its completion marker. Inspect these remnants before removing them.
+Archive requires `--to` or `retention.archiveDir`, outside the session root. A destination read from the configuration must stay physically inside the repository (links included), because a cloned repository could otherwise point `--apply` anywhere you can write; pass `--to` to choose an external destination yourself. It verifies copied files with checksums, never overwrites an existing session ID, and writes `.abb-archive-complete.json` only after verification. Originals remain in place. Prune validates full replay-record integrity before deletion. An interrupted prune can leave `.pruning-*` under the session root; an interrupted archive can lack its completion marker. Inspect these remnants before removing them.
 
 ## Troubleshooting
 

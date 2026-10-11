@@ -1,5 +1,6 @@
+// Bidirectional marks and overrides can reorder displayed text, so a filename can read as a different path.
 // eslint-disable-next-line no-control-regex -- Identify terminal controls before displaying untrusted values.
-const CONTROL_PATTERN = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
+const CONTROL_PATTERN = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/;
 const CONTROL_CHARACTERS = new RegExp(CONTROL_PATTERN.source, "g");
 
 /** Keep unusual values distinct from literal escape text, without emitting terminal controls. */
