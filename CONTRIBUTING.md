@@ -27,6 +27,8 @@ Review major dependency updates against the supported Node.js baseline. Report v
 
 Update `package.json`, the CLI version in `src/cli.ts`, and the exact `## X.Y.Z` heading in `CHANGELOG.md` together. Tag as `vX.Y.Z`. During `0.x`, use patches for fixes and minors for features or compatibility changes; after `1.0`, breaking changes require a major release.
 
+For release 0.8.4, the maintainer explicitly selected the next patch version for the accumulated hardening and optional features. This exception to the 0.x feature/minor convention applies only to 0.8.4.
+
 Run preflight with the intended tag. In Bash:
 
 ```sh
