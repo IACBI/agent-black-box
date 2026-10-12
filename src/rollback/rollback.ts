@@ -202,15 +202,18 @@ async function inspectRollbackFile(repoRoot: string, filePath: string): Promise<
     }
     const hash = createHash("sha256");
     const buffer = Buffer.allocUnsafe(64 * 1024);
-    while (true) {
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
+    let bytesReadTotal = 0;
+    // Hash the opened snapshot only; a growing file must not extend inspection indefinitely.
+    while (bytesReadTotal < opened.size) {
+      const { bytesRead } = await handle.read(buffer, 0, Math.min(buffer.length, opened.size - bytesReadTotal), null);
       if (bytesRead === 0) {
         break;
       }
+      bytesReadTotal += bytesRead;
       hash.update(buffer.subarray(0, bytesRead));
     }
     const completed = await handle.stat();
-    if (completed.size !== opened.size || completed.mtimeMs !== opened.mtimeMs) {
+    if (bytesReadTotal !== opened.size || completed.size !== opened.size || completed.mtimeMs !== opened.mtimeMs) {
       throw new Error(`Rollback path ${filePath} changed during inspection.`);
     }
     return {

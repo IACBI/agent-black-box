@@ -9,13 +9,14 @@ import {
   listSessionCatalog,
   parseSessionReport,
   readCatalogSessionReport,
+  readVerifiedCatalogSessionReportCore,
   resolveSessionEntry,
   SESSION_METADATA_FILE,
   verifyCatalogSessionReportFile,
 } from "../src/session/sessionCatalog.js";
 import { writeJsonFile } from "../src/utils/files.js";
 import * as files from "../src/utils/files.js";
-import { INLINE_REPORT_BYTES, REPORT_REPLAY_FILE } from "../src/session/reportStorage.js";
+import { digestRecords, INLINE_REPORT_BYTES, REPORT_REPLAY_FILE } from "../src/session/reportStorage.js";
 import { createTempDir, removeTempDir } from "./testUtils.js";
 
 describe("session catalog", () => {
@@ -280,6 +281,54 @@ describe("session catalog", () => {
     }
   );
 
+  it.each([
+    null,
+    {},
+    [{ path: "config/.env", line: 1, reason: "Possible secret", redacted: 42 }],
+    [{ path: "config/.env", line: 0, reason: "Possible secret", redacted: "<redacted>" }],
+    [{ path: "config/.env", line: -1, reason: "Possible secret", redacted: "<redacted>" }],
+    [{ path: "config/.env", line: Number.MAX_SAFE_INTEGER + 1, reason: "Possible secret", redacted: "<redacted>" }],
+  ])("refuses malformed stored secret findings %j without removing evidence", async (possibleSecrets) => {
+    const repo = await createTempDir("abb-catalog-secrets-");
+    try {
+      const id = "session-invalid-secrets";
+      const sessionDir = path.join(repo, DEFAULT_CONFIG.sessionDir, id);
+      const report = makeReport(repo, sessionDir, id, "2026-01-05T00:00:00.000Z");
+      const stored = { ...report, possibleSecrets };
+      await expectCorruptReport(repo, id, stored);
+      await expect(verifyCatalogSessionReportFile({ id, sessionDir, state: "complete" })).rejects.toThrow(
+        "invalid session.json"
+      );
+      expect(JSON.parse(await readFile(path.join(sessionDir, "session.json"), "utf8"))).toEqual(stored);
+    } finally {
+      await removeTempDir(repo);
+    }
+  });
+
+  it("preserves valid secret locations and supports legacy reports without a secret field", async () => {
+    const repo = await createTempDir("abb-catalog-legacy-secrets-");
+    try {
+      const id = "session-legacy-secrets";
+      const sessionDir = path.join(repo, DEFAULT_CONFIG.sessionDir, id);
+      const report = makeReport(repo, sessionDir, id, "2026-01-05T00:00:00.000Z");
+      report.possibleSecrets = [{ path: "config/.env", line: 1, reason: "Possible secret", redacted: "<redacted>" }];
+      await mkdir(sessionDir, { recursive: true });
+      const reportPath = path.join(sessionDir, "session.json");
+      await writeJsonFile(reportPath, report);
+      const entry = { id, sessionDir, state: "complete" as const };
+      expect((await readCatalogSessionReport(entry)).possibleSecrets).toEqual(report.possibleSecrets);
+      await expect(verifyCatalogSessionReportFile(entry)).resolves.toBeUndefined();
+
+      const legacy = JSON.parse(JSON.stringify(report)) as Record<string, unknown>;
+      delete legacy.possibleSecrets;
+      await writeJsonFile(reportPath, legacy);
+      expect((await readCatalogSessionReport(entry)).possibleSecrets).toEqual([]);
+      await expect(verifyCatalogSessionReportFile(entry)).resolves.toBeUndefined();
+    } finally {
+      await removeTempDir(repo);
+    }
+  });
+
   it("derives invalid enum-valued metadata and risk summaries from the valid report", async () => {
     const repo = await createTempDir("abb-catalog-");
     try {
@@ -368,6 +417,24 @@ describe("session catalog", () => {
       );
       const budgeted = await readCatalogSessionReport(entry, { maxMaterializedBytes: materializedBytes });
       expect(budgeted).toEqual(reopened);
+      const verifiedCore = await readVerifiedCatalogSessionReportCore(entry, { maxMaterializedBytes: 1024 * 1024 });
+      expect(verifiedCore).toEqual({
+        report: { ...reopened, events: [], commands: [] },
+        eventCount: 1_200,
+        commandCount: 0,
+        commandDigest: digestRecords([]),
+      });
+      const replayBytes = (await stat(path.join(sessionDir, REPORT_REPLAY_FILE))).size;
+      await expect(verifyCatalogSessionReportFile(entry, { maxMaterializedBytes: replayBytes })).rejects.toThrow(
+        "working-data policy"
+      );
+      const coreBytes = Buffer.byteLength(`${JSON.stringify({ ...report, events: [], commands: [] }, null, 2)}\n`);
+      await expect(
+        verifyCatalogSessionReportFile(entry, { maxMaterializedBytes: replayBytes + coreBytes + 64 * 1024 })
+      ).resolves.toBeUndefined();
+      await expect(
+        verifyCatalogSessionReportFile(entry, { maxMaterializedBytes: replayBytes + coreBytes - 1 })
+      ).rejects.toThrow("working-data policy");
 
       const handle = await open(eventPath, "r+");
       const eventOffset = Buffer.byteLength(invalidEvent) + 1 + JSON.stringify(event).indexOf("src/") + 4;
@@ -376,6 +443,28 @@ describe("session catalog", () => {
         await expect(readCatalogSessionReport(entry, { maxMaterializedBytes: materializedBytes })).rejects.toThrow(
           "event logs no longer match"
         );
+        const replayPath = path.join(sessionDir, REPORT_REPLAY_FILE);
+        const originalReplay = await readFile(replayPath, "utf8");
+        const pairedTamper = JSON.parse(originalReplay) as { eventsDigest: string };
+        pairedTamper.eventsDigest = digestRecords([
+          { ...event, path: `src/y${event.path.slice(5)}` },
+          ...report.events.slice(1),
+        ]);
+        await writeJsonFile(replayPath, pairedTamper);
+        try {
+          await expect(readCatalogSessionReport(entry)).rejects.toThrow("records no longer match replay metadata");
+          await expect(verifyCatalogSessionReportFile(entry, { verifyEventLogs: true })).rejects.toThrow(
+            "records no longer match replay metadata"
+          );
+          await expect(readVerifiedCatalogSessionReportCore(entry)).rejects.toThrow(
+            "records no longer match replay metadata"
+          );
+          await expect(readCatalogSessionReport(entry, { maxMaterializedBytes: materializedBytes })).rejects.toThrow(
+            "records no longer match replay metadata"
+          );
+        } finally {
+          await writeFile(replayPath, originalReplay);
+        }
       } finally {
         await handle.write(Buffer.from("x"), 0, 1, eventOffset);
         await handle.close();
@@ -386,9 +475,43 @@ describe("session catalog", () => {
       alteredReplay.report.finalizedBy = "altered";
       await writeJsonFile(path.join(sessionDir, REPORT_REPLAY_FILE), alteredReplay);
       try {
+        await expect(readCatalogSessionReport(entry)).rejects.toThrow("records no longer match replay metadata");
+        await expect(verifyCatalogSessionReportFile(entry)).rejects.toThrow("records no longer match replay metadata");
+        await expect(readVerifiedCatalogSessionReportCore(entry)).rejects.toThrow(
+          "records no longer match replay metadata"
+        );
+        const metadataPath = path.join(sessionDir, SESSION_METADATA_FILE);
+        const metadataContents = await readFile(metadataPath);
+        await rm(metadataPath);
+        try {
+          expect((await listSessionCatalog(repo, DEFAULT_CONFIG))[0]).toMatchObject({
+            state: "corrupt",
+            warning: expect.stringContaining("records no longer match replay metadata"),
+          });
+        } finally {
+          await writeFile(metadataPath, metadataContents);
+        }
         await expect(
           readCatalogSessionReport(entry, { maxMaterializedBytes: materializedBytes + 1024 })
         ).rejects.toThrow("records no longer match replay metadata");
+      } finally {
+        await writeFile(path.join(sessionDir, REPORT_REPLAY_FILE), initialReplay);
+      }
+
+      const reorderedReplay = JSON.parse(initialReplay) as { report: Record<string, unknown> };
+      reorderedReplay.report = Object.fromEntries(Object.entries(reorderedReplay.report).reverse());
+      await writeJsonFile(path.join(sessionDir, REPORT_REPLAY_FILE), reorderedReplay);
+      try {
+        await expect(verifyCatalogSessionReportFile(entry)).resolves.toBeUndefined();
+      } finally {
+        await writeFile(path.join(sessionDir, REPORT_REPLAY_FILE), initialReplay);
+      }
+
+      const unknownFieldReplay = JSON.parse(initialReplay) as { report: Record<string, unknown> };
+      unknownFieldReplay.report.extra = { retained: true };
+      await writeJsonFile(path.join(sessionDir, REPORT_REPLAY_FILE), unknownFieldReplay);
+      try {
+        await expect(verifyCatalogSessionReportFile(entry)).rejects.toThrow("records no longer match replay metadata");
       } finally {
         await writeFile(path.join(sessionDir, REPORT_REPLAY_FILE), initialReplay);
       }

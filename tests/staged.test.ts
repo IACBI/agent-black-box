@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import { analyzeChangedFiles } from "../src/analyze/analyzer.js";
 import { compareAnalysisWithBaseline } from "../src/analyze/baseline.js";
 import { evaluateAnalysisPolicy } from "../src/analyze/policy.js";
+import { createAnalysisContentBudget } from "../src/analyze/limits.js";
+import { summarizeAnalysisCoverage } from "../src/analyze/worktree.js";
 import {
   collectBaselineAnalysisInputFiles,
   collectStagedAnalysisInputFiles,
@@ -14,6 +16,81 @@ import { DEFAULT_CONFIG } from "../src/config/defaults.js";
 import { createTempDir, initGitRepo, removeTempDir } from "./testUtils.js";
 
 describe("staged analysis", () => {
+  it("shares an encoded-content budget across staged and baseline input without allowing incomplete review", async () => {
+    const repo = await createTempDir();
+    try {
+      initGitRepo(repo);
+      execFileSync("git", ["config", "user.email", "tests@example.invalid"], { cwd: repo });
+      execFileSync("git", ["config", "user.name", "Agent Black Box Tests"], { cwd: repo });
+      execFileSync("git", ["config", "core.autocrlf", "false"], { cwd: repo });
+      await writeFile(path.join(repo, "a.txt"), "é");
+      await writeFile(path.join(repo, "b-binary.dat"), Buffer.from([0, 1]));
+      await writeFile(path.join(repo, "c-large.txt"), "x".repeat(2000));
+      await writeFile(path.join(repo, "d.txt"), "old");
+      execFileSync("git", ["add", "-A"], { cwd: repo });
+      execFileSync("git", ["commit", "-m", "baseline"], { cwd: repo });
+      const commit = await resolveBaselineCommit(repo, "HEAD");
+      await writeFile(path.join(repo, "a.txt"), "😀");
+      await writeFile(path.join(repo, "b-binary.dat"), Buffer.from([0, 2]));
+      await writeFile(path.join(repo, "c-large.txt"), "y".repeat(2000));
+      await writeFile(path.join(repo, "d.txt"), "new");
+      execFileSync("git", ["add", "-A"], { cwd: repo });
+      const config = { ...DEFAULT_CONFIG, maxFileSizeKb: 1 };
+      const contentBudget = createAnalysisContentBudget(9);
+      const staged = await collectStagedAnalysisInputFiles(repo, config, { contentBudget });
+      expect(staged.map((file) => file.kind)).toEqual(["text", "binary", "large", "text"]);
+      expect(contentBudget.remainingBytes).toBe(2);
+      const baseline = await collectBaselineAnalysisInputFiles(repo, staged, config, commit, { contentBudget });
+      expect(baseline.map((file) => file.kind)).toEqual(["text", "binary", "large", "unknown"]);
+      expect(baseline[0]?.content).toBe("é");
+      expect(baseline[3]).not.toHaveProperty("content");
+      expect(contentBudget.remainingBytes).toBe(0);
+      const reviewed = staged.filter((file) => file.path === "d.txt");
+      const result = compareAnalysisWithBaseline(
+        reviewed,
+        baseline.filter((file) => file.path === "d.txt"),
+        {
+          ...analyzeChangedFiles(reviewed),
+          coverage: summarizeAnalysisCoverage(reviewed, "index"),
+        },
+        commit
+      );
+      expect(result.baselineComparison?.skipped).toContainEqual({
+        path: "d.txt",
+        reason: expect.stringContaining("aggregate analysis budget of 9 bytes"),
+      });
+      expect(evaluateAnalysisPolicy(result, reviewed, "complete-review")).toMatchObject({
+        failed: true,
+        skippedStagedFiles: 0,
+        skippedBaselineFiles: 1,
+      });
+
+      const limited = await collectStagedAnalysisInputFiles(repo, config, {
+        contentBudget: createAnalysisContentBudget(4),
+      });
+      expect(limited[3]).toMatchObject({
+        kind: "unknown",
+        analysisSkipReason: expect.stringContaining("aggregate analysis budget"),
+      });
+      const limitedReview = limited.filter((file) => file.path === "d.txt");
+      const limitedResult = compareAnalysisWithBaseline(
+        limitedReview,
+        [],
+        {
+          ...analyzeChangedFiles(limitedReview),
+          coverage: summarizeAnalysisCoverage(limitedReview, "index"),
+        },
+        commit
+      );
+      expect(evaluateAnalysisPolicy(limitedResult, limitedReview, "complete-review")).toMatchObject({
+        failed: true,
+        skippedStagedFiles: 1,
+        skippedBaselineFiles: 0,
+      });
+    } finally {
+      await removeTempDir(repo);
+    }
+  }, 20_000);
   it("preserves baseline content, classifications, exact paths, order, and duplicates across batches", async () => {
     const repo = await createTempDir();
     try {

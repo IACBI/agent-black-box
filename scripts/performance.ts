@@ -11,6 +11,7 @@ import { listSessionCatalog, readCatalogSessionReport } from "../src/session/ses
 import { digestNdjsonRecords, isCapturedFileEvent } from "../src/session/ndjson.js";
 import { getEventsPath, readFileEventsWithDiagnostics } from "../src/session/sessionManager.js";
 import { getSessionVerificationLimits, verifySessions } from "../src/session/sessionVerification.js";
+import { digestRecords, INLINE_REPORT_BYTES, readCanonicalReportCore } from "../src/session/reportStorage.js";
 
 const EVENT_COUNT = 100_000;
 const MAX_DURATION_MS = 5_000;
@@ -78,6 +79,52 @@ try {
       records: EVENT_COUNT,
       durationMs: Math.round(digestDuration),
       maxDurationMs: MAX_DURATION_MS,
+    })
+  );
+
+  const canonicalPath = path.join(temporaryDirectory, "canonical-large.json");
+  const canonicalEvent = {
+    timestamp: "2026-01-01T00:00:00.000Z",
+    eventType: "change",
+    path: `src/${"x".repeat(30_000)}.ts`,
+  };
+  const canonicalEvents = Array.from({ length: 1200 }, () => canonicalEvent);
+  const expectedCanonicalEventsDigest = digestRecords(canonicalEvents);
+  let canonicalBytes: number;
+  let expectedCanonicalDigest: string;
+  {
+    const text = JSON.stringify({ note: "canonical evidence", events: canonicalEvents, commands: [] }, null, 2);
+    canonicalBytes = Buffer.byteLength(text);
+    expectedCanonicalDigest = createHash("sha256").update(text).digest("hex");
+    await writeFile(canonicalPath, text);
+  }
+  if (canonicalBytes <= INLINE_REPORT_BYTES) {
+    throw new Error("Canonical streaming benchmark must exceed the inline report size limit.");
+  }
+  const canonicalInputBudget = 4 * 1024 * 1024;
+  const canonicalStarted = performance.now();
+  const canonical = await readCanonicalReportCore(canonicalPath, canonicalInputBudget);
+  const canonicalDuration = performance.now() - canonicalStarted;
+  if (
+    canonical.bytes !== canonicalBytes ||
+    canonical.digest !== expectedCanonicalDigest ||
+    canonical.eventCount !== canonicalEvents.length ||
+    canonical.eventsDigest !== expectedCanonicalEventsDigest ||
+    JSON.stringify(canonical.core) !== JSON.stringify({ note: "canonical evidence", events: [], commands: [] })
+  ) {
+    throw new Error("Streaming canonical verification lost report evidence or exceeded its encoded-input quota.");
+  }
+  if (canonicalDuration > 30_000) {
+    throw new Error(`Canonical streaming budget exceeded: ${Math.round(canonicalDuration)}ms > 30000ms.`);
+  }
+  console.log(
+    JSON.stringify({
+      scenario: "canonical-report-verification",
+      reportMb: Math.round((canonicalBytes / 1024 / 1024) * 10) / 10,
+      records: canonical.eventCount,
+      maxMaterializedInputBytes: canonicalInputBudget,
+      durationMs: Math.round(canonicalDuration),
+      maxDurationMs: 30_000,
     })
   );
 

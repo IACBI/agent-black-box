@@ -5,6 +5,7 @@ import { formatTerminalValue } from "../utils/terminal.js";
 import { verifyCatalogSessionReportFile, type SessionCatalogEntry } from "./sessionCatalog.js";
 import { NDJSON_STREAM_WORKING_BYTES } from "./ndjson.js";
 import { FILE_DIGEST_STREAM_BYTES } from "./reportStorage.js";
+import { inspectSessionIndexes } from "./sessionIndex.js";
 
 const DERIVED_REPORT_FILES = ["summary.md", "commands.md", "timeline.md", "diff-summary.md", "risks.md", "rollback.md"];
 const VERIFICATION_CONCURRENCY = 4;
@@ -15,6 +16,8 @@ export const VERIFICATION_STREAM_WORKING_BYTES = 2 * NDJSON_STREAM_WORKING_BYTES
 export interface SessionVerificationOptions {
   memoryBudgetMb?: number;
   concurrency?: number;
+  checkIndexes?: boolean;
+  repairIndexes?: boolean;
 }
 
 export interface SessionVerificationLimits {
@@ -36,9 +39,10 @@ export function getSessionVerificationLimits(options: SessionVerificationOptions
     throw new Error("Verification memoryBudgetMb must be an integer between 8 and 4096.");
   }
   const budgetBytes = options.memoryBudgetMb === undefined ? undefined : options.memoryBudgetMb * 1024 * 1024;
+  const effectiveConcurrency = options.repairIndexes ? 1 : requestedConcurrency;
   const concurrency = Math.min(
-    requestedConcurrency,
-    budgetBytes === undefined ? requestedConcurrency : Math.floor(budgetBytes / MIN_WORKER_BUDGET_BYTES)
+    effectiveConcurrency,
+    budgetBytes === undefined ? effectiveConcurrency : Math.floor(budgetBytes / MIN_WORKER_BUDGET_BYTES)
   );
   return {
     concurrency,
@@ -61,6 +65,10 @@ export interface SessionVerificationResult {
   message?: string;
   /** Derived Markdown reports that are absent; older sessions may not have every file. */
   missingReports?: string[];
+  indexIssues?: string[];
+  repairedIndexes?: string[];
+  indexError?: string;
+  skippedIndexes?: string[];
 }
 
 export interface SessionVerificationSummary {
@@ -81,7 +89,7 @@ export async function verifySessions(
 ): Promise<SessionVerificationSummary> {
   const { concurrency, maxMaterializedBytes } = getSessionVerificationLimits(options);
   const sessions = await mapWithConcurrency(entries, concurrency, (entry) =>
-    verifySession(entry, maxMaterializedBytes)
+    verifySession(entry, maxMaterializedBytes, options)
   );
   return {
     verified: sessions.filter((session) => session.status === "verified").length,
@@ -93,7 +101,8 @@ export async function verifySessions(
 
 async function verifySession(
   entry: SessionCatalogEntry,
-  maxMaterializedBytes?: number
+  maxMaterializedBytes?: number,
+  options: SessionVerificationOptions = {}
 ): Promise<SessionVerificationResult> {
   if (entry.state === "incomplete") {
     return {
@@ -113,7 +122,28 @@ async function verifySession(
   }
 
   const missingReports = await findMissingReports(entry.sessionDir);
-  return { id: entry.id, status: "verified", ...(missingReports.length > 0 ? { missingReports } : {}) };
+  const result: SessionVerificationResult = {
+    id: entry.id,
+    status: "verified",
+    ...(missingReports.length > 0 ? { missingReports } : {}),
+  };
+  if (options.checkIndexes || options.repairIndexes) {
+    try {
+      const inspection = await inspectSessionIndexes(entry, { maxMaterializedBytes, repair: options.repairIndexes });
+      if (inspection.issues.length > 0) {
+        result.indexIssues = inspection.issues;
+      }
+      if (inspection.repaired.length > 0) {
+        result.repairedIndexes = inspection.repaired;
+      }
+      if (inspection.skipped.length > 0) {
+        result.skippedIndexes = inspection.skipped;
+      }
+    } catch (error) {
+      result.indexError = (error as Error).message;
+    }
+  }
+  return result;
 }
 
 async function findMissingReports(sessionDir: string): Promise<string[]> {
@@ -140,6 +170,20 @@ export function renderSessionVerification(summary: SessionVerificationSummary): 
     lines.push(`${session.status.padEnd(8)} ${formatTerminalValue(session.id)}${detail}`);
     if (session.missingReports) {
       lines.push(`         missing reports: ${session.missingReports.map(formatTerminalValue).join(", ")}`);
+    }
+    if (session.indexIssues) {
+      lines.push(`         index issues: ${session.indexIssues.map(formatTerminalValue).join(", ")}`);
+    }
+    if (session.repairedIndexes) {
+      lines.push(`         repaired indexes: ${session.repairedIndexes.map(formatTerminalValue).join(", ")}`);
+    }
+    if (session.indexError) {
+      lines.push(`         index check failed: ${formatTerminalValue(session.indexError)}`);
+    }
+    if (session.skippedIndexes) {
+      lines.push(
+        `         oversized indexes omitted by design: ${session.skippedIndexes.map(formatTerminalValue).join(", ")}`
+      );
     }
   }
   lines.push("", `Verified: ${summary.verified}, failed: ${summary.failed}, skipped: ${summary.skipped}.`);

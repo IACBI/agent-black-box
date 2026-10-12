@@ -8,7 +8,7 @@ const LINE_FEED = 0x0a;
 const FAILURE_MESSAGE = "Could not read a staged Git blob.";
 
 /**
- * Reads blobs with one `git cat-file --batch` process instead of one process per file. The result lines up
+ * Checks sizes before reading blobs with `git cat-file --batch`. The result lines up
  * with `objectIds`; an entry is `null` when that blob is larger than `maxBytes` (its content is never
  * buffered). A missing object, a non-blob object, or any Git failure rejects, as `git cat-file blob` would.
  */
@@ -16,12 +16,128 @@ export function readGitBlobs(
   repoRoot: string,
   objectIds: readonly string[],
   maxBytes: number
-): Promise<Array<Buffer | null>> {
+): Promise<Array<Buffer | null>>;
+/** Transforms each bounded blob as it arrives, avoiding retention of the whole raw input batch. */
+export function readGitBlobs<T>(
+  repoRoot: string,
+  objectIds: readonly string[],
+  maxBytes: number,
+  transform: (blob: Buffer | null, index: number) => T
+): Promise<T[]>;
+export async function readGitBlobs<T>(
+  repoRoot: string,
+  objectIds: readonly string[],
+  maxBytes: number,
+  transform?: (blob: Buffer | null, index: number) => T
+): Promise<Array<T | Buffer | null>> {
   if (!objectIds.every((objectId) => OBJECT_ID.test(objectId))) {
-    return Promise.reject(new Error("Blob identifiers must be full Git object IDs."));
+    throw new Error("Blob identifiers must be full Git object IDs.");
+  }
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
+    throw new Error("Blob size limits must be non-negative safe integers.");
   }
   if (objectIds.length === 0) {
-    return Promise.resolve([]);
+    return [];
+  }
+
+  const sizes = await readGitBlobSizes(repoRoot, objectIds);
+  const positions = sizes.flatMap((size, index) => (size <= maxBytes ? [index] : []));
+  const mapped: Array<T | Buffer | null> = new Array(objectIds.length);
+  // Consume in original order, including oversized entries, so quota admissions remain deterministic.
+  let nextPosition = 0;
+  const consume = (blob: Buffer | null, position: number): void => {
+    mapped[position] = transform ? transform(blob, position) : blob;
+  };
+  await readBoundedGitBlobs(
+    repoRoot,
+    positions.map((position) => objectIds[position]!),
+    maxBytes,
+    (blob, index) => {
+      const position = positions[index]!;
+      while (nextPosition < position) {
+        consume(null, nextPosition++);
+      }
+      consume(blob, nextPosition++);
+    }
+  );
+  while (nextPosition < objectIds.length) {
+    consume(null, nextPosition++);
+  }
+  return mapped;
+}
+
+/** Metadata requests do not inflate or stream an oversized object's body. */
+function readGitBlobSizes(repoRoot: string, objectIds: readonly string[]): Promise<number[]> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(gitExecutable(), ["cat-file", "--batch-check"], {
+      cwd: repoRoot,
+      env: gitProcessEnvironment(),
+      stdio: ["pipe", "pipe", "ignore"],
+      windowsHide: true,
+    });
+    const sizes: number[] = [];
+    let pending = "";
+    let settled = false;
+    const fail = (cause?: unknown): void => {
+      if (!settled) {
+        settled = true;
+        child.kill();
+        reject(new Error(FAILURE_MESSAGE, cause === undefined ? undefined : { cause }));
+      }
+    };
+    child.stdout.on("data", (chunk: Buffer) => {
+      if (settled) {
+        return;
+      }
+      pending += chunk.toString("latin1");
+      let lineFeed;
+      while ((lineFeed = pending.indexOf("\n")) !== -1) {
+        const header = pending.slice(0, lineFeed);
+        pending = pending.slice(lineFeed + 1);
+        const match = HEADER.exec(header);
+        const size = Number(match?.[3]);
+        if (
+          header.length > MAX_HEADER_BYTES ||
+          !match ||
+          match[1] !== objectIds[sizes.length] ||
+          match[2] !== "blob" ||
+          !Number.isSafeInteger(size) ||
+          size < 0
+        ) {
+          fail();
+          return;
+        }
+        sizes.push(size);
+      }
+      if (pending.length > MAX_HEADER_BYTES) {
+        fail();
+      }
+    });
+    child.stdout.on("error", fail);
+    child.stdin.on("error", () => undefined);
+    child.once("error", fail);
+    child.once("close", (code) => {
+      if (!settled) {
+        if (code !== 0 || pending.length !== 0 || sizes.length !== objectIds.length) {
+          fail();
+          return;
+        }
+        settled = true;
+        resolve(sizes);
+      }
+    });
+    child.stdin.end(`${objectIds.join("\n")}\n`);
+  });
+}
+
+function readBoundedGitBlobs(
+  repoRoot: string,
+  objectIds: readonly string[],
+  maxBytes: number,
+  onBlob: (blob: Buffer | null, index: number) => void
+): Promise<void> {
+  if (objectIds.length === 0) {
+    return Promise.resolve();
   }
 
   return new Promise((resolve, reject) => {
@@ -31,7 +147,7 @@ export function readGitBlobs(
       stdio: ["pipe", "pipe", "ignore"],
       windowsHide: true,
     });
-    const results: Array<Buffer | null> = [];
+    let resultCount = 0;
     let headerParts: Buffer[] = [];
     let headerLength = 0;
     // `remaining` counts the unread body bytes including the LF that terminates every batch record.
@@ -51,7 +167,12 @@ export function readGitBlobs(
 
     const startRecord = (header: string): void => {
       const match = HEADER.exec(header);
-      if (!match || match[2] !== "blob") {
+      if (
+        !match ||
+        match[1] !== objectIds[resultCount] ||
+        match[2] !== "blob" ||
+        !Number.isSafeInteger(Number(match[3]))
+      ) {
         fail();
         return;
       }
@@ -92,7 +213,12 @@ export function readGitBlobs(
         remaining -= take;
         offset += take;
         if (remaining === 0) {
-          results.push(body === null ? null : Buffer.concat(body, bodySize));
+          try {
+            onBlob(body === null ? null : Buffer.concat(body, bodySize), resultCount++);
+          } catch (error) {
+            fail(error);
+            return;
+          }
           body = null;
         }
       }
@@ -106,12 +232,12 @@ export function readGitBlobs(
       if (settled) {
         return;
       }
-      if (code !== 0 || remaining !== 0 || headerLength !== 0 || results.length !== objectIds.length) {
+      if (code !== 0 || remaining !== 0 || headerLength !== 0 || resultCount !== objectIds.length) {
         fail();
         return;
       }
       settled = true;
-      resolve(results);
+      resolve();
     });
     child.stdin.end(`${objectIds.join("\n")}\n`);
   });

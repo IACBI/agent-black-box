@@ -123,14 +123,15 @@ abb analyze --format sarif --fail-on high
 abb analyze --staged --baseline HEAD --policy complete-review --format sarif
 ```
 
-| Option                 | Behavior                                                                                   |
-| ---------------------- | ------------------------------------------------------------------------------------------ |
-| `--format <format>`    | `text` (default), `json`, or `sarif`                                                       |
-| `--staged`             | Read index blobs instead of working-tree content                                           |
-| `--baseline <ref>`     | With `--staged`, compare against a resolved Git commit                                     |
-| `--initial`            | With `--staged` and no HEAD commit, treat all staged content as new; excludes `--baseline` |
-| `--fail-on <severity>` | Exit 1 for a finding at or above `low`, `medium`, or `high`                                |
-| `--policy <profile>`   | Built-in or configured named policy; requires `--staged` with `--baseline` or `--initial`  |
+| Option                      | Behavior                                                                                                                                  |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `--format <format>`         | `text` (default), `json`, or `sarif`                                                                                                      |
+| `--staged`                  | Read index blobs instead of working-tree content                                                                                          |
+| `--baseline <ref>`          | With `--staged`, compare against a resolved Git commit                                                                                    |
+| `--initial`                 | With `--staged` and no HEAD commit, treat all staged content as new; excludes `--baseline`                                                |
+| `--fail-on <severity>`      | Exit 1 for a finding at or above `low`, `medium`, or `high`                                                                               |
+| `--policy <profile>`        | Built-in or configured named policy; requires `--staged` with `--baseline` or `--initial`                                                 |
+| `--max-total-bytes <bytes>` | Optional non-negative safe integer limiting retained UTF-8 analysis content across current and baseline files; `0` skips nonempty content |
 
 Baseline comparison suppresses identical existing secret-like lines up to their baseline occurrence count. Git-verified renames can use the previous path as the baseline. Metadata risks remain visible; excluded baseline paths and unverified rename relationships do not suppress content findings.
 
@@ -191,6 +192,8 @@ The generated script is POSIX `sh`; Git for Windows runs hooks with its bundled 
 
 Worktree, staged, and baseline CLI reads are capped at the smaller of `maxFileSizeKb` and 256 KiB. Deleted, binary, oversized, unsafe, or unavailable content is reported as skipped. Text summarizes coverage; JSON and SARIF retain structured coverage, policy, and rename-comparison details. Findings contain locations and fixed descriptions, not matched values.
 
+Use `abb analyze --staged --baseline HEAD --policy complete-review --max-total-bytes 16777216` to limit retained content to 16 MiB across staged and needed baseline text. Admissions follow input order; binary, missing, and oversized files do not consume the retained-content quota. A refused file remains visible in coverage with a budget reason, so `complete-review` fails when required content cannot fit. Git blob sizes are checked before content requests, avoiding oversized blob-body reads. The option budgets encoded UTF-8 content, including replacement-character expansion; transient per-file buffers, parsed objects, decoded strings, and runtime overhead are additional memory. It is not a heap/RSS cap. Defaults remain unchanged without the option.
+
 Recorded-session detection and `analyze` use different heuristics. For example, recording can flag an environment-variable password assignment that analysis excludes, while analysis recognizes some token forms (such as `github_pat_`) that recording does not. Both recognise private-key headers, and both apply your `secretPatterns` and `secretAllowlist`. Neither is a comprehensive security scanner.
 
 ## Read and export reports
@@ -250,7 +253,7 @@ abb sessions compare <from> <to> --json
 
 `list` and `browse` support `--state complete|incomplete|corrupt`, `--since YYYY-MM-DD` (UTC, inclusive), `--min-severity`, `--file <text>`, `--command <text>`, and `--category <text>`. Text filters are case-insensitive substring matches. `list` also supports `--json` and positive-integer `--limit`. `browse` requires an interactive terminal; `--page-size` defaults to 10 and accepts 1–50. Select a number, `n`/`p` for pages, or `q` to quit. Incomplete/corrupt entries remain visible but cannot be opened.
 
-`show` and `compare` accept full IDs, unique prefixes, or `latest`; both support `--json`. Comparison summarizes path, risk, command-frequency, and HEAD differences. Content history filters use a bounded metadata search index, with validated-report fallback for older sessions.
+`show` and `compare` accept full IDs, unique prefixes, or `latest`; both support `--json`. Comparison summarizes path, risk, command-frequency, possible-secret location/count, and HEAD differences. Its additive `secrets` section identifies changes by path, line, and reason; it never includes credential values or redacted excerpts. Commands with null exit codes count as unsuccessful. Content history filters use a bounded metadata search index, with validated-report fallback for older sessions.
 
 `list`, `browse`, `show` and `compare` accept optional `--memory-budget-mb <8–4096>`. History uses one read worker, reserves the verification stream buffers described below, and allocates half the remaining budget to encoded JSON inputs and their buffered copies. Budgeted content searches read one index or fallback report at a time; full replay-backed reads share the input quota between stored JSON and replay metadata, validate the exact parsed bytes and records, and stream log digests.
 
@@ -268,20 +271,28 @@ To check that stored sessions are intact without changing them, use `abb session
 abb sessions verify
 abb sessions verify latest --json
 abb sessions verify --memory-budget-mb 64 --concurrency 2 --json
+abb sessions verify latest --check-indexes --json
+abb sessions verify latest --repair-indexes --json
 ```
 
+`--check-indexes` compares derived `session-metadata.json` and `session-search.json` against verified canonical evidence without writing. `--repair-indexes` implies checking and explicitly regenerates inconsistent or missing indexes; it preserves canonical report/log bytes, rejects linked targets and active session state, and publishes metadata last. Repairs run with one worker and use that same input quota for session selection and inspection. JSON includes `indexIssues`, `repairedIndexes`, `skippedIndexes`, or `indexError` when applicable. A search index omitted because its derived content exceeds the format limit is expected, not missing evidence. Explicit index checks/repairs exit 1 on inspection refusal, unresolved inconsistency, or repair failure. A memory-budget refusal leaves evidence intact; increase the quota rather than forcing a repair. Verification without these options keeps its existing behavior.
+
 Full replay verification streams canonical event digests instead of materializing event arrays. Optional `--memory-budget-mb` accepts 8–4096 MiB and allocates a working-data quota across workers. `--concurrency` accepts 1–16 (default 4); a budget reduces it to at most one worker per 8 MiB. Per worker, stream buffers reserve approximately 4.375 MiB; half the remaining quota limits each materialized JSON input, allowing for its buffered copy. Oversized inputs fail visibly before parsing. Increase the budget or lower concurrency when an intact legacy/inline report cannot fit; no records are silently discarded to satisfy the quota.
+
+Large-report reads also stream-validate canonical JSON and bind every compact replay-core field and record digest to that canonical report before using it. Streaming quotas charge replay JSON plus retained canonical core and one active canonical record; event/command arrays are validated without retention. No stored report migration is required.
 
 This is an encoded-input and stream-buffer budget, not a hard JavaScript heap/RSS limit: decoded strings, parsed objects, catalog entries and returned results require additional memory. Existing file/line/count limits still apply, and defaults remain unchanged when no budget is selected. Budgeted legacy catalog fallback streams replay digests; if a report's metadata cannot be obtained within the quota, choose an explicit session ID or increase the budget. `latest` refuses an ambiguous selection rather than guessing.
 
 ```sh
 abb sessions archive --before 2026-01-01 --keep 2 --to .agent-black-box/archive
+abb sessions archive --before 2026-01-01 --keep 2 --to .agent-black-box/archive --resume
+abb sessions archive --before 2026-01-01 --keep 2 --to .agent-black-box/archive --resume --apply
 abb sessions prune --before 2026-01-01 --keep 2
 ```
 
 These commands preview completed sessions started before the UTC cutoff (exclusive). Use `--before` or configure `retention.days`; `--keep` defaults to `retention.keep` or 1. Both require `--apply`, an interactive terminal, and typed confirmation to execute. Incomplete/corrupt sessions are excluded and active state, links, and the preview are rechecked before mutation.
 
-Archive requires `--to` or `retention.archiveDir`, outside the session root. A destination read from the configuration must stay physically inside the repository (links included), because a cloned repository could otherwise point `--apply` anywhere you can write; pass `--to` to choose an external destination yourself. It verifies copied files with checksums, never overwrites an existing session ID, and writes `.abb-archive-complete.json` only after verification. Originals remain in place. Prune validates full replay-record integrity before deletion. An interrupted prune can leave `.pruning-*` under the session root; an interrupted archive can lack its completion marker. Inspect these remnants before removing them.
+Archive requires `--to` or `retention.archiveDir`, outside the session root. A destination read from the configuration must stay physically inside the repository (links included), because a cloned repository could otherwise point `--apply` anywhere you can write; pass `--to` to choose an external destination yourself. It verifies copied files with checksums and writes `.abb-archive-complete.json` only after verification. Originals remain in place. By default an existing destination session ID is refused. `--resume` previews each destination as missing, resumable, complete, or conflicting without modifying it; `--resume --apply` keeps typed confirmation and copies only missing files. Every existing file must match the source; divergent bytes, extra entries, linked/special paths, or invalid completion metadata refuse continuation. Complete matching archives are preserved. Prune validates full replay-record integrity before deletion. An interrupted prune can leave `.pruning-*` under the session root; inspect such remnants before removing them.
 
 ## Troubleshooting
 

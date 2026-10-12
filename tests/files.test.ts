@@ -7,7 +7,7 @@ import { createTempDir, removeTempDir } from "./testUtils.js";
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
-  return { ...actual, open: vi.fn(actual.open) };
+  return { ...actual, open: vi.fn(actual.open), rm: vi.fn(actual.rm) };
 });
 
 describe("bounded file reads", () => {
@@ -51,6 +51,68 @@ describe("bounded file reads", () => {
 });
 
 describe("atomic file writes", () => {
+  it("retains the write and cleanup errors when an unpublished temporary file cannot be removed", async () => {
+    const dir = await createTempDir();
+    try {
+      const filePath = path.join(dir, "report.md");
+      await writeFile(filePath, "original");
+      const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+      const writeFailure = new Error("Write failed.");
+      const cleanupFailure = Object.assign(new Error("Cleanup access denied."), { code: "EACCES" });
+      vi.mocked(fs.open).mockImplementationOnce(async (...args) => {
+        const handle = await actual.open(...args);
+        vi.spyOn(handle, "writeFile").mockRejectedValueOnce(writeFailure);
+        return handle;
+      });
+      vi.mocked(fs.rm).mockRejectedValueOnce(cleanupFailure);
+
+      const failure: unknown = await writeTextFileAtomic(filePath, "replacement").catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect((failure as AggregateError).errors).toEqual([writeFailure, cleanupFailure]);
+      expect(await readFile(filePath, "utf8")).toBe("original");
+      expect((await readdir(dir)).filter((name) => name.endsWith(".tmp"))).toHaveLength(1);
+    } finally {
+      vi.restoreAllMocks();
+      await removeTempDir(dir);
+    }
+  });
+
+  it.each(["close", "write-and-close"])("cleans unpublished temporary files after %s failures", async (stage) => {
+    const dir = await createTempDir();
+    try {
+      const filePath = path.join(dir, "report.md");
+      await writeFile(filePath, "original");
+      const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+      const writeFailure = new Error("Write failed.");
+      const closeFailure = new Error("Close failed.");
+      vi.mocked(fs.open).mockImplementationOnce(async (...args) => {
+        const handle = await actual.open(...args);
+        const close = handle.close.bind(handle);
+        if (stage === "write-and-close") {
+          vi.spyOn(handle, "writeFile").mockRejectedValueOnce(writeFailure);
+        }
+        vi.spyOn(handle, "close").mockImplementationOnce(async () => {
+          await close();
+          throw closeFailure;
+        });
+        return handle;
+      });
+
+      const failure: unknown = await writeTextFileAtomic(filePath, "replacement").catch((error: unknown) => error);
+      expect(await readFile(filePath, "utf8")).toBe("original");
+      expect(await readdir(dir)).toEqual(["report.md"]);
+      if (stage === "close") {
+        expect(failure).toBe(closeFailure);
+      } else {
+        expect(failure).toBeInstanceOf(AggregateError);
+        expect((failure as AggregateError).errors).toEqual([writeFailure, closeFailure]);
+      }
+    } finally {
+      vi.restoreAllMocks();
+      await removeTempDir(dir);
+    }
+  });
+
   it("replaces text and JSON files without leaving temporary files", async () => {
     const dir = await createTempDir();
     try {

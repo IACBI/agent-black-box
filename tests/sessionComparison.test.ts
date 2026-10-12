@@ -5,6 +5,40 @@ import { buildSessionComparison } from "../src/session/sessionComparison.js";
 import type { ChangedFile, CommandEvent, RiskFinding } from "../src/types.js";
 
 describe("session comparison", () => {
+  it("compares possible-secret locations and duplicate counts without copying excerpts or extension fields", () => {
+    const from = makeReport("session-from", "2026-01-01T00:00:00.000Z", [], [], [], undefined, undefined);
+    const to = makeReport("session-to", "2026-01-02T00:00:00.000Z", [], [], [], undefined, undefined);
+    const finding = {
+      path: "src/a|b.ts",
+      line: 3,
+      reason: "Token pattern",
+      redacted: "PRIVATE EXCERPT",
+      extra: "PRIVATE EXTRA",
+    };
+    from.possibleSecrets = [finding, finding, { ...finding, path: "removed.ts" }];
+    to.possibleSecrets = [
+      { ...finding, redacted: "OTHER PRIVATE EXCERPT" },
+      { ...finding, line: 4 },
+    ];
+    const comparison = buildSessionComparison(from, to);
+    expect(comparison.secrets).toMatchObject({ fromCount: 3, toCount: 2, countDelta: -1 });
+    expect(comparison.secrets!.onlyInFrom).toEqual([{ path: "removed.ts", line: 3, reason: "Token pattern" }]);
+    expect(comparison.secrets!.onlyInTo).toEqual([{ path: "src/a|b.ts", line: 4, reason: "Token pattern" }]);
+    expect(comparison.secrets!.changedCounts).toContainEqual({
+      path: "src/a|b.ts",
+      line: 3,
+      reason: "Token pattern",
+      fromCount: 2,
+      toCount: 1,
+    });
+    const markdown = generateSessionComparisonMarkdown(comparison);
+    expect(markdown).toContain("src/a&#124;b.ts");
+    expect(JSON.stringify(comparison)).not.toContain("PRIVATE");
+    expect(markdown).not.toContain("PRIVATE");
+    delete comparison.secrets;
+    expect(generateSessionComparisonMarkdown(comparison)).not.toContain("Possible-secret location comparison");
+  });
+
   it("compares files, risks, command frequencies, and HEAD revisions", () => {
     const from = makeReport(
       "session-from",
@@ -63,6 +97,32 @@ describe("session comparison", () => {
   it("rejects comparing a session with itself", () => {
     const report = makeReport("session-same", "2026-01-01T00:00:00.000Z", [], [], [], undefined, undefined);
     expect(() => buildSessionComparison(report, report)).toThrow("two different sessions");
+  });
+
+  it("counts startup failures and interrupted commands without exit codes as failed", () => {
+    const from = makeReport(
+      "session-from",
+      "2026-01-01T00:00:00.000Z",
+      [],
+      [],
+      [command("test", 0), command("build", 1), { ...command("missing-tool", null), error: "ENOENT" }],
+      undefined,
+      undefined
+    );
+    const to = makeReport(
+      "session-to",
+      "2026-01-02T00:00:00.000Z",
+      [],
+      [],
+      [command("interrupted-build", null), command("test", 0)],
+      undefined,
+      undefined
+    );
+
+    const comparison = buildSessionComparison(from, to);
+
+    expect(comparison.commands).toMatchObject({ fromFailedCount: 2, toFailedCount: 1 });
+    expect(generateSessionComparisonMarkdown(comparison)).toContain("Failed commands: 2 from, 1 to");
   });
 
   it("renders distinct escaped filenames and working directories without changing comparison values", () => {
@@ -129,7 +189,7 @@ function makeReport(
   );
 }
 
-function command(commandText: string, exitCode: number): CommandEvent {
+function command(commandText: string, exitCode: number | null): CommandEvent {
   return {
     startedAt: "2026-01-01T00:00:10.000Z",
     endedAt: "2026-01-01T00:00:11.000Z",

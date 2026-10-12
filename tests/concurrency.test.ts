@@ -22,4 +22,47 @@ describe("bounded concurrency", () => {
   it("rejects invalid concurrency", async () => {
     await expect(mapWithConcurrency([1], 0, async (value) => value)).rejects.toThrow("positive integer");
   });
+
+  it.each([new Error("Read failed."), undefined])(
+    "stops scheduling after a rejection and drains started work while preserving %s",
+    async (failure) => {
+      const started: number[] = [];
+      let releasePendingWork: (() => void) | undefined;
+      const pendingWork = new Promise<void>((resolve) => {
+        releasePendingWork = resolve;
+      });
+      let settled = false;
+      let pendingWorkFinished = false;
+      const result = mapWithConcurrency([0, 1, 2, 3], 2, async (value) => {
+        started.push(value);
+        if (value === 0) {
+          throw failure;
+        }
+        await pendingWork;
+        pendingWorkFinished = true;
+        return value;
+      }).then(
+        () => {
+          settled = true;
+          return { rejected: false, reason: undefined };
+        },
+        (reason: unknown) => {
+          settled = true;
+          return { rejected: true, reason };
+        }
+      );
+
+      try {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(started).toEqual([0, 1]);
+        expect(settled).toBe(false);
+      } finally {
+        releasePendingWork?.();
+      }
+
+      expect(await result).toEqual({ rejected: true, reason: failure });
+      expect(pendingWorkFinished).toBe(true);
+      expect(started).toEqual([0, 1]);
+    }
+  );
 });

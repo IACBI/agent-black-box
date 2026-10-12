@@ -258,9 +258,10 @@ function findToolFlagRule(parts: readonly string[]): ToolFlagRule | undefined {
 }
 
 const EMBEDDED_SCRIPT_MARKER = /[\s;&|]/;
-const EMBEDDED_ASSIGNMENT = /(?<![A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_-]*)=("[^"]*"|'[^']*'|[^\s"';&|]+)/g;
+// The bounded prefix can end inside a quoted credential; redact its remaining partial value too.
+const EMBEDDED_ASSIGNMENT = /(?<![A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_-]*)=("[^"]*(?:"|$)|'[^']*(?:'|$)|[^\s"';&|]+)/g;
 const EMBEDDED_HEADER = /(?<![A-Za-z0-9_-])([A-Za-z][A-Za-z0-9-]*)(\s*:\s*)([^"'\n;&|]+)/g;
-const EMBEDDED_FLAG = /(?<![A-Za-z0-9_-])(--[A-Za-z0-9_-]+)(=|\s+)("[^"]*"|'[^']*'|[^\s"';&|]+)/g;
+const EMBEDDED_FLAG = /(?<![A-Za-z0-9_-])(--[A-Za-z0-9_-]+)(=|\s+)("[^"]*(?:"|$)|'[^']*(?:'|$)|[^\s"';&|]+)/g;
 
 /**
  * Last line of defence for one argument: credentials embedded in a script string (`sh -c "export TOKEN=x"`),
@@ -493,9 +494,18 @@ function redactUrlPart(part: string): string {
 }
 
 function redactSensitiveJson(part: string): string {
-  const keyPattern = /"([^"\\]{1,128})"\s*:/g;
+  const keyPattern = /"((?:[^"\\]|\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4})){1,128})"\s*:/g;
   for (const match of part.matchAll(keyPattern)) {
-    if (SENSITIVE_PATTERN.test(match[1] ?? "")) {
+    let key = match[1] ?? "";
+    if (key.includes("\\")) {
+      try {
+        key = JSON.parse(`"${key}"`) as string;
+      } catch {
+        // Invalid JSON string escapes do not identify a property name.
+        continue;
+      }
+    }
+    if (SENSITIVE_PATTERN.test(key)) {
       const separator = part.indexOf("=");
       const prefix = separator > 0 ? part.slice(0, separator + 1) : "";
       return /^--[A-Za-z0-9_-]+=$/.test(prefix) ? `${prefix}<redacted>` : "<redacted>";
