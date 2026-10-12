@@ -20,6 +20,8 @@ Reports default to `.agent-black-box/sessions/<session-id>/`. `session.json` is 
 | `risks.md`                             | Path categories, severity/score/reason and redacted possible-secret locations.     |
 | `rollback.md`                          | Manual Git inspection/restore guidance and eligible-file apply instructions.       |
 
+Optional `evidence-signature.json` contains an Ed25519 seal over canonical evidence bytes, including optional-file absence. It carries a signing-key fingerprint, never a trusted public key. Verification requires a separately provisioned trusted key; see [Evidence security](EVIDENCE-SECURITY.md) for signature scope, key management, resource bounds, and remaining limitations.
+
 ## Evidence and interpretation
 
 Evidence separates pre-existing paths, observations, final changes and Git metadata changes. Net HEAD changes retain committed work with a clean worktree. Risk analysis excludes unchanged pre-existing paths when attribution permits; missing baselines or changed index state conservatively include final changes.

@@ -63,3 +63,5 @@ History listing, browsing, showing and comparison accept the same optional budge
 Capture-health inspection walks at most 10,000 directory entries and checks durable marker metadata without reading logs or mutating storage. Unknown/linked/malformed markers prevent a healthy conclusion; persisted failures remain degraded even during an incomplete inspection. Doctor and opt-in status diagnostics expose this bounded evidence, not live watcher-buffer health.
 
 Durations use a monotonic clock; index fingerprints store metadata/blob identities. `pnpm perf` measures regression budgets, not peak-memory or cross-platform guarantees.
+
+Optional evidence sealing uses Node crypto Ed25519 and a fixed manifest of canonical evidence files. Trusted verification keys are supplied by callers, never loaded from the evidence or repository config. Custom secret regex execution uses a bounded worker while preserving the synchronous detector APIs. See [Evidence security](EVIDENCE-SECURITY.md) for the signature scope, key-management boundary, and resource limits.

@@ -86,6 +86,7 @@ import {
   verifySessions,
   type SessionVerificationOptions,
 } from "./session/sessionVerification.js";
+import { loadEvidenceKeyFile, signSessionEvidence } from "./session/evidenceSigning.js";
 import { inspectSessionCaptureHealth, renderSessionCaptureHealth } from "./session/captureHealth.js";
 import { runWatcher } from "./watcher/watcher.js";
 import { pathExists } from "./utils/files.js";
@@ -764,12 +765,34 @@ sessionsCommand
   });
 
 sessionsCommand
+  .command("sign")
+  .description("Seal finalized evidence using an independently managed encrypted Ed25519 key.")
+  .argument("<session>", "session ID, unique prefix, or latest")
+  .requiredOption("--private-key <path>", "encrypted PKCS8 PEM outside the repository and session storage")
+  .option("--passphrase-env <name>", "environment variable holding the key passphrase", "ABB_SIGNING_PASSPHRASE")
+  .action(async (session: string, options: { privateKey: string; passphraseEnv: string }) => {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(options.passphraseEnv)) {
+      throw new Error("--passphrase-env must name an environment variable.");
+    }
+    const repoRoot = await requireRepositoryRoot(process.cwd());
+    const config = await loadRuntimeConfig(repoRoot);
+    const entry = await resolveSession(repoRoot, config, session);
+    const privateKey = await loadEvidenceKeyFile(options.privateKey, repoRoot, path.dirname(entry.sessionDir), {
+      privateKey: true,
+      passphrase: process.env[options.passphraseEnv],
+    });
+    const fingerprint = await signSessionEvidence(entry, privateKey);
+    console.log("Evidence sealed with key SHA-256: " + fingerprint);
+  });
+
+sessionsCommand
   .command("verify")
   .description("Check stored session integrity; optionally verify or repair derived indexes.")
   .argument("[session]", "session ID, unique prefix, or latest; all sessions when omitted")
   .option("--json", "print structured JSON")
   .option("--memory-budget-mb <mb>", "working-data byte budget in MiB (8–4096); excludes V8 object overhead")
   .option("--concurrency <count>", "maximum parallel verifications (1–16, default 4); reduced by the memory budget")
+  .option("--trusted-key <path>", "require signatures from this independently trusted external Ed25519 public PEM")
   .option("--check-indexes", "compare derived metadata and search indexes with verified evidence")
   .option("--repair-indexes", "regenerate derived indexes from verified evidence without changing reports or logs")
   .action(
@@ -781,6 +804,7 @@ sessionsCommand
         concurrency?: string;
         checkIndexes?: boolean;
         repairIndexes?: boolean;
+        trustedKey?: string;
       }
     ) => {
       const verificationOptions: SessionVerificationOptions = {
@@ -794,6 +818,10 @@ sessionsCommand
       const config = await loadRuntimeConfig(repoRoot);
       const entries = await listSessionCatalog(repoRoot, config, { maxMaterializedBytes: limits.maxMaterializedBytes });
       const selected = session === undefined ? entries : [resolveSessionEntry(entries, session)];
+      if (options.trustedKey) {
+        const sessionRoot = path.resolve(repoRoot, config.sessionDir);
+        verificationOptions.trustedKey = await loadEvidenceKeyFile(options.trustedKey, repoRoot, sessionRoot);
+      }
       const summary = await verifySessions(selected, verificationOptions);
       console.log(
         options.json

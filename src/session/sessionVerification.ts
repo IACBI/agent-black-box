@@ -1,3 +1,5 @@
+import type { KeyObject } from "node:crypto";
+import { verifySessionEvidenceSignature } from "./evidenceSigning.js";
 import { lstat } from "node:fs/promises";
 import path from "node:path";
 import { mapWithConcurrency } from "../utils/concurrency.js";
@@ -14,6 +16,8 @@ const MIN_WORKER_BUDGET_BYTES = 8 * 1024 * 1024;
 export const VERIFICATION_STREAM_WORKING_BYTES = 2 * NDJSON_STREAM_WORKING_BYTES + 2 * FILE_DIGEST_STREAM_BYTES;
 
 export interface SessionVerificationOptions {
+  /** Independently trusted public key; supplying it requires a valid signature for every selected session. */
+  trustedKey?: KeyObject;
   memoryBudgetMb?: number;
   concurrency?: number;
   checkIndexes?: boolean;
@@ -63,6 +67,8 @@ export interface SessionVerificationResult {
   id: string;
   status: SessionVerificationStatus;
   message?: string;
+  signatureVerified?: boolean;
+  keyFingerprint?: string;
   /** Derived Markdown reports that are absent; older sessions may not have every file. */
   missingReports?: string[];
   indexIssues?: string[];
@@ -104,7 +110,7 @@ async function verifySession(
   maxMaterializedBytes?: number,
   options: SessionVerificationOptions = {}
 ): Promise<SessionVerificationResult> {
-  if (entry.state === "incomplete") {
+  if (entry.state === "incomplete" && !options.trustedKey) {
     return {
       id: entry.id,
       status: "skipped",
@@ -115,7 +121,11 @@ async function verifySession(
     return { id: entry.id, status: "failed", message: entry.warning ?? "Session metadata is corrupt." };
   }
 
+  let keyFingerprint: string | undefined;
   try {
+    if (options.trustedKey) {
+      keyFingerprint = await verifySessionEvidenceSignature(entry, options.trustedKey);
+    }
     await verifyCatalogSessionReportFile(entry, { verifyEventLogs: true, maxMaterializedBytes });
   } catch (error) {
     return { id: entry.id, status: "failed", message: (error as Error).message };
@@ -125,6 +135,7 @@ async function verifySession(
   const result: SessionVerificationResult = {
     id: entry.id,
     status: "verified",
+    ...(keyFingerprint ? { signatureVerified: true, keyFingerprint } : {}),
     ...(missingReports.length > 0 ? { missingReports } : {}),
   };
   if (options.checkIndexes || options.repairIndexes) {
@@ -168,6 +179,11 @@ export function renderSessionVerification(summary: SessionVerificationSummary): 
   for (const session of summary.sessions) {
     const detail = session.message ? ` — ${formatTerminalValue(session.message)}` : "";
     lines.push(`${session.status.padEnd(8)} ${formatTerminalValue(session.id)}${detail}`);
+    if (session.signatureVerified) {
+      lines.push(
+        `         signature verified with trusted key: ${formatTerminalValue(session.keyFingerprint ?? "unknown")}`
+      );
+    }
     if (session.missingReports) {
       lines.push(`         missing reports: ${session.missingReports.map(formatTerminalValue).join(", ")}`);
     }

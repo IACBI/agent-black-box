@@ -157,6 +157,11 @@ export function redactCommandParts(parts: string[], secretRules: CompiledSecretR
   let redactNext = false;
 
   for (const [index, part] of parts.entries()) {
+    if (part.length > MAX_COMMAND_PART_LENGTH + 256) {
+      redacted.push("<redacted>");
+      redactNext = !redactNext && part.startsWith("--") && SENSITIVE_PATTERN.test(part.slice(0, 256));
+      continue;
+    }
     if (redactNext) {
       redacted.push("<redacted>");
       redactNext = false;
@@ -292,6 +297,9 @@ function optionalMetadata<K extends "label" | "group" | "phase">(
   value: string | undefined,
   secretRules: CompiledSecretRules
 ): Partial<Record<K, string>> {
+  if (value && value.length > MAX_COMMAND_PART_LENGTH + 256) {
+    return { [key]: "<redacted>" } as Partial<Record<K, string>>;
+  }
   const normalized = value?.trim().replace(/\s+/g, " ");
   if (!normalized) {
     return {};
