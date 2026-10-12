@@ -5,7 +5,7 @@ import { createGit } from "./executable.js";
 import type { ChangedFile, ChangeStatus, GitSnapshot } from "../types.js";
 import { inspectTextFile, type FileInspection } from "../utils/fileInspection.js";
 import { mapWithConcurrency } from "../utils/concurrency.js";
-import { isPathExcluded, normalizePath, resolveRepoPath } from "../utils/paths.js";
+import { isPathExcluded, normalizePath, normalizeRepoPath, resolveRepoPath } from "../utils/paths.js";
 
 const MAX_ESTIMATED_UNTRACKED_FILE_BYTES = 500 * 1024;
 const FILE_INSPECTION_CONCURRENCY = Math.min(8, availableParallelism());
@@ -72,7 +72,7 @@ export async function collectGitSnapshot(repoRoot: string, excludePatterns: stri
 
   const visibleStatusFiles = status.files.filter((file) => !isPathExcluded(file.path, excludePatterns));
   const changedFiles = await mapWithConcurrency(visibleStatusFiles, FILE_INSPECTION_CONCURRENCY, async (file) => {
-    const normalizedPath = normalizePath(file.path);
+    const normalizedPath = normalizeRepoPath(file.path);
     const summary = summaryByPath.get(normalizedPath);
     const status = mapStatus(file.index, file.working_dir);
     const inspectionPath = resolveRepoPath(repoRoot, normalizedPath);
@@ -129,7 +129,7 @@ export async function collectGitChangesBetween(
     return output
       .split("\0")
       .filter(Boolean)
-      .map((filePath) => ({ path: normalizePath(filePath), status: "added" as const }))
+      .map((filePath) => ({ path: normalizeRepoPath(filePath), status: "added" as const }))
       .filter((file) => !isPathExcluded(file.path, excludePatterns));
   }
 
@@ -212,14 +212,14 @@ function parseNameStatus(output: string): ChangedFile[] {
       index += 1;
       const destination = tokens[index++];
       if (destination) {
-        files.push({ path: normalizePath(destination), status: "renamed" });
+        files.push({ path: normalizeRepoPath(destination), status: "renamed" });
       }
       continue;
     }
 
     const filePath = tokens[index++];
     if (filePath) {
-      files.push({ path: normalizePath(filePath), status: mapDiffStatus(statusToken) });
+      files.push({ path: normalizeRepoPath(filePath), status: mapDiffStatus(statusToken) });
     }
   }
 
@@ -231,7 +231,7 @@ function parseNumStat(output: string): Map<string, Pick<ChangedFile, "insertions
   const stats = new Map<string, Pick<ChangedFile, "insertions" | "deletions">>();
 
   for (let index = 0; index < tokens.length;) {
-    const match = /^(\d+|-)\t(\d+|-)\t([\s\S]*)$/.exec(tokens[index++]);
+    const match = /^(\d+|-)\t(\d+|-)\t([\s\S]*)$/.exec(tokens[index++] ?? "");
     if (!match) {
       continue;
     }
@@ -242,7 +242,7 @@ function parseNumStat(output: string): Map<string, Pick<ChangedFile, "insertions
       filePath = tokens[index++];
     }
     if (filePath) {
-      stats.set(normalizePath(filePath), {
+      stats.set(normalizeRepoPath(filePath), {
         insertions: match[1] === "-" ? undefined : Number(match[1]),
         deletions: match[2] === "-" ? undefined : Number(match[2]),
       });

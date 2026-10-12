@@ -118,7 +118,11 @@ describe("rollback planner", () => {
 
   it("converts report paths to literal top-level Git pathspecs", () => {
     expect(toLiteralGitPathspec("src/[special]*.ts")).toBe(":(top,literal)src/[special]*.ts");
-    expect(toLiteralGitPathspec("src\\index.ts")).toBe(":(top,literal)src/index.ts");
+  });
+
+  it("keeps a backslash in a recorded path distinct from a directory separator on POSIX", () => {
+    const expected = process.platform === "win32" ? ":(top,literal)src/index.ts" : ":(top,literal)src\\index.ts";
+    expect(toLiteralGitPathspec("src\\index.ts")).toBe(expected);
   });
 
   it("uses literal pathspecs in the copyable restore preview", () => {

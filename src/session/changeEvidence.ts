@@ -6,7 +6,7 @@ import type {
   SessionBaseline,
   SessionChangeEvidence,
 } from "../types.js";
-import { normalizePath } from "../utils/paths.js";
+import { normalizeRepoPath } from "../utils/paths.js";
 
 export function buildChangeEvidence(
   baseline: SessionBaseline | null,
@@ -16,7 +16,7 @@ export function buildChangeEvidence(
 ): SessionChangeEvidence {
   const startByPath = new Map((baseline?.git.changedFiles ?? []).map((file) => [file.path, file]));
   const endByPath = new Map(finalGit.changedFiles.map((file) => [file.path, file]));
-  const observedPaths = new Set(events.map((event) => normalizePath(event.path)));
+  const observedPaths = new Set(events.map((event) => normalizeRepoPath(event.path)));
   const paths = [...new Set([...startByPath.keys(), ...observedPaths, ...endByPath.keys()])].sort();
 
   return {

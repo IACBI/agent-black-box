@@ -1,5 +1,5 @@
 import path from "node:path";
-import { appendFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, open, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONFIG } from "../src/config/defaults.js";
 import { buildSessionReport, generateSummaryMarkdown } from "../src/reports/markdown.js";
@@ -159,7 +159,7 @@ describe("session catalog", () => {
     "bounds fallback and metadata reads with input quota %s",
     async (maxMaterializedBytes) => {
       const repo = await createTempDir("abb-catalog-concurrency-");
-      const readJsonFileLimited = files.readJsonFileLimited;
+      const readFileLimited = files.readFileLimited;
       let activeReportReads = 0;
       let maximumReportReads = 0;
       let metadataReads = 0;
@@ -177,14 +177,14 @@ describe("session catalog", () => {
             await writeJsonFile(path.join(sessionDir, SESSION_METADATA_FILE), buildSessionMetadata(report));
           }
         }
-        const reader = vi.spyOn(files, "readJsonFileLimited").mockImplementation(async (filePath, maxBytes) => {
+        const reader = vi.spyOn(files, "readFileLimited").mockImplementation(async (filePath, maxBytes) => {
           if (path.basename(filePath) !== "session.json") {
             metadataReads += 1;
             activeMetadataReads += 1;
             maximumMetadataReads = Math.max(maximumMetadataReads, activeMetadataReads);
             try {
               await new Promise((resolve) => setTimeout(resolve, 10));
-              return await readJsonFileLimited(filePath, maxBytes);
+              return await readFileLimited(filePath, maxBytes);
             } finally {
               activeMetadataReads -= 1;
             }
@@ -194,7 +194,7 @@ describe("session catalog", () => {
           try {
             expect(metadataReads).toBe(4);
             await new Promise((resolve) => setTimeout(resolve, 10));
-            return await readJsonFileLimited(filePath, maxBytes);
+            return await readFileLimited(filePath, maxBytes);
           } finally {
             activeReportReads -= 1;
           }
@@ -341,6 +341,7 @@ describe("session catalog", () => {
         path: `src/${"x".repeat(30_000)}.ts`,
       };
       report.events = Array.from({ length: 1_200 }, () => event);
+      report.git.statusText += " \uFFFD";
       report.integrity.discardedFileEventLines = 1;
       report.integrity.warnings.push("Discarded malformed file event on line 1.");
       await mkdir(sessionDir, { recursive: true });
@@ -359,6 +360,81 @@ describe("session catalog", () => {
       expect(reopened.events).toHaveLength(1_200);
       expect(reopened.events[0]).toEqual(event);
       expect(reopened.integrity.discardedFileEventLines).toBe(1);
+      const reportPath = path.join(sessionDir, "session.json");
+      const materializedBytes =
+        (await stat(reportPath)).size + (await stat(path.join(sessionDir, REPORT_REPLAY_FILE))).size;
+      await expect(readCatalogSessionReport(entry, { maxMaterializedBytes: INLINE_REPORT_BYTES })).rejects.toThrow(
+        "working-data policy"
+      );
+      const budgeted = await readCatalogSessionReport(entry, { maxMaterializedBytes: materializedBytes });
+      expect(budgeted).toEqual(reopened);
+
+      const handle = await open(eventPath, "r+");
+      const eventOffset = Buffer.byteLength(invalidEvent) + 1 + JSON.stringify(event).indexOf("src/") + 4;
+      try {
+        await handle.write(Buffer.from("y"), 0, 1, eventOffset);
+        await expect(readCatalogSessionReport(entry, { maxMaterializedBytes: materializedBytes })).rejects.toThrow(
+          "event logs no longer match"
+        );
+      } finally {
+        await handle.write(Buffer.from("x"), 0, 1, eventOffset);
+        await handle.close();
+      }
+
+      const initialReplay = await readFile(path.join(sessionDir, REPORT_REPLAY_FILE), "utf8");
+      const alteredReplay = JSON.parse(initialReplay) as { report: { finalizedBy: string } };
+      alteredReplay.report.finalizedBy = "altered";
+      await writeJsonFile(path.join(sessionDir, REPORT_REPLAY_FILE), alteredReplay);
+      try {
+        await expect(
+          readCatalogSessionReport(entry, { maxMaterializedBytes: materializedBytes + 1024 })
+        ).rejects.toThrow("records no longer match replay metadata");
+      } finally {
+        await writeFile(path.join(sessionDir, REPORT_REPLAY_FILE), initialReplay);
+      }
+
+      // Mutate the file after replay verification but before the full bounded read, without changing its size.
+      const originalReport = await readFile(reportPath, "utf8");
+      const readFileLimited = files.readFileLimited;
+      const reader = vi.spyOn(files, "readFileLimited").mockImplementation(async (filePath, maxBytes) => {
+        if (filePath === reportPath) {
+          await writeFile(reportPath, originalReport.replace("Working tree clean", "Working tree dirty"));
+        }
+        return readFileLimited(filePath, maxBytes);
+      });
+      try {
+        await expect(readCatalogSessionReport(entry, { maxMaterializedBytes: materializedBytes })).rejects.toThrow(
+          "changed after finalization"
+        );
+      } finally {
+        reader.mockRestore();
+        await writeFile(reportPath, originalReport);
+      }
+
+      // These three invalid UTF-8 bytes decode to the same replacement character as the original bytes.
+      const replacementOffset = Buffer.from(originalReport).indexOf(Buffer.from("\uFFFD"));
+      expect(replacementOffset).toBeGreaterThanOrEqual(0);
+      const malformedBytes = Buffer.from([0xf0, 0x9f, 0x80]);
+      expect(malformedBytes.toString("utf8")).toBe("\uFFFD");
+      const rawReader = vi.spyOn(files, "readFileLimited").mockImplementation(async (filePath, maxBytes) => {
+        if (filePath === reportPath) {
+          const reportHandle = await open(reportPath, "r+");
+          try {
+            await reportHandle.write(malformedBytes, 0, malformedBytes.length, replacementOffset);
+          } finally {
+            await reportHandle.close();
+          }
+        }
+        return readFileLimited(filePath, maxBytes);
+      });
+      try {
+        await expect(readCatalogSessionReport(entry, { maxMaterializedBytes: materializedBytes })).rejects.toThrow(
+          "changed after finalization"
+        );
+      } finally {
+        rawReader.mockRestore();
+        await writeFile(reportPath, originalReport);
+      }
       await expect(verifyCatalogSessionReportFile(entry)).resolves.toBeUndefined();
       await expect(verifyCatalogSessionReportFile(entry, { verifyEventLogs: true })).resolves.toBeUndefined();
 

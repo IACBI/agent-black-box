@@ -8,9 +8,24 @@ export function normalizePath(input: string): string {
   return input.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+/g, "/");
 }
 
+/**
+ * Normalizes a path that identifies a file (Git output, watcher events). Unlike {@link normalizePath}, a
+ * backslash is only a separator where the platform says so: on POSIX it is a legal filename character, and
+ * rewriting it would make `a\b` indistinguishable from `a/b`.
+ */
+export function normalizeRepoPath(input: string, backslashIsSeparator: boolean = path.sep === "\\"): string {
+  if (backslashIsSeparator) {
+    return normalizePath(input);
+  }
+  if (!input.includes("//") && !input.startsWith("./")) {
+    return input;
+  }
+  return input.replace(/^\.\//, "").replace(/\/+/g, "/");
+}
+
 export function toRepoRelative(repoRoot: string, filePath: string): string {
   const relative = path.isAbsolute(filePath) ? path.relative(repoRoot, filePath) : filePath;
-  return normalizePath(relative);
+  return normalizeRepoPath(relative);
 }
 
 export function resolveRepoPath(repoRoot: string, relativePath: string): string | null {

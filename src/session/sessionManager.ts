@@ -13,14 +13,23 @@ import type {
 } from "../types.js";
 import { collectGitChangesBetween, collectGitSnapshot } from "../git/git.js";
 import { detectRisks } from "../risks/riskDetector.js";
-import { detectPossibleSecrets } from "../risks/secretDetector.js";
+import { scanChangedFilesForSecrets } from "../risks/secretDetector.js";
 import { writeRollbackSafetyState } from "../rollback/rollback.js";
 import { buildSessionReport } from "../reports/markdown.js";
 import { writeReports } from "../reports/reportWriter.js";
-import { ensureDir, pathExists, readJsonFileLimited, removeFileIfExists, writeJsonFile } from "../utils/files.js";
+import {
+  ensureDir,
+  pathExists,
+  readJsonFileLimited,
+  removeFileIfExists,
+  writeJsonFile,
+  writeTextFileAtomic,
+} from "../utils/files.js";
 import { buildChangeEvidence, selectSessionRelevantChanges } from "./changeEvidence.js";
 import { verifyCatalogSessionReportFile } from "./sessionCatalog.js";
 import { isCapturedCommandEvent, isCapturedFileEvent, readNdjsonRecords, type NdjsonReadResult } from "./ndjson.js";
+import { isRecord } from "../utils/records.js";
+import { sleep } from "../utils/timing.js";
 
 const ACTIVE_SESSION_FILE = "active-session.json";
 const STOP_REQUEST_FILE = "stop-request.json";
@@ -39,8 +48,8 @@ const CAPTURE_LOSS_MARKERS = {
 const SESSION_START_FILE = "session-start.json";
 const GIT_BASELINE_FILE = "git-start.json";
 const MAX_PATH_LENGTH = 32_768;
-const MAX_COMMAND_LENGTH = 32_768;
 const MAX_STATE_FILE_BYTES = 1024 * 1024;
+const MAX_GIT_BASELINE_BYTES = 32 * 1024 * 1024;
 
 export interface SessionLock {
   sessionId: string;
@@ -113,6 +122,13 @@ export async function createSession(repoRoot: string, config: AgentBlackBoxConfi
     capturedAt: new Date().toISOString(),
     git: await collectGitSnapshot(repoRoot, config.exclude),
   };
+  const baselineText = `${JSON.stringify(baseline, null, 2)}\n`;
+  if (Buffer.byteLength(baselineText, "utf8") > MAX_GIT_BASELINE_BYTES) {
+    throw new Error("Git start baseline exceeds the 32 MiB size limit; session was not started.");
+  }
+  if (!isSessionBaseline(baseline)) {
+    throw new Error("Git start baseline has an unsupported shape; session was not started.");
+  }
 
   await ensureDir(getStateDir(repoRoot, config));
   const recoveryState = await inspectSessionRecoveryState(repoRoot, config);
@@ -144,7 +160,7 @@ export async function createSession(repoRoot: string, config: AgentBlackBoxConfi
     await mkdir(sessionDir, { mode: 0o700 });
     await writeFile(getEventsPath(sessionDir), "", "utf8");
     await writeFile(getCommandsPath(sessionDir), "", "utf8");
-    await writeJsonFile(getGitBaselinePath(sessionDir), baseline);
+    await writeTextFileAtomic(getGitBaselinePath(sessionDir), baselineText);
     await writeJsonFile(path.join(sessionDir, SESSION_START_FILE), session);
     await writeJsonFile(getActiveSessionPath(repoRoot, config), session);
     await removeFileIfExists(getStopRequestPath(repoRoot, config));
@@ -302,7 +318,19 @@ export async function readStopRequest(repoRoot: string, config: AgentBlackBoxCon
 }
 
 export async function appendFileEvent(session: ActiveSession, event: FileEvent): Promise<void> {
-  await appendFile(getEventsPath(session.sessionDir), `${JSON.stringify(event)}\n`, "utf8");
+  await appendFileEvents(session, [event]);
+}
+
+/** Appends events in order with a single write, so a burst costs one open/close instead of one per event. */
+export async function appendFileEvents(session: ActiveSession, events: readonly FileEvent[]): Promise<void> {
+  if (events.length === 0) {
+    return;
+  }
+  await appendFile(
+    getEventsPath(session.sessionDir),
+    events.map((event) => `${JSON.stringify(event)}\n`).join(""),
+    "utf8"
+  );
 }
 
 export async function markCaptureLoss(session: ActiveSession, kind: keyof typeof CAPTURE_LOSS_MARKERS): Promise<void> {
@@ -348,7 +376,9 @@ export async function readCommandEvents(sessionDir: string): Promise<CommandEven
 }
 
 export async function readSessionBaseline(sessionDir: string): Promise<SessionBaseline | null> {
-  return (await readStateFile<SessionBaseline>(getGitBaselinePath(sessionDir), isSessionBaseline)).value;
+  return (
+    await readStateFile<SessionBaseline>(getGitBaselinePath(sessionDir), isSessionBaseline, MAX_GIT_BASELINE_BYTES)
+  ).value;
 }
 
 export async function readFileEventsWithDiagnostics(sessionDir: string): Promise<NdjsonReadResult<FileEvent>> {
@@ -385,17 +415,24 @@ async function finalizeOwnedSession(
     Object.values(CAPTURE_LOSS_MARKERS).map((name) => fileExistsStrict(path.join(active.sessionDir, name)))
   );
   const endedAt = new Date().toISOString();
-  const fileEvents = await readFileEventsWithDiagnostics(active.sessionDir);
-  const commandEvents = await readCommandEventsWithDiagnostics(active.sessionDir);
-  const baselineState = await readStateFile<SessionBaseline>(getGitBaselinePath(active.sessionDir), isSessionBaseline);
-  const git = await collectGitSnapshot(active.repoRoot, config.exclude);
+  // The log parses are CPU-bound and the Git snapshot is process-spawn latency, so they overlap.
+  const [fileEvents, commandEvents, baselineState, git] = await Promise.all([
+    readFileEventsWithDiagnostics(active.sessionDir),
+    readCommandEventsWithDiagnostics(active.sessionDir),
+    readStateFile<SessionBaseline>(getGitBaselinePath(active.sessionDir), isSessionBaseline, MAX_GIT_BASELINE_BYTES),
+    collectGitSnapshot(active.repoRoot, config.exclude),
+  ]);
   const committedChanges = baselineState.value
     ? await collectGitChangesBetween(active.repoRoot, baselineState.value.git.head, git.head, config.exclude)
     : [];
   const changeEvidence = buildChangeEvidence(baselineState.value, fileEvents.records, git, committedChanges);
   const sessionRelevantChanges = selectSessionRelevantChanges(git, changeEvidence);
   const risks = detectRisks(sessionRelevantChanges, config);
-  const possibleSecrets = await detectPossibleSecrets(active.repoRoot, sessionRelevantChanges, config);
+  const { findings: possibleSecrets, allowlisted: allowlistedSecretCount } = await scanChangedFilesForSecrets(
+    active.repoRoot,
+    sessionRelevantChanges,
+    config
+  );
   const baselineWarnings = baselineState.value
     ? []
     : [
@@ -438,7 +475,8 @@ async function finalizeOwnedSession(
       failedFileEventWrites: captureLoss.failedFileEventWrites,
     },
     baselineState.value,
-    committedChanges
+    committedChanges,
+    { changeEvidence, allowlistedSecretCount }
   );
 
   try {
@@ -492,7 +530,7 @@ async function waitForInFlightCommands(sessionDir: string): Promise<string[]> {
         ...(failedCount > 0 ? [`Failed to persist ${failedCount} wrapped command completion(s).`] : []),
       ];
     }
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await sleep(100);
   }
 }
 
@@ -642,13 +680,16 @@ async function releaseSessionLock(repoRoot: string, config: AgentBlackBoxConfig,
   await removeFileIfExists(getSessionLockPath(repoRoot, config));
 }
 
-async function readStateFile<T>(filePath: string, guard: (value: unknown) => value is T): Promise<StateReadResult<T>> {
-  if (!(await pathExists(filePath))) {
-    return { value: null, corrupted: false };
-  }
-
+async function readStateFile<T>(
+  filePath: string,
+  guard: (value: unknown) => value is T,
+  maxBytes = MAX_STATE_FILE_BYTES
+): Promise<StateReadResult<T>> {
   try {
-    const value = await readJsonFileLimited<unknown>(filePath, MAX_STATE_FILE_BYTES);
+    if (!(await pathExists(filePath))) {
+      return { value: null, corrupted: false };
+    }
+    const value = await readJsonFileLimited<unknown>(filePath, maxBytes);
     if (!guard(value)) {
       return { value: null, corrupted: true, error: "State file has an unexpected shape." };
     }
@@ -706,8 +747,8 @@ function isGitSnapshot(value: unknown): value is GitSnapshot {
     isOptionalBoundedString(value.head, 128) &&
     isOptionalBoundedString(value.indexFingerprint, 128) &&
     isOptionalBoundedString(value.branch, 1024) &&
-    isBoundedString(value.statusText, MAX_COMMAND_LENGTH * 32) &&
-    isBoundedString(value.diffSummaryText, MAX_COMMAND_LENGTH * 32) &&
+    isBoundedString(value.statusText, MAX_GIT_BASELINE_BYTES) &&
+    isBoundedString(value.diffSummaryText, MAX_GIT_BASELINE_BYTES) &&
     Array.isArray(value.changedFiles) &&
     value.changedFiles.every(
       (file) =>
@@ -716,10 +757,6 @@ function isGitSnapshot(value: unknown): value is GitSnapshot {
         ["added", "modified", "deleted", "renamed", "unknown"].includes(String(file.status))
     )
   );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isSessionId(value: unknown): value is string {

@@ -32,4 +32,38 @@ describe("markdown utilities", () => {
   it("escapes table cell separators and line breaks", () => {
     expect(escapeMarkdownTableCell("one | two\nthree")).toBe("one \\| two three");
   });
+
+  it("escapes every markdown-significant character and leaves other text untouched", () => {
+    const bs = String.fromCharCode(92);
+    const escaped = [...(bs + "`*_{}[]()#+!|")].map((character) => `${bs}${character}`).join("");
+    expect(escapeMarkdownText(bs + "`*_{}[]()#+!|&<>")).toBe(`${escaped}&amp;&lt;&gt;`);
+    expect(escapeMarkdownText("plain-text.ts é 日本 😀")).toBe("plain-text.ts é 日本 😀");
+  });
+
+  it("replaces every C0 control character and DEL with a space", () => {
+    const controls = Array.from({ length: 32 }, (_, code) => String.fromCharCode(code)).join("") + "\u007F";
+    expect(normalizeMarkdownText(`a${controls}b`)).toBe(`a${" ".repeat(33)}b`);
+    expect(normalizeMarkdownText("a\u0080b")).toBe("a\u0080b");
+  });
+
+  it("escapes only table-significant characters in table cells", () => {
+    const bs = String.fromCharCode(92);
+    const escaped = [...(bs + "`|[]")].map((character) => `${bs}${character}`).join("");
+    expect(escapeMarkdownTableCell(bs + "`|[]&<>*_#")).toBe(`${escaped}&amp;&lt;&gt;*_#`);
+  });
+
+  it("shows bidirectional overrides literally so a path cannot read as another path", () => {
+    const spoofed = "src/\u202egnp.exe";
+    expect(normalizeMarkdownText(spoofed)).toBe("src/\\u202egnp.exe");
+    expect(markdownInlineCode(spoofed)).toBe("`src/\\u202egnp.exe`");
+    expect(markdownInlineCode(spoofed)).not.toContain("\u202e");
+    expect(escapeMarkdownTableCell(`a\u2066b\u2069c\u200fd\u061ce`)).not.toMatch(/[\u061c\u200f\u2066\u2069]/);
+    expect(markdownCodeBlock(`status ${spoofed}`)).not.toContain("\u202e");
+    expect(normalizeMarkdownText("plain\u200dtext")).toBe("plain\u200dtext");
+  });
+
+  it("renders empty inline code and picks a fence longer than the longest tick run", () => {
+    expect(markdownInlineCode("")).toBe("``");
+    expect(markdownInlineCode("a```b`c")).toBe("```` a```b`c ````");
+  });
 });

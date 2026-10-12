@@ -189,6 +189,23 @@ describe("command recorder", () => {
     expect(parts.join(" ")).not.toContain(credential);
   });
 
+  it("redacts passwords in non-HTTP URLs and passphrase-style flags without hiding ssh usernames", () => {
+    const credential = ["do", "-not", "-store"].join("");
+    const parts = redactCommandParts([
+      `postgres://app:${credential}@db.example.test/main`,
+      "ssh://git@example.test/repo.git",
+      `--passphrase=${credential}`,
+      "--pwd",
+      credential,
+    ]);
+
+    expect(parts.join(" ")).not.toContain(credential);
+    expect(parts[0]).toContain("@db.example.test/main");
+    expect(parts[1]).toBe("ssh://git@example.test/repo.git");
+    expect(parts[2]).toBe("--passphrase=<redacted>");
+    expect(parts.slice(3, 5)).toEqual(["--pwd", "<redacted>"]);
+  });
+
   it("redacts sensitive command metadata before persisting it", async () => {
     const dir = await createTempDir();
     try {

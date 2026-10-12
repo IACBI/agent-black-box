@@ -150,7 +150,11 @@ function finding(pathName: string, category: string, severity: RiskSeverity, rea
   };
 }
 
-export function summarizeRisks(risks: RiskFinding[], possibleSecrets: SecretFinding[] = []): RiskSummary {
+export function summarizeRisks(
+  risks: RiskFinding[],
+  possibleSecrets: SecretFinding[] = [],
+  allowlistedSecretCount = 0
+): RiskSummary {
   const severityCounts: Record<RiskSeverity, number> = {
     low: 0,
     medium: 0,
@@ -168,6 +172,7 @@ export function summarizeRisks(risks: RiskFinding[], possibleSecrets: SecretFind
     score,
     maxSeverity: score >= 80 ? "high" : score >= 50 ? "medium" : score > 0 ? "low" : "none",
     possibleSecretCount: possibleSecrets.length,
+    ...(allowlistedSecretCount > 0 ? { allowlistedSecretCount } : {}),
     severityCounts,
   };
 }
