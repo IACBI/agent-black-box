@@ -78,27 +78,44 @@ export async function writeTextFileAtomic(
 
   const temporaryPath = path.join(directory, `.${path.basename(filePath)}.${process.pid}.${randomUUID()}.tmp`);
   const handle = await open(temporaryPath, "wx", 0o600);
+  const failures: unknown[] = [];
   try {
     await handle.writeFile(contents, "utf8");
     await handle.sync();
   } catch (error) {
+    failures.push(error);
+  }
+  try {
     await handle.close();
-    await rm(temporaryPath, { force: true });
-    throw error;
+  } catch (error) {
+    failures.push(error);
   }
 
-  await handle.close();
-  try {
-    if (options.overwrite === false) {
-      // Publish the completed file exclusively; rename would overwrite a concurrent creator.
-      await link(temporaryPath, filePath);
-      await rm(temporaryPath, { force: true });
-    } else {
-      await rename(temporaryPath, filePath);
+  if (failures.length === 0) {
+    try {
+      if (options.overwrite === false) {
+        // Publish the completed file exclusively; rename would overwrite a concurrent creator.
+        await link(temporaryPath, filePath);
+      } else {
+        await rename(temporaryPath, filePath);
+      }
+    } catch (error) {
+      failures.push(error);
     }
-  } catch (error) {
-    await rm(temporaryPath, { force: true });
-    throw error;
+  }
+  // Close and cleanup failures must not hide the original write/publication failure.
+  if (options.overwrite === false || failures.length > 0) {
+    try {
+      await rm(temporaryPath, { force: true });
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length === 1) {
+    throw failures[0];
+  }
+  if (failures.length > 1) {
+    throw new AggregateError(failures, "Atomic file publication failed; additional close or cleanup errors occurred.");
   }
 }
 

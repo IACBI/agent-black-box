@@ -27,6 +27,18 @@ export interface ComparedCommandCount {
   toCount: number;
 }
 
+/** Location evidence only: credential values and redacted excerpts are never compared or returned. */
+export interface ComparedSecretLocation {
+  path: string;
+  line: number;
+  reason: string;
+}
+
+export interface ComparedSecretCount extends ComparedSecretLocation {
+  fromCount: number;
+  toCount: number;
+}
+
 export interface SessionComparison {
   from: ComparedSessionSummary;
   to: ComparedSessionSummary;
@@ -57,6 +69,14 @@ export interface SessionComparison {
     fromFailedCount: number;
     toFailedCount: number;
     changedCounts: ComparedCommandCount[];
+  };
+  secrets?: {
+    fromCount: number;
+    toCount: number;
+    countDelta: number;
+    onlyInFrom: ComparedSecretLocation[];
+    onlyInTo: ComparedSecretLocation[];
+    changedCounts: ComparedSecretCount[];
   };
 }
 
@@ -114,6 +134,45 @@ export function buildSessionComparison(fromReport: SessionReport, toReport: Sess
       toFailedCount: countFailedCommands(toReport.commands),
       changedCounts: changedCommandCounts,
     },
+    secrets: compareSecretLocations(fromReport, toReport),
+  };
+}
+
+function compareSecretLocations(from: SessionReport, to: SessionReport): NonNullable<SessionComparison["secrets"]> {
+  const countLocations = (report: SessionReport) => {
+    const counts = new Map<string, { location: ComparedSecretLocation; count: number }>();
+    for (const finding of report.possibleSecrets) {
+      const location = { path: finding.path, line: finding.line, reason: finding.reason };
+      const key = JSON.stringify([location.path, location.line, location.reason]);
+      counts.set(key, { location, count: (counts.get(key)?.count ?? 0) + 1 });
+    }
+    return counts;
+  };
+  const fromCounts = countLocations(from);
+  const toCounts = countLocations(to);
+  const differences = [...new Set([...fromCounts.keys(), ...toCounts.keys()])]
+    .map((key) => ({
+      ...(fromCounts.get(key)?.location ?? toCounts.get(key)!.location),
+      fromCount: fromCounts.get(key)?.count ?? 0,
+      toCount: toCounts.get(key)?.count ?? 0,
+    }))
+    .filter((location) => location.fromCount !== location.toCount)
+    .sort(
+      (left, right) =>
+        left.path.localeCompare(right.path) || left.line - right.line || left.reason.localeCompare(right.reason)
+    );
+  const projectLocation = ({ path, line, reason }: ComparedSecretCount): ComparedSecretLocation => ({
+    path,
+    line,
+    reason,
+  });
+  return {
+    fromCount: from.possibleSecrets.length,
+    toCount: to.possibleSecrets.length,
+    countDelta: to.possibleSecrets.length - from.possibleSecrets.length,
+    onlyInFrom: differences.filter((location) => location.toCount === 0).map(projectLocation),
+    onlyInTo: differences.filter((location) => location.fromCount === 0).map(projectLocation),
+    changedCounts: differences,
   };
 }
 
@@ -171,7 +230,7 @@ function countCommands(commands: CommandEvent[]): Map<string, { command: Command
 }
 
 function countFailedCommands(commands: CommandEvent[]): number {
-  return commands.filter((command) => command.exitCode !== null && command.exitCode !== 0).length;
+  return commands.filter((command) => command.exitCode !== 0).length;
 }
 
 function riskKey(risk: RiskFinding): string {

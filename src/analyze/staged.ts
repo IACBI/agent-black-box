@@ -7,7 +7,12 @@ import { mapWithConcurrency } from "../utils/concurrency.js";
 import { isLikelyBinary } from "../utils/fileInspection.js";
 import { isPathExcluded, normalizeRepoPath } from "../utils/paths.js";
 import type { AnalysisInputFile } from "./analyzer.js";
-import { ANALYSIS_IO_CONCURRENCY, MAX_ANALYSIS_BYTES } from "./limits.js";
+import {
+  ANALYSIS_IO_CONCURRENCY,
+  MAX_ANALYSIS_BYTES,
+  analysisBudgetSkipReason,
+  type AnalysisCollectionOptions,
+} from "./limits.js";
 
 interface TreeEntry {
   mode: string;
@@ -23,7 +28,8 @@ function isRegularFileMode(mode: string): boolean {
 
 export async function collectStagedAnalysisInputFiles(
   repoRoot: string,
-  config: AgentBlackBoxConfig
+  config: AgentBlackBoxConfig,
+  options: AnalysisCollectionOptions = {}
 ): Promise<AnalysisInputFile[]> {
   const changedFiles = await collectStagedChanges(repoRoot, config.exclude);
   if (changedFiles.length === 0) {
@@ -43,7 +49,7 @@ export async function collectStagedAnalysisInputFiles(
 
   const maxBytes = Math.min(config.maxFileSizeKb * 1024, MAX_ANALYSIS_BYTES);
   const entries = changedFiles.map((file) => (file.status === "deleted" ? undefined : indexEntries.get(file.path)));
-  const blobs = await readRegularFileBlobs(repoRoot, entries, maxBytes);
+  const blobs = await readRegularFileBlobs(repoRoot, entries, maxBytes, "staged", options);
 
   return changedFiles.map((file, index): AnalysisInputFile => {
     if (file.status === "deleted") {
@@ -57,23 +63,20 @@ export async function collectStagedAnalysisInputFiles(
       return { ...file, kind: "not-file", analysisSkipReason: "The staged entry is not a regular file." };
     }
 
-    const blob = blobs[index];
-    if (blob === null || blob === undefined) {
-      return { ...file, kind: "large", analysisSkipReason: `The staged blob exceeds ${maxBytes} bytes.` };
-    }
-    if (isLikelyBinary(blob)) {
-      return { ...file, kind: "binary", sizeBytes: blob.length, analysisSkipReason: "Binary-like staged content." };
-    }
-    return { ...file, kind: "text", sizeBytes: blob.length, content: blob.toString("utf8") };
+    return { ...file, ...blobs[index] };
   });
 }
 
-/** Reads every regular-file entry with one Git process; other positions stay `undefined`. */
+type AnalysisBlob = Pick<AnalysisInputFile, "kind" | "content" | "sizeBytes" | "analysisSkipReason">;
+
+/** Classifies each bounded blob as it arrives; other positions stay `undefined`. */
 async function readRegularFileBlobs(
   repoRoot: string,
   entries: ReadonlyArray<TreeEntry | undefined>,
-  maxBytes: number
-): Promise<Array<Buffer | null | undefined>> {
+  maxBytes: number,
+  source: "staged" | "baseline",
+  options: AnalysisCollectionOptions
+): Promise<Array<AnalysisBlob | undefined>> {
   const positions: number[] = [];
   const objectIds: string[] = [];
   entries.forEach((entry, index) => {
@@ -83,8 +86,21 @@ async function readRegularFileBlobs(
     }
   });
 
-  const blobs = await readGitBlobs(repoRoot, objectIds, maxBytes);
-  const byPosition: Array<Buffer | null | undefined> = new Array(entries.length).fill(undefined);
+  const blobs = await readGitBlobs(repoRoot, objectIds, maxBytes, (blob): AnalysisBlob => {
+    if (blob === null) {
+      return { kind: "large", analysisSkipReason: `The ${source} blob exceeds ${maxBytes} bytes.` };
+    }
+    const size = source === "staged" ? { sizeBytes: blob.length } : {};
+    if (isLikelyBinary(blob)) {
+      return { ...size, kind: "binary", analysisSkipReason: `Binary-like ${source} content.` };
+    }
+    const content = blob.toString("utf8");
+    if (options.contentBudget && !options.contentBudget.retain(content)) {
+      return { kind: "unknown", analysisSkipReason: analysisBudgetSkipReason(options.contentBudget) };
+    }
+    return { ...size, kind: "text", content };
+  });
+  const byPosition: Array<AnalysisBlob | undefined> = new Array(entries.length).fill(undefined);
   positions.forEach((position, index) => {
     byPosition[position] = blobs[index];
   });
@@ -111,7 +127,8 @@ export async function collectBaselineAnalysisInputFiles(
   repoRoot: string,
   stagedFiles: readonly AnalysisInputFile[],
   config: AgentBlackBoxConfig,
-  commit: string
+  commit: string,
+  options: AnalysisCollectionOptions = {}
 ): Promise<AnalysisInputFile[]> {
   if (!/^[0-9a-f]{40,64}$/.test(commit)) {
     throw new Error("Baseline commit must be a full Git object ID.");
@@ -150,7 +167,9 @@ export async function collectBaselineAnalysisInputFiles(
   const blobs = await readRegularFileBlobs(
     repoRoot,
     lookups.map((lookup) => lookup.entry),
-    maxBytes
+    maxBytes,
+    "baseline",
+    options
   );
 
   return stagedFiles.map((file, index): AnalysisInputFile => {
@@ -169,29 +188,11 @@ export async function collectBaselineAnalysisInputFiles(
         analysisSkipReason: "The baseline entry is not a regular file.",
       };
     }
-    const blob = blobs[index];
-    if (blob === null || blob === undefined) {
-      return {
-        path: file.path,
-        status: file.status,
-        kind: "large",
-        analysisSkipReason: `The baseline blob exceeds ${maxBytes} bytes.`,
-      };
-    }
-    if (isLikelyBinary(blob)) {
-      return {
-        path: file.path,
-        status: file.status,
-        kind: "binary",
-        analysisSkipReason: "Binary-like baseline content.",
-      };
-    }
     return {
       path: file.path,
       status: file.status,
-      kind: "text",
-      content: blob.toString("utf8"),
-      ...(baselineSourcePath ? { baselineSourcePath } : {}),
+      ...blobs[index],
+      ...(baselineSourcePath && blobs[index]?.kind === "text" ? { baselineSourcePath } : {}),
     };
   });
 }

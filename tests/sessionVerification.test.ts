@@ -55,6 +55,12 @@ describe("session verification", () => {
     expect(16 * (2 * maximum.maxMaterializedBytes! + maximum.streamWorkingBytes)).toBeLessThanOrEqual(
       4096 * 1024 * 1024
     );
+    const repair = getSessionVerificationLimits({ memoryBudgetMb: 32, concurrency: 16, repairIndexes: true });
+    expect(repair.concurrency).toBe(1);
+    expect(repair.maxMaterializedBytes).toBe((32 * 1024 * 1024 - VERIFICATION_STREAM_WORKING_BYTES) / 2);
+    expect(() => getSessionVerificationLimits({ concurrency: 17, repairIndexes: true })).toThrow(
+      "integer between 1 and 16"
+    );
   });
 
   it.each([

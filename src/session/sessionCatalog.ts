@@ -1,5 +1,6 @@
 import { lstat, readdir } from "node:fs/promises";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import type {
   AgentBlackBoxConfig,
   ChangedFile,
@@ -19,7 +20,6 @@ import {
   assertMaterializationBudget,
   digestBuffer,
   digestRecords,
-  digestRegularFile,
   INLINE_REPORT_BYTES,
   isReportReplay,
   MAX_REPORT_BYTES,
@@ -27,6 +27,7 @@ import {
   REPORT_REPLAY_FILE,
   readJsonFileWithinBudget,
   readBufferWithinBudget,
+  readCanonicalReportCore,
   type ReportReplay,
   validateMaterializationLimit,
 } from "./reportStorage.js";
@@ -201,6 +202,33 @@ export async function readCatalogSessionReport(
 ): Promise<SessionReport> {
   validateMaterializationLimit(options.maxMaterializedBytes);
   return readCatalogSessionReportWithinLimit(entry, options.maxMaterializedBytes);
+}
+
+/** Read verified metadata without retaining a replay-backed report's record arrays. */
+export async function readVerifiedCatalogSessionReportCore(
+  entry: SessionCatalogEntry,
+  options: SessionCatalogOptions = {}
+): Promise<{ report: SessionReport; eventCount: number; commandCount: number; commandDigest: string }> {
+  validateMaterializationLimit(options.maxMaterializedBytes);
+  if (entry.state !== "complete") {
+    throw new Error(`Session ${entry.id} is not complete.`);
+  }
+  const result = await readStoredReportUnknown(entry.sessionDir, entry.id, {
+    maxMaterializedBytes: options.maxMaterializedBytes,
+    metadataOnly: true,
+  });
+  const report = parseSessionReport(result.value);
+  if (!report || report.id !== entry.id) {
+    throw new Error(
+      `Session ${entry.id} contains an invalid session.json report${result.error ? `: ${result.error}` : "."}`
+    );
+  }
+  return {
+    report,
+    eventCount: result.eventCount ?? report.events.length,
+    commandCount: result.commandCount ?? report.commands.length,
+    commandDigest: result.commandDigest ?? digestRecords(report.commands),
+  };
 }
 
 async function readCatalogSessionReportWithinLimit(
@@ -420,7 +448,7 @@ async function readStoredReportUnknown(
   sessionDir: string,
   id: string,
   options: { maxMaterializedBytes?: number; metadataOnly?: boolean } = {}
-): Promise<{ value?: unknown; error?: string; commandCount?: number }> {
+): Promise<{ value?: unknown; error?: string; commandCount?: number; eventCount?: number; commandDigest?: string }> {
   const reportPath = path.join(sessionDir, SESSION_REPORT_FILE);
   try {
     const reportFile = await lstat(reportPath);
@@ -453,7 +481,8 @@ async function readStoredReportUnknown(
         sessionDir,
         id,
         reportFile.size,
-        options.maxMaterializedBytes - reportFile.size
+        options.maxMaterializedBytes - reportFile.size,
+        reportFile.size
       );
       // The fixed report allowance leaves the rest of the quota for replay metadata, even if it grows.
       const buffer = await readBufferWithinBudget(reportPath, MAX_REPORT_BYTES, reportFile.size);
@@ -479,7 +508,12 @@ async function readStoredReportUnknown(
     const { replay, core } = await readLargeReplayCore(sessionDir, id, reportFile.size, options.maxMaterializedBytes);
     if (options.metadataOnly) {
       await verifyReplayEventLogs(sessionDir, replay, core);
-      return { value: core, commandCount: replay.commandCount };
+      return {
+        value: core,
+        commandCount: replay.commandCount,
+        eventCount: replay.eventCount,
+        commandDigest: replay.commandsDigest,
+      };
     }
     const eventPath = path.join(sessionDir, "events.ndjson");
     const commandPath = path.join(sessionDir, "commands.ndjson");
@@ -527,10 +561,12 @@ async function readLargeReplayCore(
   sessionDir: string,
   id: string,
   reportBytes: number,
-  maxMaterializedBytes?: number
+  maxMaterializedBytes?: number,
+  reservedReportBytes?: number
 ): Promise<{ replay: ReportReplay; core: SessionReport }> {
   const replayPath = path.join(sessionDir, REPORT_REPLAY_FILE);
-  const value = await readJsonFileWithinBudget<unknown>(replayPath, INLINE_REPORT_BYTES, maxMaterializedBytes);
+  const replayBuffer = await readBufferWithinBudget(replayPath, INLINE_REPORT_BYTES, maxMaterializedBytes);
+  const value: unknown = JSON.parse(replayBuffer.toString("utf8"));
   if (!isReportReplay(value) || value.id !== id || value.reportBytes !== reportBytes) {
     throw new Error("Large report replay metadata is missing or invalid.");
   }
@@ -539,9 +575,25 @@ async function readLargeReplayCore(
     throw new Error("Large report replay metadata has an invalid report body.");
   }
 
-  const storedReport = await digestRegularFile(path.join(sessionDir, SESSION_REPORT_FILE), MAX_REPORT_BYTES);
+  const reportPath = path.join(sessionDir, SESSION_REPORT_FILE);
+  const coreBudget =
+    reservedReportBytes ??
+    (maxMaterializedBytes === undefined ? undefined : maxMaterializedBytes - replayBuffer.length);
+  if (coreBudget !== undefined && coreBudget < 1) {
+    throw new MaterializationBudgetError(reportPath, 1, Math.max(0, coreBudget));
+  }
+  const storedReport = await readCanonicalReportCore(reportPath, coreBudget);
   if (storedReport.bytes !== value.reportBytes || storedReport.digest !== value.reportDigest) {
     throw new Error("session.json changed after finalization.");
+  }
+  if (
+    !isDeepStrictEqual(storedReport.core, value.report) ||
+    storedReport.eventCount !== value.eventCount ||
+    storedReport.commandCount !== value.commandCount ||
+    storedReport.eventsDigest !== value.eventsDigest ||
+    storedReport.commandsDigest !== value.commandsDigest
+  ) {
+    throw new Error("Large report records no longer match replay metadata.");
   }
 
   const [eventLog, commandLog] = await Promise.all([
@@ -622,8 +674,12 @@ export function parseSessionReport(value: unknown): SessionReport | null {
         : null;
   const risks = Array.isArray(value.risks) ? normalizeRiskFindings(value.risks) : null;
   const possibleSecrets =
-    Array.isArray(value.possibleSecrets) && value.possibleSecrets.every(isSecretFinding) ? value.possibleSecrets : [];
-  if (!events || !commands || !risks) {
+    value.possibleSecrets === undefined
+      ? []
+      : Array.isArray(value.possibleSecrets) && value.possibleSecrets.every(isSecretFinding)
+        ? value.possibleSecrets
+        : null;
+  if (!events || !commands || !risks || !possibleSecrets) {
     return null;
   }
 
@@ -807,7 +863,8 @@ function isSecretFinding(value: unknown): value is SecretFinding {
   return (
     isRecord(value) &&
     typeof value.path === "string" &&
-    Number.isInteger(value.line) &&
+    Number.isSafeInteger(value.line) &&
+    Number(value.line) > 0 &&
     typeof value.reason === "string" &&
     typeof value.redacted === "string"
   );

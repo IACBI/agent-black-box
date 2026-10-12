@@ -52,6 +52,19 @@ ${formatRisks(comparison.risks.onlyInFrom)}
 
 ${formatRisks(comparison.risks.onlyInTo)}
 
+${
+  comparison.secrets
+    ? `## Possible-secret location comparison
+
+- From findings: ${comparison.secrets.fromCount}
+- To findings: ${comparison.secrets.toCount}
+- Count delta: ${formatDelta(comparison.secrets.countDelta)}
+
+${formatSecretCounts(comparison.secrets.changedCounts)}
+
+`
+    : ""
+}
 ## Command comparison
 
 - From commands: ${comparison.commands.fromCount}
@@ -61,6 +74,20 @@ ${formatRisks(comparison.risks.onlyInTo)}
 
 ${formatCommandCounts(comparison.commands.changedCounts)}
 `;
+}
+
+function formatSecretCounts(locations: NonNullable<SessionComparison["secrets"]>["changedCounts"]): string {
+  if (locations.length === 0) {
+    return "No possible-secret location or frequency differences were detected.";
+  }
+  return [
+    "| File | Line | Reason | From count | To count |",
+    "| --- | ---: | --- | ---: | ---: |",
+    ...locations.map(
+      (location) =>
+        `| ${markdownTableCode(formatTerminalValue(location.path))} | ${location.line} | ${escapeMarkdownText(location.reason)} | ${location.fromCount} | ${location.toCount} |`
+    ),
+  ].join("\n");
 }
 
 function formatFiles(files: ChangedFile[]): string {

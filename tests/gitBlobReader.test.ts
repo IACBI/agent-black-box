@@ -54,6 +54,37 @@ describe("batched Git blob reading", () => {
     expect(await readGitBlobs(repo, ids, 4)).toEqual([null, null, null, null]);
   });
 
+  it("transforms bounded blobs in request order without losing skipped positions or duplicates", async () => {
+    const first = storeBlob(Buffer.from("first"));
+    const enormous = storeBlob(Buffer.alloc(8 * 1024 * 1024, "x"));
+    const empty = storeBlob(Buffer.alloc(0));
+    const seen: number[] = [];
+    const result = await readGitBlobs(repo, [enormous, first, empty, first, enormous], 10, (blob, index) => {
+      seen.push(index);
+      return { index, content: blob?.toString() ?? "skipped" };
+    });
+    expect(seen).toEqual([0, 1, 2, 3, 4]);
+    expect(result).toEqual([
+      { index: 0, content: "skipped" },
+      { index: 1, content: "first" },
+      { index: 2, content: "" },
+      { index: 3, content: "first" },
+      { index: 4, content: "skipped" },
+    ]);
+  });
+
+  it("rejects invalid size limits and failed transforms instead of resolving partial results", async () => {
+    const id = storeBlob(Buffer.from("first"));
+    for (const invalid of [-1, 0.5, NaN, Infinity]) {
+      await expect(readGitBlobs(repo, [id], invalid)).rejects.toThrow("non-negative safe integer");
+    }
+    await expect(
+      readGitBlobs(repo, [id], 10, () => {
+        throw new Error("transform failed");
+      })
+    ).rejects.toThrow("Could not read a staged Git blob");
+  });
+
   it("reassembles large blobs delivered across many pipe chunks", async () => {
     const large = randomBytes(1024 * 1024 + 17);
     const [id] = [storeBlob(large)];

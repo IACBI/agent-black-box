@@ -11,6 +11,7 @@ export const FILE_EVENT_BATCH_SIZE = 256;
 
 export async function runWatcher(session: ActiveSession, config: AgentBlackBoxConfig): Promise<void> {
   let finalized = false;
+  let aborted = false;
   const pendingFileEvents: FileEvent[] = [];
   let droppedFileEventCount = 0;
   let failedFileEventWriteCount = 0;
@@ -55,6 +56,9 @@ export async function runWatcher(session: ActiveSession, config: AgentBlackBoxCo
     if (finalizePromise) {
       return finalizePromise;
     }
+    if (aborted) {
+      return Promise.resolve();
+    }
 
     finalized = true;
     finalizePromise = (async () => {
@@ -84,7 +88,7 @@ export async function runWatcher(session: ActiveSession, config: AgentBlackBoxCo
   };
 
   watcher.on("all", (eventName, changedPath) => {
-    if (!WATCH_EVENTS.has(eventName)) {
+    if (aborted || !WATCH_EVENTS.has(eventName)) {
       return;
     }
 
@@ -138,7 +142,9 @@ export async function runWatcher(session: ActiveSession, config: AgentBlackBoxCo
 
   watcher.on("error", (error) => {
     console.error(`Watcher error: ${formatTerminalValue(String((error as Error).message))}`);
-    if (!finalized) {
+    if (!finalized && !aborted) {
+      aborted = true;
+      cleanup();
       void recordCaptureLoss("watcherError").finally(() => rejectCompletion?.(error));
     }
   });
@@ -158,7 +164,7 @@ export async function runWatcher(session: ActiveSession, config: AgentBlackBoxCo
     stopPollPending = true;
     void readStopRequest(session.repoRoot, config)
       .then((request) => {
-        if (request?.sessionId === session.id) {
+        if (!aborted && request?.sessionId === session.id) {
           return finalizeOnce("stop-request");
         }
         return undefined;
@@ -198,7 +204,12 @@ export async function runWatcher(session: ActiveSession, config: AgentBlackBoxCo
   } finally {
     cleanup();
     if (!finalized) {
-      await watcher.close();
+      try {
+        await watcher.close();
+      } finally {
+        await flushPendingFileEvents();
+        await Promise.all(lossMarkerWrites);
+      }
     }
   }
 }

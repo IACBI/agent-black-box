@@ -2,13 +2,93 @@ import { mkdir, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AnalysisInputFile } from "../src/analyze/analyzer.js";
-import { MAX_ANALYSIS_BYTES } from "../src/analyze/limits.js";
+import { MAX_ANALYSIS_BYTES, createAnalysisContentBudget } from "../src/analyze/limits.js";
 import { collectAnalysisInputFiles, summarizeAnalysisCoverage } from "../src/analyze/worktree.js";
 import { meetsSeverity, severityRank } from "../src/utils/severity.js";
 import { sleep } from "../src/utils/timing.js";
 import { createTempDir, removeTempDir } from "./testUtils.js";
 
 describe("working-tree analysis input", () => {
+  it("admits text deterministically by encoded bytes while excluding binary, missing, and oversized paths", async () => {
+    const repo = await createTempDir("abb-worktree-budget-");
+    try {
+      await writeFile(path.join(repo, "first.txt"), "é");
+      await writeFile(path.join(repo, "binary.dat"), Buffer.from([0, 1, 2]));
+      await writeFile(path.join(repo, "large.txt"), "x".repeat(50));
+      await writeFile(path.join(repo, "over.txt"), "oversized budget");
+      await writeFile(path.join(repo, "last.txt"), "a");
+      await writeFile(path.join(repo, "empty.txt"), "");
+      const changed = ["first.txt", "binary.dat", "missing.txt", "large.txt", "over.txt", "last.txt", "empty.txt"].map(
+        (filePath) => ({ path: filePath, status: "added" as const })
+      );
+      for (let run = 0; run < 2; run += 1) {
+        const contentBudget = createAnalysisContentBudget(3);
+        const files = await collectAnalysisInputFiles(repo, changed, 30, { contentBudget });
+        expect(files.map((file) => file.kind)).toEqual([
+          "text",
+          "binary",
+          "missing",
+          "large",
+          "unknown",
+          "text",
+          "text",
+        ]);
+        expect(files.filter((file) => file.content !== undefined).map((file) => file.content)).toEqual(["é", "a", ""]);
+        expect(files[4]).toMatchObject({
+          analysisSkipReason: expect.stringContaining("aggregate analysis budget of 3 bytes"),
+        });
+        expect(contentBudget.remainingBytes).toBe(0);
+        expect(summarizeAnalysisCoverage(files, "worktree")).toMatchObject({ scannedTextFiles: 3 });
+      }
+    } finally {
+      await removeTempDir(repo);
+    }
+  });
+
+  it("allows empty content with a zero budget and rejects invalid budget sizes", async () => {
+    const repo = await createTempDir("abb-worktree-zero-budget-");
+    try {
+      await writeFile(path.join(repo, "empty.txt"), "");
+      await writeFile(path.join(repo, "content.txt"), "a");
+      const files = await collectAnalysisInputFiles(
+        repo,
+        [
+          { path: "empty.txt", status: "added" },
+          { path: "content.txt", status: "added" },
+        ],
+        10,
+        { contentBudget: createAnalysisContentBudget(0) }
+      );
+      expect(files[0]).toMatchObject({ kind: "text", content: "" });
+      expect(files[1]).toMatchObject({ kind: "unknown" });
+      expect(files[1]).not.toHaveProperty("content");
+      for (const invalid of [-1, 0.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+        expect(() => createAnalysisContentBudget(invalid)).toThrow("non-negative safe integer");
+      }
+    } finally {
+      await removeTempDir(repo);
+    }
+  });
+
+  it("counts the retained UTF-8 encoding when a mostly-text file contains an invalid byte", async () => {
+    const repo = await createTempDir("abb-worktree-decoding-budget-");
+    try {
+      const bytes = Buffer.concat([Buffer.alloc(200, "a"), Buffer.from([0xff])]);
+      await writeFile(path.join(repo, "decoded.txt"), bytes);
+      const files = [{ path: "decoded.txt", status: "added" as const }];
+      const tooSmall = createAnalysisContentBudget(bytes.length);
+      const [skipped] = await collectAnalysisInputFiles(repo, files, 300, { contentBudget: tooSmall });
+      expect(skipped.kind).toBe("unknown");
+      expect(skipped).not.toHaveProperty("content");
+      expect(tooSmall.remainingBytes).toBe(bytes.length);
+      const exact = createAnalysisContentBudget(203);
+      const [scanned] = await collectAnalysisInputFiles(repo, files, 300, { contentBudget: exact });
+      expect(scanned).toMatchObject({ kind: "text", content: `${"a".repeat(200)}\uFFFD` });
+      expect(exact.remainingBytes).toBe(0);
+    } finally {
+      await removeTempDir(repo);
+    }
+  });
   it("reads text content and records why other changed paths were not read", async () => {
     const repo = await createTempDir("abb-worktree-");
     try {

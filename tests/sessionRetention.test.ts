@@ -1,13 +1,14 @@
 import { mkdir, open, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONFIG } from "../src/config/defaults.js";
 import { buildSessionReport } from "../src/reports/markdown.js";
 import { writeReports } from "../src/reports/reportWriter.js";
-import { listSessionCatalog } from "../src/session/sessionCatalog.js";
+import { listSessionCatalog, SESSION_METADATA_FILE } from "../src/session/sessionCatalog.js";
 import {
   applySessionRetention,
   archiveSessionRetention,
+  inspectSessionArchives,
   planSessionRetention,
   renderSessionArchivePlan,
   renderSessionRetentionPlan,
@@ -20,7 +21,174 @@ import type { FileEvent } from "../src/types.js";
 import { pathExists } from "../src/utils/files.js";
 import { createTempDir, removeTempDir } from "./testUtils.js";
 
+const archiveRace = vi.hoisted(() => ({ onLstat: undefined as ((filePath: string) => Promise<void>) | undefined }));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    lstat: vi.fn(async (filePath: import("node:fs").PathLike) => {
+      await archiveRace.onLstat?.(String(filePath));
+      return actual.lstat(filePath);
+    }),
+  };
+});
+
 describe("session retention", () => {
+  it.each(["prune", "archive", "inspection"])(
+    "rejects a stale kept timestamp that would select the true newest session for %s",
+    async (operation) => {
+      const repo = await createTempDir("abb-retention-kept-timestamp-");
+      try {
+        await makeSession(repo, "session-old", "2026-01-01T00:00:00.000Z");
+        await makeSession(repo, "session-new", "2026-01-03T00:00:00.000Z");
+        const oldDirectory = path.join(repo, DEFAULT_CONFIG.sessionDir, "session-old");
+        const metadataPath = path.join(oldDirectory, SESSION_METADATA_FILE);
+        const metadata = JSON.parse(await readFile(metadataPath, "utf8"));
+        await writeFile(metadataPath, JSON.stringify({ ...metadata, startedAt: "2026-01-10T00:00:00.000Z" }));
+        const plan = planSessionRetention(await listSessionCatalog(repo, DEFAULT_CONFIG), "2026-01-04");
+        expect(plan.sessions.map((session) => session.id)).toEqual(["session-new"]);
+        const archiveDir = path.join(repo, "archive");
+        const apply =
+          operation === "prune"
+            ? applySessionRetention(repo, DEFAULT_CONFIG, plan)
+            : operation === "archive"
+              ? archiveSessionRetention(repo, DEFAULT_CONFIG, plan, archiveDir)
+              : inspectSessionArchives(repo, DEFAULT_CONFIG, plan, archiveDir);
+        await expect(apply).rejects.toThrow("inconsistent catalog timestamps");
+        expect(await pathExists(path.join(oldDirectory, "session.json"))).toBe(true);
+        expect(await pathExists(path.join(repo, DEFAULT_CONFIG.sessionDir, "session-new", "session.json"))).toBe(true);
+        expect(await pathExists(archiveDir)).toBe(false);
+      } finally {
+        await removeTempDir(repo);
+      }
+    }
+  );
+
+  it("refuses a destination created after preflight unless resume is explicit", async () => {
+    const repo = await createTempDir("abb-archive-race-");
+    try {
+      await makeSession(repo, "session-old", "2026-01-01T00:00:00.000Z");
+      await makeSession(repo, "session-new", "2026-01-03T00:00:00.000Z");
+      const archiveDir = path.join(repo, "archive");
+      const destination = path.join(archiveDir, "session-old");
+      const plan = planSessionRetention(await listSessionCatalog(repo, DEFAULT_CONFIG), "2026-01-04");
+      let ownershipChecks = 0;
+      archiveRace.onLstat = async (filePath) => {
+        if (filePath === getActiveSessionPath(repo, DEFAULT_CONFIG) && ++ownershipChecks === 2) {
+          // Interleave after the existing-ID preflight and before the copy loop's destination check.
+          await mkdir(destination);
+        }
+      };
+      await expect(archiveSessionRetention(repo, DEFAULT_CONFIG, plan, archiveDir)).rejects.toMatchObject({
+        code: "EEXIST",
+      });
+      archiveRace.onLstat = undefined;
+      expect(await pathExists(path.join(destination, "session.json"))).toBe(false);
+      await archiveSessionRetention(repo, DEFAULT_CONFIG, plan, archiveDir, { resume: true });
+      expect((await inspectSessionArchives(repo, DEFAULT_CONFIG, plan, archiveDir))[0].status).toBe("complete");
+    } finally {
+      archiveRace.onLstat = undefined;
+      await removeTempDir(repo);
+    }
+  });
+
+  it.each(["prune", "archive", "inspection"])("rejects stale catalog timestamps before %s", async (operation) => {
+    const repo = await createTempDir("abb-retention-timestamp-");
+    try {
+      await makeSession(repo, "session-old", "2026-01-10T00:00:00.000Z");
+      await makeSession(repo, "session-new", "2026-01-11T00:00:00.000Z");
+      const source = path.join(repo, DEFAULT_CONFIG.sessionDir, "session-old");
+      const metadataPath = path.join(source, SESSION_METADATA_FILE);
+      const metadata = JSON.parse(await readFile(metadataPath, "utf8"));
+      await writeFile(metadataPath, JSON.stringify({ ...metadata, startedAt: "2026-01-01T00:00:00.000Z" }));
+      const plan = planSessionRetention(await listSessionCatalog(repo, DEFAULT_CONFIG), "2026-01-04");
+      expect(plan.sessions.map((session) => session.id)).toEqual(["session-old"]);
+      const archiveDir = path.join(repo, "archive");
+      const apply =
+        operation === "prune"
+          ? applySessionRetention(repo, DEFAULT_CONFIG, plan)
+          : operation === "archive"
+            ? archiveSessionRetention(repo, DEFAULT_CONFIG, plan, archiveDir)
+            : inspectSessionArchives(repo, DEFAULT_CONFIG, plan, archiveDir);
+      await expect(apply).rejects.toThrow("inconsistent catalog timestamps");
+      expect(await pathExists(path.join(source, "session.json"))).toBe(true);
+      expect(await pathExists(archiveDir)).toBe(false);
+    } finally {
+      await removeTempDir(repo);
+    }
+  });
+
+  it("inspects and resumes a matching partial archive without replacing existing files", async () => {
+    const repo = await createTempDir("abb-archive-resume-");
+    try {
+      await makeSession(repo, "session-old", "2026-01-01T00:00:00.000Z");
+      await makeSession(repo, "session-new", "2026-01-03T00:00:00.000Z");
+      const source = path.join(repo, DEFAULT_CONFIG.sessionDir, "session-old");
+      const archiveDir = path.join(repo, "archive");
+      const destination = path.join(archiveDir, "session-old");
+      const plan = planSessionRetention(await listSessionCatalog(repo, DEFAULT_CONFIG), "2026-01-04");
+      expect(await inspectSessionArchives(repo, DEFAULT_CONFIG, plan, archiveDir)).toEqual([
+        { id: "session-old", status: "missing" },
+      ]);
+      expect(await pathExists(archiveDir)).toBe(false);
+      await mkdir(destination, { recursive: true });
+      await mkdir(path.join(source, "nested"));
+      await writeFile(path.join(source, "nested", "notes.txt"), "review evidence");
+      const existingPath = path.join(destination, "summary.md");
+      await writeFile(existingPath, await readFile(path.join(source, "summary.md")));
+      const before = await stat(existingPath);
+      expect(await inspectSessionArchives(repo, DEFAULT_CONFIG, plan, archiveDir)).toEqual([
+        { id: "session-old", status: "resumable" },
+      ]);
+      await archiveSessionRetention(repo, DEFAULT_CONFIG, plan, archiveDir, { resume: true });
+      expect((await stat(existingPath)).mtimeMs).toBe(before.mtimeMs);
+      expect(await readFile(path.join(destination, "nested", "notes.txt"), "utf8")).toBe("review evidence");
+      expect(await inspectSessionArchives(repo, DEFAULT_CONFIG, plan, archiveDir)).toEqual([
+        { id: "session-old", status: "complete" },
+      ]);
+      await expect(
+        archiveSessionRetention(repo, DEFAULT_CONFIG, plan, archiveDir, { resume: true })
+      ).resolves.toBeUndefined();
+      expect(await pathExists(path.join(source, "session.json"))).toBe(true);
+    } finally {
+      await removeTempDir(repo);
+    }
+  });
+
+  it.each(["different bytes", "extra file", "invalid marker", "linked directory"])(
+    "refuses an unsafe archive resume (%s)",
+    async (kind) => {
+      const repo = await createTempDir("abb-archive-conflict-");
+      try {
+        await makeSession(repo, "session-old", "2026-01-01T00:00:00.000Z");
+        await makeSession(repo, "session-new", "2026-01-03T00:00:00.000Z");
+        const archiveDir = path.join(repo, "archive");
+        const destination = path.join(archiveDir, "session-old");
+        const plan = planSessionRetention(await listSessionCatalog(repo, DEFAULT_CONFIG), "2026-01-04");
+        await mkdir(destination, { recursive: true });
+        if (kind === "different bytes") {
+          await writeFile(path.join(destination, "session.json"), "divergent copy");
+        } else if (kind === "extra file") {
+          await writeFile(path.join(destination, "extra.txt"), "preserve");
+        } else if (kind === "invalid marker") {
+          await rm(destination, { recursive: true });
+          await archiveSessionRetention(repo, DEFAULT_CONFIG, plan, archiveDir);
+          await writeFile(path.join(destination, ".abb-archive-complete.json"), "null");
+        } else {
+          await symlink(repo, path.join(destination, "linked"), process.platform === "win32" ? "junction" : "dir");
+        }
+        expect((await inspectSessionArchives(repo, DEFAULT_CONFIG, plan, archiveDir))[0].status).toBe("conflict");
+        await expect(archiveSessionRetention(repo, DEFAULT_CONFIG, plan, archiveDir, { resume: true })).rejects.toThrow(
+          "cannot be resumed"
+        );
+        expect(await pathExists(path.join(repo, DEFAULT_CONFIG.sessionDir, "session-old", "session.json"))).toBe(true);
+      } finally {
+        await removeTempDir(repo);
+      }
+    }
+  );
+
   it("keeps control-bearing preview fields visible without adding misleading lines", () => {
     const plan = {
       before: "2026-01-04",

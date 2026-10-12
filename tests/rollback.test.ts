@@ -1,7 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import * as fs from "node:fs/promises";
+import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONFIG } from "../src/config/defaults.js";
 import { collectGitSnapshot } from "../src/git/git.js";
 import {
@@ -16,6 +18,11 @@ import {
 } from "../src/rollback/rollback.js";
 import type { SessionReport } from "../src/types.js";
 import { createTempDir, initGitRepo, removeTempDir } from "./testUtils.js";
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, open: vi.fn(actual.open) };
+});
 
 const report = {
   id: "session-test",
@@ -91,6 +98,72 @@ const report = {
 } satisfies SessionReport;
 
 describe("rollback planner", () => {
+  it.each([0, 128 * 1024 + 1])("captures the complete digest of a stable %i-byte rollback file", async (size) => {
+    const repo = await createTempDir("abb-rollback-digest-");
+    try {
+      const filePath = path.join(repo, "src", "index.ts");
+      const contents = Buffer.alloc(size, "x");
+      await mkdir(path.dirname(filePath), { recursive: true });
+      await writeFile(filePath, contents);
+      const sessionDir = path.join(repo, DEFAULT_CONFIG.sessionDir, report.id);
+      await writeRollbackSafetyState({
+        ...report,
+        repoRoot: repo,
+        sessionDir,
+        git: { ...report.git, repoRoot: repo, changedFiles: [{ path: "src/index.ts", status: "modified" }] },
+      });
+
+      const snapshot = JSON.parse(await readFile(path.join(sessionDir, "rollback-state.json"), "utf8"));
+      expect(snapshot.files).toEqual([
+        expect.objectContaining({
+          path: "src/index.ts",
+          status: "modified",
+          kind: "file",
+          digest: createHash("sha256").update(contents).digest("hex"),
+        }),
+      ]);
+    } finally {
+      await removeTempDir(repo);
+    }
+  });
+
+  it("bounds inspection of a growing file and marks its rollback snapshot unavailable", async () => {
+    const repo = await createTempDir("abb-rollback-growing-");
+    try {
+      const filePath = path.join(repo, "src", "index.ts");
+      await mkdir(path.dirname(filePath), { recursive: true });
+      await writeFile(filePath, "initial");
+      const handle = await fs.open(filePath, "r");
+      const originalRead = handle.read.bind(handle);
+      let growthWrites = 0;
+      const read = vi.spyOn(handle, "read").mockImplementation(async (...args) => {
+        // Grow before each read, with a finite cap so the pre-fix regression also terminates.
+        if (growthWrites < 4) {
+          growthWrites += 1;
+          await appendFile(filePath, " appended");
+        }
+        return originalRead(...args);
+      });
+      const close = vi.spyOn(handle, "close");
+      vi.mocked(fs.open).mockResolvedValueOnce(handle);
+      const sessionDir = path.join(repo, DEFAULT_CONFIG.sessionDir, report.id);
+      await writeRollbackSafetyState({
+        ...report,
+        repoRoot: repo,
+        sessionDir,
+        git: { ...report.git, repoRoot: repo, changedFiles: [{ path: "src/index.ts", status: "modified" }] },
+      });
+
+      const snapshot = JSON.parse(await readFile(path.join(sessionDir, "rollback-state.json"), "utf8"));
+      expect(snapshot.files).toEqual([{ path: "src/index.ts", status: "modified", kind: "unavailable" }]);
+      expect(read).toHaveBeenCalledTimes(1);
+      expect(close).toHaveBeenCalledOnce();
+    } finally {
+      vi.restoreAllMocks();
+      await removeTempDir(repo);
+    }
+  });
+
   it("plans only tracked modified and deleted files for automatic restore", () => {
     const plan = createRollbackPlan(report);
 

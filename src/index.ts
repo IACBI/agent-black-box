@@ -17,6 +17,13 @@ export * from "./session/changeEvidence.js";
 export * from "./session/sessionCatalog.js";
 export * from "./session/sessionComparison.js";
 export * from "./session/sessionVerification.js";
+export * from "./session/sessionIndex.js";
+export * from "./session/sessionRetention.js";
+export {
+  createAnalysisContentBudget,
+  type AnalysisContentBudget,
+  type AnalysisCollectionOptions,
+} from "./analyze/limits.js";
 export * from "./types.js";
 export * from "./utils/fileInspection.js";
 export * from "./utils/concurrency.js";

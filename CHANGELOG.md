@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Bound large-report replay data to streamed canonical JSON core and record digests, including coordinated replay/log inconsistencies, without changing stored report formats.
+- Added possible-secret location/count comparisons that omit credential values and stored excerpts.
+- Added explicit `sessions verify --check-indexes` and `--repair-indexes` for derived metadata/search consistency, with canonical evidence, ownership, link, and budget guards.
+- Added read-only partial-archive inspection and verified `sessions archive --resume --apply`, preserving matching files and refusing divergent copies.
+- Added shared `analyze --max-total-bytes` content budgets and Git blob metadata preflight to avoid reading oversized bodies while retaining explicit coverage diagnostics.
+- Preserved atomic write/close/cleanup failures, stopped asynchronous work from outliving failed capture operations, rejected malformed stored findings, and bounded rollback hashing of growing files.
 - Screen unsafe configured regex shapes before compilation or execution, with rejection regressions through the repository configuration boundary.
 - Added opt-in history read/search budgets, visible unavailable-metadata diagnostics, and exact parsed-byte verification for budgeted large reports without changing storage limits or defaults.
 - Added explicit initial staged analysis and managed hook opt-ins for first-commit policy enforcement and persisted trusted external-storage authorization.

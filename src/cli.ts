@@ -9,6 +9,7 @@ import { analyzeChangedFiles, type WatcherlessAnalysisResult } from "./analyze/a
 import { compareAnalysisWithBaseline } from "./analyze/baseline.js";
 import { evaluateAnalysisPolicy, parseAnalysisPolicyProfile } from "./analyze/policy.js";
 import { parseAnalyzeFormat, renderAnalysis } from "./analyze/render.js";
+import { createAnalysisContentBudget } from "./analyze/limits.js";
 import {
   collectBaselineAnalysisInputFiles,
   collectStagedAnalysisInputFiles,
@@ -70,8 +71,10 @@ import { browseSessionCatalog } from "./session/sessionBrowser.js";
 import {
   applySessionRetention,
   archiveSessionRetention,
+  inspectSessionArchives,
   planSessionRetention,
   renderSessionArchivePlan,
+  renderSessionArchiveInspection,
   renderSessionRetentionPlan,
   resolveArchiveDestination,
   retentionDateForDays,
@@ -284,6 +287,10 @@ program
   .option("--initial", "with --staged in a repository without a HEAD commit, treat all content as new")
   .option("--fail-on <severity>", "exit with code 1 at or above low, medium, or high")
   .option("--policy <profile>", "built-in or configured CI policy; requires --staged and --baseline or --initial")
+  .option(
+    "--max-total-bytes <bytes>",
+    "limit retained analysis content across current and baseline files (UTF-8 bytes)"
+  )
   .action(
     async (options: {
       format: string;
@@ -292,6 +299,7 @@ program
       initial?: boolean;
       failOn?: string;
       policy?: string;
+      maxTotalBytes?: string;
     }) => {
       if (options.baseline && !options.staged) {
         throw new Error("--baseline requires --staged.");
@@ -307,6 +315,10 @@ program
       const format = parseAnalyzeFormat(options.format);
       const failOn = parseRiskSeverity(options.failOn);
       const policy = parseAnalysisPolicyProfile(options.policy, config.analysisPolicies);
+      const collectionOptions =
+        options.maxTotalBytes === undefined
+          ? {}
+          : { contentBudget: createAnalysisContentBudget(parseAnalysisByteLimit(options.maxTotalBytes)) };
       if (options.initial) {
         const status = await createGit(repoRoot).raw(["status", "--porcelain=v2", "--branch", "--untracked-files=no"]);
         if (!status.split("\n").includes("# branch.oid (initial)")) {
@@ -314,11 +326,12 @@ program
         }
       }
       const files = options.staged
-        ? await collectStagedAnalysisInputFiles(repoRoot, config)
+        ? await collectStagedAnalysisInputFiles(repoRoot, config, collectionOptions)
         : await collectAnalysisInputFiles(
             repoRoot,
             (await collectGitSnapshot(repoRoot, config.exclude)).changedFiles,
-            config.maxFileSizeKb * 1024
+            config.maxFileSizeKb * 1024,
+            collectionOptions
           );
       const analysisOptions = { secretRules: compileSecretRules(config) };
       let result: WatcherlessAnalysisResult = {
@@ -332,7 +345,13 @@ program
           result.findings.filter((finding) => finding.kind === "possible-secret").map((finding) => finding.path)
         );
         const comparedFiles = files.filter((file) => secretPaths.has(file.path));
-        const baselineFiles = await collectBaselineAnalysisInputFiles(repoRoot, comparedFiles, config, commit);
+        const baselineFiles = await collectBaselineAnalysisInputFiles(
+          repoRoot,
+          comparedFiles,
+          config,
+          commit,
+          collectionOptions
+        );
         result = compareAnalysisWithBaseline(comparedFiles, baselineFiles, result, commit, analysisOptions);
       }
 
@@ -671,7 +690,8 @@ sessionsCommand
   .option("--keep <count>", "keep at least this many newest completed sessions")
   .option("--to <directory>", "local archive destination (or configure retention.archiveDir)")
   .option("--apply", "copy and verify eligible sessions after typed confirmation")
-  .action(async (options: { before?: string; keep?: string; to?: string; apply?: boolean }) => {
+  .option("--resume", "inspect matching partial archives and copy only missing files with --apply")
+  .action(async (options: { before?: string; keep?: string; to?: string; apply?: boolean; resume?: boolean }) => {
     const repoRoot = await requireRepositoryRoot(process.cwd());
     const config = await loadRuntimeConfig(repoRoot);
     const { before, keep } = resolveRetentionSelection(options, config);
@@ -681,6 +701,14 @@ sessionsCommand
     }
     const plan = planSessionRetention(await listSessionCatalog(repoRoot, config), before, keep);
     console.log(escapeTerminalControls(renderSessionArchivePlan(plan, archiveDir)));
+    if (options.resume) {
+      const archives = await inspectSessionArchives(repoRoot, config, plan, archiveDir);
+      console.log(escapeTerminalControls(renderSessionArchiveInspection(archives).trimEnd()));
+      if (archives.some((archive) => archive.status === "conflict")) {
+        process.exitCode = 1;
+        return;
+      }
+    }
     if (!options.apply || plan.sessions.length === 0) {
       return;
     }
@@ -695,7 +723,7 @@ sessionsCommand
       console.log("Session archiving cancelled.");
       return;
     }
-    await archiveSessionRetention(repoRoot, config, plan, archiveDir);
+    await archiveSessionRetention(repoRoot, config, plan, archiveDir, { resume: options.resume });
     console.log(`${plan.sessions.length} completed session(s) archived; originals remain in place.`);
   });
 
@@ -715,7 +743,7 @@ sessionsCommand
 
 sessionsCommand
   .command("compare")
-  .description("Compare files, risks, commands, and HEAD revisions across two sessions.")
+  .description("Compare files, risks, possible-secret locations, commands, and HEAD revisions across two sessions.")
   .argument("<from>", "from session ID or unique prefix")
   .argument("<to>", "to session ID or unique prefix")
   .option("--json", "print structured comparison JSON")
@@ -737,16 +765,29 @@ sessionsCommand
 
 sessionsCommand
   .command("verify")
-  .description("Check the integrity of stored session reports without modifying them.")
+  .description("Check stored session integrity; optionally verify or repair derived indexes.")
   .argument("[session]", "session ID, unique prefix, or latest; all sessions when omitted")
   .option("--json", "print structured JSON")
   .option("--memory-budget-mb <mb>", "working-data byte budget in MiB (8–4096); excludes V8 object overhead")
   .option("--concurrency <count>", "maximum parallel verifications (1–16, default 4); reduced by the memory budget")
+  .option("--check-indexes", "compare derived metadata and search indexes with verified evidence")
+  .option("--repair-indexes", "regenerate derived indexes from verified evidence without changing reports or logs")
   .action(
-    async (session: string | undefined, options: { json?: boolean; memoryBudgetMb?: string; concurrency?: string }) => {
+    async (
+      session: string | undefined,
+      options: {
+        json?: boolean;
+        memoryBudgetMb?: string;
+        concurrency?: string;
+        checkIndexes?: boolean;
+        repairIndexes?: boolean;
+      }
+    ) => {
       const verificationOptions: SessionVerificationOptions = {
         memoryBudgetMb: parseSessionListLimit(options.memoryBudgetMb, "--memory-budget-mb"),
         concurrency: parseSessionListLimit(options.concurrency, "--concurrency"),
+        checkIndexes: options.checkIndexes,
+        repairIndexes: options.repairIndexes,
       };
       const limits = getSessionVerificationLimits(verificationOptions);
       const repoRoot = await requireRepositoryRoot(process.cwd());
@@ -759,7 +800,12 @@ sessionsCommand
           ? JSON.stringify(summary, null, 2)
           : escapeTerminalControls(renderSessionVerification(summary).trimEnd())
       );
-      if (summary.failed > 0) {
+      if (
+        summary.failed > 0 ||
+        summary.sessions.some(
+          (result) => result.indexError || result.indexIssues?.some((file) => !result.repairedIndexes?.includes(file))
+        )
+      ) {
         process.exitCode = 1;
       }
     }
@@ -909,6 +955,13 @@ function parseSessionListLimit(value: string | undefined, optionName = "--limit"
   }
   if (!/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(Number(value))) {
     throw new Error(`${optionName} must be a positive integer.`);
+  }
+  return Number(value);
+}
+
+function parseAnalysisByteLimit(value: string): number {
+  if (!/^(?:0|[1-9]\d*)$/.test(value) || !Number.isSafeInteger(Number(value))) {
+    throw new Error("--max-total-bytes must be a non-negative safe integer.");
   }
   return Number(value);
 }

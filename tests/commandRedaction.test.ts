@@ -88,6 +88,21 @@ describe("short credential flags of well-known tools", () => {
 });
 
 describe("credentials embedded in script arguments", () => {
+  it.each(["'", '"'])("redacts long quoted credentials before truncating script arguments (%s)", (quote) => {
+    const credential = "synthetic-private-value-".repeat(250);
+    const scripts = [
+      `./login --password ${quote}${credential}${quote} --user me`,
+      `export PASSWORD=${quote}${credential}${quote}; ./login`,
+    ];
+
+    for (const script of scripts) {
+      const redacted = redactCommandParts(["sh", "-c", script]);
+
+      expect(redacted[2]).toContain("<redacted>");
+      expect(redacted[2]).not.toContain("synthetic-private-value-");
+    }
+  });
+
   it.each([
     [`export TOKEN=${secret} && run`, "export TOKEN=<redacted> && run"],
     // A leading KEY=value is caught by the assignment rule, which hides the whole argument.
@@ -123,6 +138,24 @@ describe("credentials embedded in script arguments", () => {
     "for f in *.ts; do wc -l $f; done",
   ])("leaves an ordinary script alone: %s", (script) => {
     expect(redactCommandParts(["sh", "-c", script])).toEqual(["sh", "-c", script]);
+  });
+});
+
+describe("sensitive JSON argument keys", () => {
+  it.each([
+    String.raw`{"pass\u0077ord":"synthetic-private-value"}`,
+    String.raw`{"client\u005fsecret":"synthetic-private-value"}`,
+    String.raw`{"nested":{"api\u005fkey":"synthetic-private-value"}}`,
+  ])("redacts credentials when sensitive JSON keys contain escapes: %s", (json) => {
+    expect(redactCommandParts(["curl", "--data", json])).toEqual(["curl", "--data", "<redacted>"]);
+    expect(redactCommandParts(["curl", `--data=${json}`])).toEqual(["curl", "--data=<redacted>"]);
+  });
+
+  it("preserves escaped harmless keys and malformed JSON keys", () => {
+    const json = String.raw`{"m\u006fde":"safe"}`;
+    const malformed = String.raw`{"pass\x77ord":"ordinary text"}`;
+
+    expect(redactCommandParts(["echo", json, malformed])).toEqual(["echo", json, malformed]);
   });
 });
 

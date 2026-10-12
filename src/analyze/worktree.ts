@@ -3,16 +3,24 @@ import { mapWithConcurrency } from "../utils/concurrency.js";
 import { inspectTextFile } from "../utils/fileInspection.js";
 import { resolveRepoPath } from "../utils/paths.js";
 import type { AnalysisCoverage, AnalysisInputFile } from "./analyzer.js";
-import { ANALYSIS_IO_CONCURRENCY, MAX_ANALYSIS_BYTES } from "./limits.js";
+import {
+  ANALYSIS_IO_CONCURRENCY,
+  MAX_ANALYSIS_BYTES,
+  analysisBudgetSkipReason,
+  type AnalysisCollectionOptions,
+} from "./limits.js";
 
 /** Reads the current working-tree content of changed files for watcherless analysis. */
 export async function collectAnalysisInputFiles(
   repoRoot: string,
   changedFiles: ReadonlyArray<ChangedFile>,
-  maxFileSizeBytes: number
+  maxFileSizeBytes: number,
+  options: AnalysisCollectionOptions = {}
 ): Promise<AnalysisInputFile[]> {
   const safeMaxFileSizeBytes = Math.min(maxFileSizeBytes, MAX_ANALYSIS_BYTES);
-  return mapWithConcurrency(changedFiles, ANALYSIS_IO_CONCURRENCY, async (file) => {
+  // Admissions follow input order; one bounded read is transient while the shared quota is active.
+  const concurrency = options.contentBudget ? 1 : ANALYSIS_IO_CONCURRENCY;
+  return mapWithConcurrency(changedFiles, concurrency, async (file) => {
     if (file.status === "deleted") {
       return file;
     }
@@ -23,6 +31,9 @@ export async function collectAnalysisInputFiles(
     }
 
     const inspection = await inspectTextFile(absolutePath, safeMaxFileSizeBytes, safeMaxFileSizeBytes, repoRoot);
+    if (inspection.text !== undefined && options.contentBudget && !options.contentBudget.retain(inspection.text)) {
+      return { ...file, kind: "unknown", analysisSkipReason: analysisBudgetSkipReason(options.contentBudget) };
+    }
     return {
       ...file,
       kind: inspection.kind,

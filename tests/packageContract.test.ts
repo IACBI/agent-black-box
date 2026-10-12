@@ -50,6 +50,11 @@ describe("package contract", () => {
       "toSessionSarif",
       "renderSessionExport",
       "verifySessions",
+      "createAnalysisContentBudget",
+      "inspectSessionIndexes",
+      "inspectSessionArchives",
+      "archiveSessionRetention",
+      "planSessionRetention",
     ]) {
       expect(typeof library[name], name).toBe("function");
     }
