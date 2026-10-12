@@ -27,9 +27,9 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   return {
     ...actual,
-    lstat: vi.fn(async (filePath: import("node:fs").PathLike) => {
+    lstat: vi.fn(async (filePath: import("node:fs").PathLike, options?: import("node:fs").StatOptions) => {
       await archiveRace.onLstat?.(String(filePath));
-      return actual.lstat(filePath);
+      return actual.lstat(filePath, options);
     }),
   };
 });

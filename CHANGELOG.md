@@ -4,6 +4,7 @@
 
 ## 0.8.4
 
+- Fixed rounded Windows file-identity comparisons during evidence hashing by using exact integer metadata; added collision and unsupported-length regressions.
 - Added optional Ed25519 evidence sealing with encrypted external signing keys and independently supplied trusted public keys; signature-required verification rejects unsigned replacements without changing existing evidence formats.
 - Expanded shared credential signals and command redaction, isolated custom regex execution behind time and memory limits, and documented authenticity boundaries and detection limitations.
 - Bound large-report replay data to streamed canonical JSON core and record digests, including coordinated replay/log inconsistencies, without changing stored report formats.
