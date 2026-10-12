@@ -14,10 +14,10 @@ const LOCKFILES = new Set([
   "pnpm-lock.yaml",
   "yarn.lock",
   "bun.lockb",
-  "Cargo.lock",
+  "cargo.lock",
   "poetry.lock",
-  "Pipfile.lock",
-  "Gemfile.lock",
+  "pipfile.lock",
+  "gemfile.lock",
   "go.sum",
 ]);
 
@@ -25,12 +25,12 @@ const PACKAGE_FILES = new Set([
   "package.json",
   "requirements.txt",
   "pyproject.toml",
-  "Cargo.toml",
+  "cargo.toml",
   "go.mod",
   "pom.xml",
   "build.gradle",
-  "Gemfile",
-  "Pipfile",
+  "gemfile",
+  "pipfile",
 ]);
 
 export function detectRisks(changedFiles: ChangedFile[], config: AgentBlackBoxConfig): RiskFinding[] {
@@ -61,13 +61,13 @@ export function detectRiskForPath(relativePath: string, riskPatterns: string[]):
     );
   }
 
-  if (LOCKFILES.has(baseName) || LOCKFILES.has(lowerBaseName)) {
+  if (LOCKFILES.has(lowerBaseName)) {
     findings.push(
       finding(normalized, "Lockfile", "medium", "Lockfile changes can alter installed dependency versions.")
     );
   }
 
-  if (PACKAGE_FILES.has(baseName) || PACKAGE_FILES.has(lowerBaseName)) {
+  if (PACKAGE_FILES.has(lowerBaseName)) {
     findings.push(finding(normalized, "Package manager file", "medium", "Dependency or runtime metadata changed."));
   }
 

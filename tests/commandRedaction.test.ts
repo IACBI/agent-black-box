@@ -33,6 +33,22 @@ describe("short credential flags of well-known tools", () => {
       ["curl", "--proxy-user", "<redacted>"],
     ],
     [
+      ["curl", "--oauth2-bearer", secret, "https://example.test"],
+      ["curl", "--oauth2-bearer", "<redacted>", "https://example.test"],
+    ],
+    [
+      ["curl", `--oauth2-bearer=${secret}`, "https://example.test"],
+      ["curl", "--oauth2-bearer=<redacted>", "https://example.test"],
+    ],
+    [
+      ["curl", "--pass", secret, "https://example.test"],
+      ["curl", "--pass", "<redacted>", "https://example.test"],
+    ],
+    [
+      ["curl", `--pass=${secret}`, "https://example.test"],
+      ["curl", "--pass=<redacted>", "https://example.test"],
+    ],
+    [
       ["mysql", `-p${secret}`, "-h", "db"],
       ["mysql", "-p<redacted>", "-h", "db"],
     ],
@@ -43,6 +59,18 @@ describe("short credential flags of well-known tools", () => {
     [
       ["redis-cli", "-a", secret, "ping"],
       ["redis-cli", "-a", "<redacted>", "ping"],
+    ],
+    [
+      ["redis-cli", "--pass", secret, "ping"],
+      ["redis-cli", "--pass", "<redacted>", "ping"],
+    ],
+    [
+      ["redis-cli", `--pass=${secret}`, "ping"],
+      ["redis-cli", "--pass=<redacted>", "ping"],
+    ],
+    [
+      ["env", "MODE=safe", "redis-cli", "--pass", secret, "ping"],
+      ["env", "MODE=safe", "redis-cli", "--pass", "<redacted>", "ping"],
     ],
     [
       ["sshpass", "-p", secret, "ssh", "host"],
@@ -75,6 +103,7 @@ describe("short credential flags of well-known tools", () => {
     [["redis-cli", "-n", "2", "ping"]],
     [["curl", "-s", "-o", "out.txt", "https://example.test"]],
     [["curl", "-ooutput.txt", "-HAccept:application/json", "https://example.test"]],
+    [["echo", "--pass", "ordinary text", "--oauth2-bearer=ordinary text"]],
     [["grep", "-u", "-p", "pattern"]],
     [["grep", "-uattached-pattern", "src"]],
   ])("leaves harmless flags of %j untouched", (parts) => {
@@ -84,6 +113,98 @@ describe("short credential flags of well-known tools", () => {
   it("does not apply a tool's flag rules to other programs", () => {
     expect(redactCommandParts(["rsync", "-a", "src", "dst"])).toEqual(["rsync", "-a", "src", "dst"]);
     expect(redactCommandParts(["curl", "https://example.test", "-u"])).toEqual(["curl", "https://example.test", "-u"]);
+  });
+});
+
+describe("explicit env command wrappers", () => {
+  it.each(
+    [
+      ["env", "MODE=safe", "curl", "-u", `admin:${secret}`],
+      ["env", "-i", "API_TOKEN=" + secret, "curl", "--oauth2-bearer", secret],
+      ["env", "--ignore-environment", "--debug", "curl", `--pass=${secret}`],
+      ["env", "-u", "EDITOR", "-C", "workspace", "-a", "alias", "curl", "-u", secret],
+      ["env", "--unset=EDITOR", "--chdir=workspace", "--argv0=alias", "curl", `-u${secret}`],
+      ["env", "--unset", "EDITOR", "--chdir", "workspace", "--argv0", "alias", "curl", "--pass", secret],
+      ["env", "-iuEDITOR", "-Cworkspace", "-aalias", "curl", "--pass", secret],
+      ["env", "--", "MODE=safe", "curl", "-u", secret],
+      ["env", "-", "MODE=safe", "curl", "-u", secret],
+      ["env", "MODE=safe", "env", "-i", "curl", "-u", secret],
+      ["env", "curl=ignored", "curl", "-u", secret],
+      ["env", curlExecutablePath, "--oauth2-bearer", secret],
+      [path.join(path.parse(process.cwd()).root, "tools", "env.exe"), "curl", "--pass", secret],
+      ["env", "MODE=safe", "mysql", `-p${secret}`],
+      ["env", "MODE=safe", "docker", "login", "-p", secret],
+    ].map((parts) => [parts])
+  )("redacts child credentials in %j without modifying executed argv", (parts) => {
+    const original = [...parts];
+    const redacted = redactCommandParts(parts);
+
+    expect(parts).toEqual(original);
+    expect(redacted.join(" ")).not.toContain(secret);
+    expect(redacted).toContainEqual(expect.stringContaining("<redacted>"));
+    expect(redacted[0]).toBe(parts[0]);
+  });
+
+  it("keeps env option operands distinct from the child credentials", () => {
+    expect(redactCommandParts(["env", "-u", "curl", "-a", "curl", "curl", "-u", secret])).toEqual([
+      "env",
+      "-u",
+      "curl",
+      "-a",
+      "curl",
+      "curl",
+      "-u",
+      "<redacted>",
+    ]);
+  });
+
+  it.each(
+    [
+      ["env", "echo", "curl", "-u", "ordinary"],
+      ["env", "-u", "curl", "echo", "-u", "ordinary"],
+      ["env", "-a", "curl", "echo", "-u", "ordinary"],
+      ["env", "--", "echo", "-u", "ordinary"],
+      ["env", "MODE=safe", "--", "curl", "-u", "ordinary"],
+      ["env", "-", "-", "curl", "-u", "ordinary"],
+      ["env", "MODE=safe"],
+      ["env"],
+      ["echo", "env", "curl", "-u", "ordinary"],
+      ["env", "docker", "run", "-p", "8080:80", "nginx"],
+    ].map((parts) => [parts])
+  )("preserves ordinary arguments and command boundaries in %j", (parts) => {
+    expect(redactCommandParts(parts)).toEqual(parts);
+  });
+
+  it.each(
+    [
+      ["env", "-S", `curl -u admin:${secret}`],
+      ["env", `--split-string=curl -u admin:${secret}`],
+      ["env", `-vScurl -u admin:${secret}`],
+      ["env", "--unknown", "curl", "-u", secret],
+      ["env", "--ch", "workspace", "curl", "-u", secret],
+      ["env", "-u"],
+      ["env", "--chdir"],
+      ["env", "--chdir", "x".repeat(5000), "curl", "-u", secret],
+      ["env", "MODE=safe", "env", "-S", `curl -u admin:${secret}`],
+    ].map((parts) => [parts])
+  )("hides ambiguous supported wrapper arguments in %j", (parts) => {
+    expect(redactCommandParts(parts)).toEqual(parts.map((part, index) => (index === 0 ? part : "<redacted>")));
+  });
+
+  it("bounds nested wrappers and prefix scans while preserving supported finite prefixes", () => {
+    const supported = [...Array<string>(8).fill("env"), "curl", "-u", secret];
+    expect(redactCommandParts(supported).at(-1)).toBe("<redacted>");
+    expect(redactCommandParts(supported).slice(0, 8)).toEqual(supported.slice(0, 8));
+    for (const parts of [
+      [...Array<string>(9).fill("env"), "curl", "-u", secret],
+      ["env", ...Array<string>(128).fill("MODE=safe"), "curl", "-u", secret],
+    ]) {
+      expect(
+        redactCommandParts(parts)
+          .slice(1)
+          .every((part) => part === "<redacted>")
+      ).toBe(true);
+    }
   });
 });
 

@@ -9,6 +9,8 @@ import {
   compileSecretRules,
   isLineAllowlisted,
   matchCustomSecretPatterns,
+  matchCustomSecretPatternsInLines,
+  describeCustomSecretPatternLimit,
   MAX_CUSTOM_PATTERN_LINE_LENGTH,
   NO_SECRET_RULES,
   redactCustomSecretPatterns,
@@ -158,6 +160,51 @@ describe("compiled secret rules", () => {
     const padding = "x ".repeat(MAX_CUSTOM_PATTERN_LINE_LENGTH);
     expect(matchCustomSecretPatterns(rules, `${padding}corp_abcdef012345`)).toEqual([]);
     expect(matchCustomSecretPatterns(rules, `corp_abcdef012345${padding}`)).toEqual(["Internal token"]);
+  });
+
+  it("matches independent lines across both message limits in the same order as single-line scans", () => {
+    const rules = compileSecretRules({
+      secretPatterns: [
+        { name: "Internal token", pattern: "corp_[a-z0-9]{12}" },
+        { name: "Legacy token", pattern: "legacy-[a-z]{6}", ignoreCase: true },
+      ],
+    });
+    const lines = Array.from({ length: 150 }, (_, index) =>
+      index % 3 === 0 ? "corp_abcdef012345 LEGACY-ABCDEF" : "x".repeat(MAX_CUSTOM_PATTERN_LINE_LENGTH)
+    );
+    expect(matchCustomSecretPatternsInLines(rules, lines)).toEqual(
+      lines.map((line) => matchCustomSecretPatterns(rules, line))
+    );
+    expect(matchCustomSecretPatternsInLines(NO_SECRET_RULES, lines)).toEqual(lines.map(() => []));
+    expect(matchCustomSecretPatternsInLines(rules, [])).toEqual([]);
+    expect(describeCustomSecretPatternLimit(rules, ["x".repeat(4096)])).toBeUndefined();
+    expect(describeCustomSecretPatternLimit(rules, ["x".repeat(4097), "x".repeat(4096)])).toMatchObject({
+      truncatedLines: 1,
+    });
+    expect(describeCustomSecretPatternLimit(NO_SECRET_RULES, ["x".repeat(4097)])).toBeUndefined();
+  });
+
+  it("retains all 32 matches for every line of a maximum line-count batch", () => {
+    const entries = Array.from({ length: 32 }, (_, index) => ({
+      name: ("Pattern " + index + " ").padEnd(80, "界"),
+      pattern: "corp_[a-z0-9]{12}",
+    }));
+    const rules = compileSecretRules({ secretPatterns: entries });
+    const expected = entries.map((entry) => entry.name);
+    const matches = matchCustomSecretPatternsInLines(
+      rules,
+      Array.from({ length: 64 }, () => "corp_abcdef012345")
+    );
+    expect(matches).toHaveLength(64);
+    for (const names of matches) expect(names).toEqual(expected);
+    const globalRules = {
+      patterns: [{ name: "Global", test: /corp_[a-z0-9]{12}/g, redact: /corp_[a-z0-9]{12}/g }],
+      allowlist: [],
+    };
+    expect(matchCustomSecretPatternsInLines(globalRules, ["corp_abcdef012345", "corp_abcdef012345"])).toEqual([
+      ["Global"],
+      ["Global"],
+    ]);
   });
 
   it("allowlists by path, by text, or by both together", () => {

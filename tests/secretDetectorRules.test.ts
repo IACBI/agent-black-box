@@ -139,6 +139,29 @@ describe("custom secret patterns and the allowlist", () => {
     }
   });
 
+  it("reports incomplete custom-pattern scanning without exposing skipped credentials", async () => {
+    const repo = await createTempDir("abb-secret-limits-");
+    const value = "corp_0123456789abcdef";
+    const content = "x".repeat(4096) + value;
+    const config = {
+      ...DEFAULT_CONFIG,
+      secretPatterns: [{ name: "Internal service token", pattern: "corp_[a-z0-9]{16}" }],
+    };
+    try {
+      await writeFile(path.join(repo, "client.txt"), content + "\n" + content);
+      const scan = await scanChangedFilesForSecrets(repo, [{ path: "client.txt", status: "modified" }], config);
+      expect(scan.findings).toEqual([]);
+      expect(scan).toMatchObject({ limitations: [{ path: "client.txt", truncatedLines: 2 }] });
+      expect(JSON.stringify(scan)).not.toContain(value);
+      expect(scanSecretsInLine("client.txt", content, 1, customRules)).toMatchObject({ customPatternTruncated: true });
+      expect(
+        await scanChangedFilesForSecrets(repo, [{ path: "client.txt", status: "modified" }], DEFAULT_CONFIG)
+      ).not.toHaveProperty("limitations");
+    } finally {
+      await removeTempDir(repo);
+    }
+  });
+
   it("refuses to scan with an invalid rule set rather than silently scanning without it", async () => {
     const config: AgentBlackBoxConfig = { ...DEFAULT_CONFIG, secretPatterns: [{ name: "x", pattern: "(a+)+" }] };
     await expect(scanChangedFilesForSecrets(process.cwd(), [], config)).rejects.toThrow("Invalid secret rules");

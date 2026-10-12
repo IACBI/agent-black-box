@@ -1,7 +1,6 @@
-import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { RiskSeverity, SessionReport } from "../types.js";
-import { ensureDir, pathExists, writeTextFileAtomic } from "../utils/files.js";
+import { pathExists, writeTextFileAtomic } from "../utils/files.js";
 import {
   generateCommandsMarkdown,
   generateDiffSummaryMarkdown,
@@ -79,13 +78,8 @@ export async function writeSessionExport(
     throw new Error(`Refusing to overwrite existing export file: ${resolvedPath}. Re-run with --force to replace it.`);
   }
 
-  await ensureDir(path.dirname(resolvedPath));
   try {
-    if (options.force) {
-      await writeTextFileAtomic(resolvedPath, content);
-    } else {
-      await writeFile(resolvedPath, content, { encoding: "utf8", flag: "wx", mode: 0o600 });
-    }
+    await writeTextFileAtomic(resolvedPath, content, { overwrite: options.force === true });
   } catch (error) {
     if (!options.force && isFileExistsError(error)) {
       throw new Error(
@@ -94,6 +88,12 @@ export async function writeSessionExport(
       );
     }
 
+    if (!options.force && isHardLinkPublicationError(error)) {
+      throw new Error(
+        `Atomic export publication requires hard-link support and permission on the destination filesystem: ${resolvedPath}.`,
+        { cause: error }
+      );
+    }
     throw error;
   }
 
@@ -102,4 +102,15 @@ export async function writeSessionExport(
 
 function isFileExistsError(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST";
+}
+
+function isHardLinkPublicationError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    "syscall" in error &&
+    error.syscall === "link" &&
+    ["ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EPERM", "EXDEV"].includes(String(error.code))
+  );
 }

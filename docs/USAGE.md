@@ -18,9 +18,12 @@ abb init # Only when .agentblackbox.json does not exist
 abb config validate
 abb config migrate
 abb doctor
+abb doctor --json
 ```
 
 `init` creates configuration without replacing an existing file, including concurrent creation. Exclusive atomic publication requires filesystem hard-link support and fails visibly when unavailable. Legacy configuration without `configVersion` loads in memory; `config migrate` rewrites it with the current schema.
+
+`abb doctor --json` prints one structured report with `ok`, `repoRoot`, and `checks` (each has `name`, `status`, and `message`). It exits 1 if any check fails; warnings alone retain exit 0. Invalid configuration prevents session-storage inspection. After a successful `abb doctor --repair --json`, stdout contains only the final doctor report. JSON escapes terminal controls while preserving the values restored by `JSON.parse`.
 
 | Setting                            | Default and contract                                                             |
 | ---------------------------------- | -------------------------------------------------------------------------------- |
@@ -69,7 +72,7 @@ Both detectors (recorded sessions and `analyze`) and command redaction read two 
 }
 ```
 
-**Patterns** are JavaScript regular expressions matched against one line at a time (only the first 4,096 characters of a line). A match is reported as `Possible <name> detected.` without the matched text, and the same expression redacts matches from recorded commands, labels, groups, and phases. Up to 32 patterns of at most 256 characters are accepted. A pattern is refused when it is not a valid expression, matches the empty string, uses a backreference, or nests a quantifier inside a quantified group such as `(a+)+`. That last check is a best-effort screen against catastrophic backtracking, not a proof, so keep patterns simple and anchored by a literal prefix. Execution also has an isolated worker deadline and memory limits; exhaustion fails scanning explicitly and redacts the whole input.
+**Patterns** are JavaScript regular expressions matched against one line at a time (only the first 4,096 characters of a line). A match is reported as `Possible <name> detected.` without the matched text, and the same expression redacts matches from recorded commands, labels, groups, and phases. Up to 32 patterns of at most 256 characters are accepted. A pattern is refused when it is not a valid expression, matches the empty string, uses a backreference, or nests a quantifier inside a quantified group such as `(a+)+`. That last check is a best-effort screen against catastrophic backtracking, not a proof, so keep patterns simple and anchored by a literal prefix. File scanning batches up to 64 independent line prefixes and 65,536 total UTF-16 code units per worker message, compiling patterns once per message. The existing 500 ms execution deadline applies to the entire bounded batch; memory/output limits remain unchanged. Exhaustion fails scanning explicitly and redacts the whole input. Lines longer than 4,096 code units produce visible partial-scan diagnostics even when no match is found or findings are allowlisted. Built-in detectors still inspect the full retained line, and finalized sessions record custom-pattern limits in integrity warnings.
 
 **Allowlist** entries hide findings with a recorded reason. An entry needs `path`, `contains`, or both, and always a `reason`. `path` uses the same case-insensitive path and segment matching as `exclude`; `contains` is literal text the line must include (8 to 256 characters, so a short value cannot allow far too much). When both are present, both must match. Never put a real secret in `contains`: the file is normally committed. Up to 256 entries are accepted.
 
@@ -114,6 +117,8 @@ Health is scoped to persisted markers: `healthy` means a complete inspection fou
 
 For a dead watcher, use `abb recover` or `abb doctor --repair`. Repair requires verified stale ownership or valid completed reports backing the state. Corrupt/inconsistent state remains available for diagnosis; do not delete evidence merely to silence an error.
 
+If a completed session stopped between active-state and lock cleanup, these commands can resume cleanup using its saved ownership receipt and verified report. A missing receipt, linked storage, mismatched ownership, damaged evidence, or a live owner prevents automatic cleanup. Existing completed evidence is not rewritten.
+
 ## Analyze without recording
 
 ```sh
@@ -139,7 +144,7 @@ Text findings show a verified rename's baseline source path; SARIF findings carr
 
 For a repository's first commit, use `abb analyze --staged --initial --policy complete-review`. `--initial` requires an unborn HEAD, treats every staged finding as new, and applies staged coverage gates without manufacturing a baseline. JSON includes `initialCommitAnalysis: true`; SARIF includes it in run properties. Repositories with a HEAD commit must use `--baseline`.
 
-`new-secrets` fails on newly detected possible secrets. `complete-review` also fails when non-deleted staged content or needed baseline content could not be scanned. Combining `--fail-on` and a policy fails when either condition applies. Operational errors return 1; findings alone do not fail the command without a threshold/policy.
+`new-secrets` fails on newly detected possible secrets. `complete-review` also fails when non-deleted staged content or needed baseline content could not be fully scanned, including the custom-pattern line limit. Combining `--fail-on` and a policy fails when either condition applies. Operational errors return 1; findings alone do not fail the command without a threshold/policy.
 
 Add named profiles to `.agentblackbox.json` to choose different gates for local commits and CI:
 
@@ -161,7 +166,7 @@ abb analyze --staged --baseline HEAD --policy local-review
 abb analyze --staged --baseline HEAD --policy ci-review --format sarif
 ```
 
-Profiles default to `failOnNewSecrets: true` and `requireCompleteCoverage: false`. Setting `failOnNewSecrets: false` explicitly disables the secret gate for that profile. `minSeverity` optionally gates metadata-risk findings; `categories` narrows only that gate using exact, case-insensitive category names and requires `minSeverity`. Secret and coverage gates remain independent. Filtering a gate does not remove findings from the report. JSON/SARIF include `severityRiskCount` for custom profiles; built-in result shapes and behavior remain unchanged.
+Profiles default to `failOnNewSecrets: true` and `requireCompleteCoverage: false`. Setting `failOnNewSecrets: false` explicitly disables the secret gate for that profile. `minSeverity` optionally gates metadata-risk findings; `categories` narrows only that gate using exact, case-insensitive category names and requires `minSeverity`. Secret and coverage gates remain independent. Filtering a gate does not remove findings from the report. JSON/SARIF include `severityRiskCount` for custom profiles. If any content is only partially scanned, policy results also include `limitedStagedFiles` and `limitedBaselineFiles`; these fields are absent when coverage has no such limits.
 
 At most 32 profiles are allowed; names match `[a-z][a-z0-9-]{0,63}`. Built-in names cannot be overridden, unknown fields/names fail validation, and category lists contain 1–32 non-empty strings of at most 128 characters. Policies never run automatically; choose one explicitly. The same staged/index and baseline-or-initial requirements apply to every profile.
 
@@ -190,7 +195,7 @@ The hook runs `abb analyze --staged --baseline HEAD --policy <policy>`. The firs
 
 The generated script is POSIX `sh`; Git for Windows runs hooks with its bundled shell, so it works on Windows too.
 
-Worktree, staged, and baseline CLI reads are capped at the smaller of `maxFileSizeKb` and 256 KiB. Deleted, binary, oversized, unsafe, or unavailable content is reported as skipped. Text summarizes coverage; JSON and SARIF retain structured coverage, policy, and rename-comparison details. Findings contain locations and fixed descriptions, not matched values.
+Worktree, staged, and baseline CLI reads are capped at the smaller of `maxFileSizeKb` and 256 KiB. Deleted, binary, oversized, unsafe, or unavailable content is reported as skipped. Text summarizes coverage; JSON and SARIF retain structured coverage, policy, and rename-comparison details. When custom patterns encounter longer lines, `coverage.limited` lists the file, fixed reason, and number of truncated lines; `baselineComparison.limited` identifies any partial needed baseline scans. These diagnostics are absent when no custom patterns are configured or all relevant lines fit the limit. Findings contain locations and fixed descriptions, not matched values.
 
 Use `abb analyze --staged --baseline HEAD --policy complete-review --max-total-bytes 16777216` to limit retained content to 16 MiB across staged and needed baseline text. Admissions follow input order; binary, missing, and oversized files do not consume the retained-content quota. A refused file remains visible in coverage with a budget reason, so `complete-review` fails when required content cannot fit. Git blob sizes are checked before content requests, avoiding oversized blob-body reads. The option budgets encoded UTF-8 content, including replacement-character expansion; transient per-file buffers, parsed objects, decoded strings, and runtime overhead are additional memory. It is not a heap/RSS cap. Defaults remain unchanged without the option.
 
@@ -230,7 +235,7 @@ abb pr-comment --output comment.md
 
 `abb export --format sarif` writes a SARIF 2.1.0 log of one session for code-scanning tools: risks become `session-risk:<category>` results, possible secrets become `possible-secret` results at their line, results carry a stable fingerprint, and run properties include the session ID, the risk summary, and capture warnings. Matched values never appear.
 
-Exports write to stdout unless `--output` is supplied. Existing destinations require `--force`, which atomically replaces the destination file; a destination leaf symlink is replaced rather than writing through to its target. File formats, evidence fields, integrity verification, and storage limits are defined in [Reports](REPORTS.md).
+Exports write to stdout unless `--output` is supplied. New output files are published only after their complete contents are written, using an exclusive hard link; the destination filesystem must support and permit hard links. Unsupported publication fails visibly without falling back to a partial copy. Concurrent exporters cannot replace each other’s output. Existing destinations require `--force`, which atomically replaces the destination file; a destination leaf symlink is replaced rather than writing through to its target. File formats, evidence fields, integrity verification, and storage limits are defined in [Reports](REPORTS.md).
 
 ### Rollback
 

@@ -231,6 +231,36 @@ describe("session manager", () => {
     }
   });
 
+  it("preserves ownership when stop-request cleanup fails so completed recovery can be retried", async () => {
+    const dir = await createTempDir();
+    try {
+      initGitRepo(dir);
+      const session = await createSession(dir, DEFAULT_CONFIG);
+      const lock = await readSessionLock(dir, DEFAULT_CONFIG);
+      await writeFile(getActiveSessionPath(dir, DEFAULT_CONFIG), JSON.stringify({ ...session, pid: 999_999 }));
+      await writeFile(getSessionLockPath(dir, DEFAULT_CONFIG), JSON.stringify({ ...lock, pid: 999_999 }));
+      const stopRequestPath = getStopRequestPath(dir, DEFAULT_CONFIG);
+      await mkdir(stopRequestPath);
+
+      await expect(recoverActiveSession(dir, DEFAULT_CONFIG)).rejects.toMatchObject({ code: "ERR_FS_EISDIR" });
+      expect((await readActiveSession(dir, DEFAULT_CONFIG))?.id).toBe(session.id);
+      expect((await readSessionLock(dir, DEFAULT_CONFIG))?.sessionId).toBe(session.id);
+      await expect(inspectSessionRecoveryState(dir, DEFAULT_CONFIG)).resolves.toMatchObject({
+        status: "already-complete",
+      });
+      const reportPath = path.join(session.sessionDir, "session.json");
+      const completedReport = await readFile(reportPath, "utf8");
+      await rm(stopRequestPath, { recursive: true });
+
+      await expect(recoverActiveSession(dir, DEFAULT_CONFIG)).resolves.toEqual({ state: "already-complete" });
+      expect(await pathExists(getActiveSessionPath(dir, DEFAULT_CONFIG))).toBe(false);
+      expect(await pathExists(getSessionLockPath(dir, DEFAULT_CONFIG))).toBe(false);
+      expect(await readFile(reportPath, "utf8")).toBe(completedReport);
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
   it("appends and reads file events", async () => {
     const dir = await createTempDir();
     try {

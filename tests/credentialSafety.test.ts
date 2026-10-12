@@ -3,7 +3,12 @@ import { describe, expect, it } from "vitest";
 import { analyzeChangedFiles } from "../src/analyze/analyzer.js";
 import { redactCommandParts } from "../src/commands/commandRecorder.js";
 import { detectSecretsInLine, redactKnownSecretTokens } from "../src/risks/secretDetector.js";
-import { compileSecretRules, matchCustomSecretPatterns, redactCustomSecretPatterns } from "../src/risks/secretRules.js";
+import {
+  compileSecretRules,
+  matchCustomSecretPatterns,
+  matchCustomSecretPatternsInLines,
+  redactCustomSecretPatterns,
+} from "../src/risks/secretRules.js";
 
 describe("credential recognition and bounded redaction", () => {
   const credentials = [
@@ -83,6 +88,15 @@ describe("credential recognition and bounded redaction", () => {
     expect(matchCustomSecretPatterns(ordinary, "corp_abcdef012345")).toEqual(["Ordinary"]);
     expect(redactCustomSecretPatterns(ordinary, "corp_abcdef012345")).toBe("<redacted>");
     expect(redactCustomSecretPatterns(ordinary, "x".repeat(65_537))).toBe("<redacted>");
+  }, 20_000);
+
+  it("rejects an entire batch if any custom-pattern line exceeds the strict execution deadline", () => {
+    const rules = compileSecretRules({ secretPatterns: [{ name: "Expensive", pattern: "(a|aa)+b" }] });
+    expect(() => matchCustomSecretPatternsInLines(rules, ["ordinary", "a".repeat(4096)])).toThrow("resource limit");
+    expect(() => matchCustomSecretPatternsInLines(rules, ["ordinary"])).toThrow("resource limit");
+    expect(redactCustomSecretPatterns(rules, "private content")).toBe("<redacted>");
+    const ordinary = compileSecretRules({ secretPatterns: [{ name: "Ordinary", pattern: "corp_[a-z0-9]{12}" }] });
+    expect(matchCustomSecretPatternsInLines(ordinary, ["corp_abcdef012345"])).toEqual([["Ordinary"]]);
   }, 20_000);
 
   it("bounds regex output expansion instead of exhausting memory", () => {

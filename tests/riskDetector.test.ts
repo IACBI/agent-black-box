@@ -24,6 +24,22 @@ describe("risk detector", () => {
     expect(findings.every((finding) => finding.score >= 60)).toBe(true);
   });
 
+  it.each([
+    ["Cargo.lock", "Lockfile"],
+    ["Pipfile.lock", "Lockfile"],
+    ["Gemfile.lock", "Lockfile"],
+    ["Cargo.toml", "Package manager file"],
+    ["Gemfile", "Package manager file"],
+    ["Pipfile", "Package manager file"],
+  ])("detects %s consistently across filename casing", (fileName, category) => {
+    for (const variant of [fileName, fileName.toUpperCase(), fileName.toLowerCase()]) {
+      const relativePath = `src/${variant}`;
+      expect(detectRiskForPath(relativePath, [])).toEqual([
+        expect.objectContaining({ path: relativePath, category, severity: "medium" }),
+      ]);
+    }
+  });
+
   it("detects auth and migration changes", () => {
     const findings = detectRisks(
       [

@@ -225,6 +225,23 @@ describe("pull request comment", () => {
     expect(comment.indexOf("</details>")).toBeGreaterThan(comment.indexOf("+10 more files"));
   });
 
+  it("shows C1 controls and Unicode separators safely in reasons and capture warnings", () => {
+    const controls = "\u009b2J\u2028\u2029";
+    const report = makeReport({
+      risks: [risk({ reason: `Review changed config${controls}` })],
+      integrity: { warnings: [`Capture warning${controls}`] },
+    });
+    const original = JSON.stringify(report);
+    const comment = generatePullRequestComment(report);
+    for (const control of ["\u009b", "\u2028", "\u2029"]) {
+      expect(comment).not.toContain(control);
+    }
+    expect(comment).toContain("u009b2J");
+    expect(comment).toContain("u2028");
+    expect(comment).toContain("u2029");
+    expect(JSON.stringify(report)).toBe(original);
+  });
+
   it("neutralises hostile paths, commands, reasons and branch names", () => {
     const hostilePath = "src/a|b`c<script>alert(1)</script>\n# Injected heading\u001b[31m\u202E.ts";
     const comment = generatePullRequestComment(

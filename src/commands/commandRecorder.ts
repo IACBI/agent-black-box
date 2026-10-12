@@ -153,7 +153,12 @@ export function normalizeCommandParts(parts: string[]): string[] {
 
 export function redactCommandParts(parts: string[], secretRules: CompiledSecretRules = NO_SECRET_RULES): string[] {
   const redacted: string[] = [];
-  const toolRule = findToolFlagRule(parts);
+  const commandIndex = findWrappedCommandIndex(parts);
+  if (commandIndex === null) {
+    // Ambiguous env syntax can hide credentials in split strings or change argument boundaries.
+    return parts.map((part, index) => (index === 0 ? scrubCommandPart(part, secretRules) : "<redacted>"));
+  }
+  const toolRule = findToolFlagRule(parts, commandIndex);
   let redactNext = false;
 
   for (const [index, part] of parts.entries()) {
@@ -168,7 +173,7 @@ export function redactCommandParts(parts: string[], secretRules: CompiledSecretR
       continue;
     }
 
-    if (index > 0 && toolRule) {
+    if (index > commandIndex && toolRule) {
       if (toolRule.valueFollows.has(part)) {
         redacted.push(part);
         redactNext = true;
@@ -233,14 +238,14 @@ const NO_ATTACHED_VALUE = /(?!)/;
 const MYSQL_FAMILY: ToolFlagRule = { valueFollows: new Set(), attachedValue: /^(-p)(?=.)/ };
 const TOOL_FLAG_RULES: Record<string, ToolFlagRule> = {
   curl: {
-    valueFollows: new Set(["-u", "--user", "-U", "--proxy-user"]),
-    attachedValue: /^(--(?:proxy-)?user=|-[uU](?=.))/,
+    valueFollows: new Set(["-u", "--user", "-U", "--proxy-user", "--oauth2-bearer", "--pass"]),
+    attachedValue: /^(--(?:(?:proxy-)?user|oauth2-bearer|pass)=|-[uU](?=.))/,
   },
   mysql: MYSQL_FAMILY,
   mysqladmin: MYSQL_FAMILY,
   mysqldump: MYSQL_FAMILY,
   mariadb: MYSQL_FAMILY,
-  "redis-cli": { valueFollows: new Set(["-a"]), attachedValue: NO_ATTACHED_VALUE },
+  "redis-cli": { valueFollows: new Set(["-a", "--pass"]), attachedValue: /^(--pass=)/ },
   sshpass: { valueFollows: new Set(["-p"]), attachedValue: /^(-p)(?=.)/ },
   docker: { valueFollows: new Set(["-p"]), attachedValue: NO_ATTACHED_VALUE },
   podman: { valueFollows: new Set(["-p"]), attachedValue: NO_ATTACHED_VALUE },
@@ -250,16 +255,90 @@ const TOOL_FLAG_RULES: Record<string, ToolFlagRule> = {
  * Short credential flags (`curl -u`, `mysql -pSECRET`) cannot be recognised by name, so they are matched per
  * tool. `docker -p` publishes a port everywhere except `login`, hence the subcommand check.
  */
-function findToolFlagRule(parts: readonly string[]): ToolFlagRule | undefined {
-  const executable = path
-    .basename(parts[0] ?? "")
-    .toLowerCase()
-    .replace(/\.(?:exe|cmd|bat)$/, "");
+function findToolFlagRule(parts: readonly string[], commandIndex: number): ToolFlagRule | undefined {
+  const executable = executableName(parts[commandIndex] ?? "");
   const rule = Object.hasOwn(TOOL_FLAG_RULES, executable) ? TOOL_FLAG_RULES[executable] : undefined;
-  if ((executable === "docker" || executable === "podman") && !parts.includes("login")) {
+  if ((executable === "docker" || executable === "podman") && !parts.slice(commandIndex + 1).includes("login")) {
     return undefined;
   }
   return rule;
+}
+
+const MAX_WRAPPER_ARGUMENTS = 128;
+const MAX_ENV_WRAPPERS = 8;
+
+function executableName(command: string): string {
+  return path
+    .basename(command)
+    .toLowerCase()
+    .replace(/\.(?:exe|cmd|bat)$/, "");
+}
+
+/** Resolve explicit env argv only; -S strings and unknown options are intentionally opaque. */
+function findWrappedCommandIndex(parts: readonly string[]): number | null {
+  let commandIndex = 0;
+  let wrappers = 0;
+  while (executableName(parts[commandIndex] ?? "") === "env") {
+    wrappers += 1;
+    if (wrappers > MAX_ENV_WRAPPERS) return null;
+    const childIndex = findEnvCommandIndex(parts, commandIndex + 1);
+    if (childIndex === null) return null;
+    commandIndex = childIndex;
+  }
+  return commandIndex;
+}
+
+function findEnvCommandIndex(parts: readonly string[], start: number): number | null {
+  let index = start;
+  while (index < parts.length) {
+    const part = parts[index]!;
+    if (index >= MAX_WRAPPER_ARGUMENTS || part.length > MAX_COMMAND_PART_LENGTH + 256) return null;
+    if (part === "--") {
+      index += 1;
+      break;
+    }
+    if (part === "-" || !part.startsWith("-")) break;
+    if (part.startsWith("--")) {
+      if (part === "--ignore-environment" || part === "--debug") {
+        index += 1;
+        continue;
+      }
+      const valueOption = /^(--unset|--chdir|--argv0)(=|$)/.exec(part);
+      if (!valueOption) return null;
+      if (valueOption[2] === "=") {
+        index += 1;
+        continue;
+      }
+      if (!isBoundedWrapperOperand(parts, index + 1)) return null;
+      index += 2;
+      continue;
+    }
+    // Short options can be grouped; a value-taking option consumes the rest of its group.
+    let consumesNext = false;
+    for (let offset = 1; offset < part.length; offset += 1) {
+      const option = part[offset]!;
+      if (option === "i" || option === "v") continue;
+      if (option !== "u" && option !== "C" && option !== "a") return null;
+      consumesNext = offset === part.length - 1;
+      break;
+    }
+    if (consumesNext && !isBoundedWrapperOperand(parts, index + 1)) return null;
+    index += consumesNext ? 2 : 1;
+  }
+  if (parts[index] === "-") index += 1;
+  // GNU env stops parsing options before assignments, even when an assignment is followed by '--'.
+  while (index < parts.length) {
+    if (!isBoundedWrapperOperand(parts, index)) return null;
+    if (!parts[index]!.includes("=")) return index;
+    index += 1;
+  }
+  return index;
+}
+
+function isBoundedWrapperOperand(parts: readonly string[], index: number): boolean {
+  return (
+    index < MAX_WRAPPER_ARGUMENTS && parts[index] !== undefined && parts[index]!.length <= MAX_COMMAND_PART_LENGTH + 256
+  );
 }
 
 const EMBEDDED_SCRIPT_MARKER = /[\s;&|]/;

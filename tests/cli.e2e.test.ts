@@ -742,6 +742,8 @@ describe("CLI end-to-end", () => {
       expect(oldRollbackApply.exitCode).toBe(1);
       expect(oldRollbackApply.stderr).toContain("only supports the latest completed session");
     } finally {
+      // Stop fixture watchers before removing their cwd, including when an earlier assertion failed.
+      await Promise.all(spawnedProcesses.splice(0).map((child) => stopChild(child)));
       await removeTempDir(repo);
     }
   }, 120_000);

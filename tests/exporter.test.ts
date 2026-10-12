@@ -13,7 +13,7 @@ import { createTempDir, removeTempDir } from "./testUtils.js";
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
-  return { ...actual, open: vi.fn(actual.open) };
+  return { ...actual, access: vi.fn(actual.access), link: vi.fn(actual.link), open: vi.fn(actual.open) };
 });
 
 const report = buildSessionReport(
@@ -45,6 +45,27 @@ describe("session exporter", () => {
     expect(markdown).toContain("Agent Black Box Summary");
     expect(markdown).toContain("Agent Black Box Rollback Hints");
     expect(JSON.parse(json)).toMatchObject({ id: "session-export" });
+  });
+
+  it("escapes Markdown presentation controls while retaining exact structured evidence", () => {
+    const controls = "\u009b2J\u2028\u2029";
+    const mixed = {
+      ...report,
+      git: { ...report.git, statusText: ` M file${controls}` },
+      risks: report.risks.map((risk) => ({ ...risk, reason: `Changed${controls}` })),
+    };
+    const original = JSON.stringify(mixed);
+    const markdown = renderSessionExport(mixed, { format: "markdown" });
+    for (const control of ["\u009b", "\u2028", "\u2029"]) {
+      expect(markdown).not.toContain(control);
+    }
+    expect(markdown).toContain("u009b2J");
+    expect(JSON.parse(renderSessionExport(mixed, { format: "json" }))).toEqual(mixed);
+    const sarif = JSON.parse(renderSessionExport(mixed, { format: "sarif" })) as {
+      runs: Array<{ results: Array<{ message: { text: string } }> }>;
+    };
+    expect(sarif.runs[0]?.results[0]?.message.text).toBe(`Changed${controls}`);
+    expect(JSON.stringify(mixed)).toBe(original);
   });
 
   it("renders a SARIF log without disturbing the markdown and JSON formats", () => {
@@ -124,6 +145,82 @@ describe("session exporter", () => {
 
       await writeSessionExport(outputPath, "second\n", { force: true });
       await expect(readFile(outputPath, "utf8")).resolves.toBe("second\n");
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
+  it("never publishes a partial new export after an interrupted write and permits retry", async () => {
+    const dir = await createTempDir();
+    try {
+      const outputPath = path.join(dir, "abb-export.md");
+      const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+      const failure = Object.assign(new Error("Simulated interrupted export write."), { code: "EIO" });
+      vi.mocked(fs.open).mockImplementationOnce(async (...args) => {
+        const handle = await actual.open(...args);
+        vi.spyOn(handle, "writeFile").mockImplementationOnce(async () => {
+          await handle.write("partial");
+          throw failure;
+        });
+        return handle;
+      });
+      await expect(writeSessionExport(outputPath, "complete\n")).rejects.toBe(failure);
+      expect(await readdir(dir)).toEqual([]);
+      await writeSessionExport(outputPath, "complete\n");
+      await expect(readFile(outputPath, "utf8")).resolves.toBe("complete\n");
+      expect(await readdir(dir)).toEqual(["abb-export.md"]);
+    } finally {
+      vi.restoreAllMocks();
+      await removeTempDir(dir);
+    }
+  });
+
+  it("preserves a competing export created after the initial absence check", async () => {
+    const dir = await createTempDir();
+    try {
+      const outputPath = path.join(dir, "abb-export.md");
+      vi.mocked(fs.access).mockImplementationOnce(async () => {
+        await writeFile(outputPath, "competing export\n");
+        throw Object.assign(new Error("Stale absence check."), { code: "ENOENT" });
+      });
+      await expect(writeSessionExport(outputPath, "replacement\n")).rejects.toThrow("Refusing to overwrite");
+      await expect(readFile(outputPath, "utf8")).resolves.toBe("competing export\n");
+      expect(await readdir(dir)).toEqual(["abb-export.md"]);
+    } finally {
+      vi.restoreAllMocks();
+      await removeTempDir(dir);
+    }
+  });
+
+  it("fails clearly without publishing or leaving temporary files when hard links are unsupported", async () => {
+    const dir = await createTempDir();
+    try {
+      const outputPath = path.join(dir, "abb-export.md");
+      const failure = Object.assign(new Error("Hard links are unavailable."), { code: "ENOTSUP", syscall: "link" });
+      vi.mocked(fs.link).mockRejectedValueOnce(failure);
+      await expect(writeSessionExport(outputPath, "complete\n")).rejects.toThrow(
+        "requires hard-link support and permission"
+      );
+      expect(await readdir(dir)).toEqual([]);
+      await writeSessionExport(outputPath, "complete\n");
+      await expect(readFile(outputPath, "utf8")).resolves.toBe("complete\n");
+    } finally {
+      vi.restoreAllMocks();
+      await removeTempDir(dir);
+    }
+  });
+
+  it("lets only one concurrent exporter publish a complete file", async () => {
+    const dir = await createTempDir();
+    try {
+      const outputPath = path.join(dir, "abb-export.md");
+      const contents = ["first ".repeat(10_000), "second ".repeat(10_000)];
+      const results = await Promise.allSettled(contents.map((content) => writeSessionExport(outputPath, content)));
+      expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+      const failure = results.find((result) => result.status === "rejected");
+      expect(failure?.status === "rejected" ? String(failure.reason) : "").toContain("Refusing to overwrite");
+      expect(contents).toContain(await readFile(outputPath, "utf8"));
+      expect(await readdir(dir)).toEqual(["abb-export.md"]);
     } finally {
       await removeTempDir(dir);
     }

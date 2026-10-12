@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { appendFile, mkdir, open, readdir, realpath, stat, writeFile } from "node:fs/promises";
+import { appendFile, lstat, mkdir, open, readdir, realpath, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type {
   ActiveSession,
@@ -26,7 +26,8 @@ import {
   writeTextFileAtomic,
 } from "../utils/files.js";
 import { buildChangeEvidence, selectSessionRelevantChanges } from "./changeEvidence.js";
-import { verifyCatalogSessionReportFile } from "./sessionCatalog.js";
+import { parseSessionReport, verifyCatalogSessionReportFile } from "./sessionCatalog.js";
+import { readCanonicalReportCore } from "./reportStorage.js";
 import { isCapturedCommandEvent, isCapturedFileEvent, readNdjsonRecords, type NdjsonReadResult } from "./ndjson.js";
 import { isRecord } from "../utils/records.js";
 import { sleep } from "../utils/timing.js";
@@ -46,6 +47,7 @@ const CAPTURE_LOSS_MARKERS = {
   watcherError: "capture-loss-watcher-error",
 } as const;
 const SESSION_START_FILE = "session-start.json";
+const SESSION_CLEANUP_FILE = "session-cleanup.json";
 const GIT_BASELINE_FILE = "git-start.json";
 const MAX_PATH_LENGTH = 32_768;
 const MAX_STATE_FILE_BYTES = 1024 * 1024;
@@ -72,6 +74,11 @@ interface StateReadResult<T> {
   value: T | null;
   corrupted: boolean;
   error?: string;
+}
+
+interface SessionCleanupReceipt {
+  cleanupVersion: 1;
+  active: ActiveSession;
 }
 
 export function getSessionRoot(repoRoot: string, config: AgentBlackBoxConfig): string {
@@ -210,6 +217,24 @@ export async function inspectSessionRecoveryState(
   }
 
   if (!activeState.value) {
+    if (lockState.value && !isProcessRunning(lockState.value.pid)) {
+      try {
+        const active = await readCompletedCleanupSession(repoRoot, config, lockState.value);
+        if (active) {
+          return {
+            status: "already-complete",
+            message: `Session ${active.id} completed cleanup was interrupted; its ownership and report were verified.`,
+            active,
+          };
+        }
+      } catch {
+        return {
+          status: "corrupt",
+          message: "Completed-session cleanup proof is unreadable or inconsistent; state was left untouched.",
+          active: null,
+        };
+      }
+    }
     return lockState.value
       ? {
           status: "inconsistent",
@@ -288,7 +313,7 @@ export async function recoverActiveSession(
     throw new Error("Recovery state did not include an active session.");
   }
   if (recovery.status === "already-complete") {
-    await withFinalizationOwnership(active, config, () => clearSessionState(active, config));
+    await withFinalizationOwnership(active, config, () => clearSessionState(active, config, true), true);
     return { state: recovery.status };
   }
 
@@ -428,11 +453,8 @@ async function finalizeOwnedSession(
   const changeEvidence = buildChangeEvidence(baselineState.value, fileEvents.records, git, committedChanges);
   const sessionRelevantChanges = selectSessionRelevantChanges(git, changeEvidence);
   const risks = detectRisks(sessionRelevantChanges, config);
-  const { findings: possibleSecrets, allowlisted: allowlistedSecretCount } = await scanChangedFilesForSecrets(
-    active.repoRoot,
-    sessionRelevantChanges,
-    config
-  );
+  const secretScan = await scanChangedFilesForSecrets(active.repoRoot, sessionRelevantChanges, config);
+  const { findings: possibleSecrets, allowlisted: allowlistedSecretCount } = secretScan;
   const baselineWarnings = baselineState.value
     ? []
     : [
@@ -455,6 +477,7 @@ async function finalizeOwnedSession(
         ...commandEvents.warnings,
         ...baselineWarnings,
         ...commandWarnings,
+        ...(secretScan.limitations ?? []).map((limit) => `${limit.path}: ${limit.reason}`),
         ...(captureLoss.droppedFileEvents > 0
           ? [`Dropped ${captureLoss.droppedFileEvents} file event(s) because the watcher queue was full.`]
           : []),
@@ -578,35 +601,151 @@ async function acquireSessionLock(repoRoot: string, config: AgentBlackBoxConfig,
   throw new Error("A stale or unreadable session lock exists. Run `abb recover` or inspect it with `abb doctor`.");
 }
 
-async function clearSessionState(active: ActiveSession, config: AgentBlackBoxConfig): Promise<void> {
-  await assertSessionOwnership(active, config);
+async function clearSessionState(
+  active: ActiveSession,
+  config: AgentBlackBoxConfig,
+  allowCompletedCleanup = false
+): Promise<void> {
+  await assertSessionOwnership(active, config, allowCompletedCleanup);
 
-  await removeFileIfExists(getActiveSessionPath(active.repoRoot, config));
+  // Keep ownership intact when ancillary cleanup fails so completed recovery can be retried.
   await removeFileIfExists(getStopRequestPath(active.repoRoot, config));
+  const cleanupDirectory = await getCleanupDirectory(active.repoRoot, config, active.id, active.sessionDir);
+  if (!cleanupDirectory) throw new Error("Session cleanup directory is missing; state was left untouched.");
+  const receiptPath = path.join(cleanupDirectory, SESSION_CLEANUP_FILE);
+  const receipt = await readCleanupReceipt(receiptPath);
+  if (receipt && !activeMatches(receipt.active, active)) {
+    throw new Error("Session cleanup receipt belongs to another owner; state was left untouched.");
+  }
+  if (!receipt) {
+    // The primary lock remains the start barrier until this recoverable proof is fully published.
+    await writeTextFileAtomic(receiptPath, `${JSON.stringify({ cleanupVersion: 1, active })}\n`, { overwrite: false });
+  }
+  await assertSessionOwnership(active, config, allowCompletedCleanup);
+  await removeFileIfExists(getActiveSessionPath(active.repoRoot, config));
   await releaseSessionLock(active.repoRoot, config, active);
+  // A replacement session may now start; only touch this completed session's local files.
+  await removeFileIfExists(receiptPath);
 }
 
-async function assertSessionOwnership(active: ActiveSession, config: AgentBlackBoxConfig): Promise<void> {
-  const current = await readActiveSession(active.repoRoot, config);
-  const lock = await readSessionLock(active.repoRoot, config);
-  if (!current || !activeMatches(current, active) || !lock || !lockMatchesActive(lock, active)) {
-    throw new Error("Session ownership changed during recovery; state was left untouched.");
+async function assertSessionOwnership(
+  active: ActiveSession,
+  config: AgentBlackBoxConfig,
+  allowCompletedCleanup = false
+): Promise<void> {
+  const [current, lock] = await Promise.all([
+    readActiveSessionState(active.repoRoot, config),
+    readSessionLockState(active.repoRoot, config),
+  ]);
+  if (!current.corrupted && !lock.corrupted && lock.value && lockMatchesActive(lock.value, active)) {
+    if (current.value && activeMatches(current.value, active)) return;
+    if (allowCompletedCleanup && !current.value && !isProcessRunning(lock.value.pid)) {
+      const cleanup = await readCompletedCleanupSession(active.repoRoot, config, lock.value);
+      if (cleanup && activeMatches(cleanup, active)) return;
+    }
   }
+  throw new Error("Session ownership changed during recovery; state was left untouched.");
 }
 
 async function withFinalizationOwnership<T>(
   active: ActiveSession,
   config: AgentBlackBoxConfig,
-  operation: () => Promise<T>
+  operation: () => Promise<T>,
+  allowCompletedCleanup = false
 ): Promise<T> {
-  await assertSessionOwnership(active, config);
+  await assertSessionOwnership(active, config, allowCompletedCleanup);
   const claimPath = await acquireFinalizationClaim(active);
   try {
-    await assertSessionOwnership(active, config);
+    await assertSessionOwnership(active, config, allowCompletedCleanup);
     return await operation();
   } finally {
     await removeFileIfExists(claimPath);
   }
+}
+
+async function readCleanupReceipt(filePath: string): Promise<SessionCleanupReceipt | null> {
+  let details;
+  try {
+    details = await lstat(filePath);
+  } catch (error) {
+    if (isRecord(error) && error.code === "ENOENT") return null;
+    throw error;
+  }
+  if (!details.isFile()) throw new Error("Session cleanup receipt is not a regular file.");
+  const receipt = await readStateFile<SessionCleanupReceipt>(
+    filePath,
+    (value): value is SessionCleanupReceipt =>
+      isRecord(value) && value.cleanupVersion === 1 && isActiveSession(value.active)
+  );
+  if (!receipt.value || receipt.corrupted) throw new Error("Session cleanup receipt is unreadable.");
+  return receipt.value;
+}
+
+async function readCompletedCleanupSession(
+  repoRoot: string,
+  config: AgentBlackBoxConfig,
+  lock: SessionLock
+): Promise<ActiveSession | null> {
+  const expectedDirectory = await getCleanupDirectory(repoRoot, config, lock.sessionId, lock.sessionDir);
+  if (!expectedDirectory) return null;
+  const receipt = await readCleanupReceipt(path.join(expectedDirectory, SESSION_CLEANUP_FILE));
+  if (!receipt) return null;
+  const active = receipt.active;
+  if (
+    !lockMatchesActive(lock, active) ||
+    lock.createdAt !== active.startedAt ||
+    !(await isSessionLocationTrusted(active, repoRoot, config))
+  ) {
+    throw new Error("Session cleanup receipt does not match its repository and lock owner.");
+  }
+  if (!(await pathExists(path.join(expectedDirectory, "session-metadata.json")))) {
+    throw new Error("Session cleanup has no completion metadata.");
+  }
+  await verifyCatalogSessionReportFile(
+    { id: active.id, sessionDir: expectedDirectory, state: "complete" },
+    {
+      verifyEventLogs: true,
+    }
+  );
+  const { core } = await readCanonicalReportCore(path.join(expectedDirectory, "session.json"));
+  const report = parseSessionReport(core);
+  if (
+    !report ||
+    report.id !== active.id ||
+    report.repoRoot !== active.repoRoot ||
+    report.sessionDir !== active.sessionDir ||
+    report.startedAt !== active.startedAt
+  ) {
+    throw new Error("Completed report identity does not match the session cleanup receipt.");
+  }
+  return active;
+}
+
+async function getCleanupDirectory(
+  repoRoot: string,
+  config: AgentBlackBoxConfig,
+  sessionId: string,
+  sessionDir: string
+): Promise<string | null> {
+  const expectedDirectory = path.join(getSessionRoot(repoRoot, config), sessionId);
+  let details;
+  try {
+    details = await lstat(expectedDirectory);
+  } catch (error) {
+    if (isRecord(error) && (error.code === "ENOENT" || error.code === "ENOTDIR")) return null;
+    throw error;
+  }
+  if (!details.isDirectory()) throw new Error("Session cleanup directory is not a regular directory.");
+  const [sessionRoot, physicalParent, physicalDirectory, ownedDirectory] = await Promise.all([
+    realpath(getSessionRoot(repoRoot, config)),
+    realpath(path.dirname(expectedDirectory)),
+    realpath(expectedDirectory),
+    realpath(sessionDir),
+  ]);
+  if (sessionRoot !== physicalParent || physicalDirectory !== ownedDirectory) {
+    throw new Error("Session cleanup directory does not match its storage root and lock.");
+  }
+  return expectedDirectory;
 }
 
 async function acquireFinalizationClaim(active: ActiveSession): Promise<string> {
@@ -789,6 +928,8 @@ function lockMatchesActive(lock: SessionLock, active: ActiveSession): boolean {
 function activeMatches(left: ActiveSession, right: ActiveSession): boolean {
   return (
     left.id === right.id &&
+    left.repoRoot === right.repoRoot &&
+    left.startedAt === right.startedAt &&
     left.pid === right.pid &&
     left.sessionDir === right.sessionDir &&
     left.ownerToken === right.ownerToken

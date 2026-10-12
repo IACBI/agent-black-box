@@ -5,8 +5,11 @@ import { inspectTextFile } from "../utils/fileInspection.js";
 import { resolveRepoPath } from "../utils/paths.js";
 import {
   compileSecretRules,
+  describeCustomSecretPatternLimit,
   isLineAllowlisted,
   matchCustomSecretPatterns,
+  matchCustomSecretPatternsInLines,
+  MAX_CUSTOM_PATTERN_LINE_LENGTH,
   NO_SECRET_RULES,
   type CompiledSecretRules,
 } from "./secretRules.js";
@@ -77,6 +80,8 @@ const REDACTABLE_TOKENS = [
 
 export interface SecretLineScan {
   findings: SecretFinding[];
+  /** Present when configured patterns could not inspect the entire line. */
+  customPatternTruncated?: true;
   /** Findings that matched but were suppressed by the configured allowlist. */
   allowlisted: number;
 }
@@ -84,6 +89,8 @@ export interface SecretLineScan {
 export interface SecretScanResult {
   findings: SecretFinding[];
   allowlisted: number;
+  /** Partial custom-pattern scans; built-in detectors still inspect the complete line. */
+  limitations?: Array<{ path: string; reason: string; truncatedLines: number }>;
 }
 
 /**
@@ -143,9 +150,11 @@ export async function scanChangedFilesForSecrets(
     return scanSecretsInFile(absolutePath, file.path, config.maxFileSizeKb, repoRoot, rules);
   });
 
+  const limitations = results.flatMap((result) => result.limitations ?? []);
   return {
     findings: dedupeSecretFindings(results.flatMap((result) => result.findings)),
     allowlisted: results.reduce((total, result) => total + result.allowlisted, 0),
+    ...(limitations.length > 0 ? { limitations } : {}),
   };
 }
 
@@ -173,13 +182,19 @@ async function scanSecretsInFile(
 
   const findings: SecretFinding[] = [];
   let allowlisted = 0;
-  inspection.text.split(/\r?\n/).forEach((line, index) => {
-    const scan = scanSecretsInLine(relativePath, line, index + 1, rules);
+  const lines = inspection.text.split(/\r?\n/);
+  const customMatches = rules.patterns.length > 0 ? matchCustomSecretPatternsInLines(rules, lines) : [];
+  lines.forEach((line, index) => {
+    const scan = scanSecretsInLineWithMatches(relativePath, line, index + 1, rules, customMatches[index] ?? []);
     findings.push(...scan.findings);
     allowlisted += scan.allowlisted;
   });
-
-  return { findings: dedupeSecretFindings(findings), allowlisted };
+  const limit = describeCustomSecretPatternLimit(rules, lines);
+  return {
+    findings: dedupeSecretFindings(findings),
+    allowlisted,
+    ...(limit ? { limitations: [{ path: relativePath, ...limit }] } : {}),
+  };
 }
 
 export function detectSecretsInLine(
@@ -197,6 +212,18 @@ export function scanSecretsInLine(
   lineNumber: number,
   rules: CompiledSecretRules = NO_SECRET_RULES
 ): SecretLineScan {
+  return scanSecretsInLineWithMatches(relativePath, line, lineNumber, rules, matchCustomSecretPatterns(rules, line));
+}
+
+function scanSecretsInLineWithMatches(
+  relativePath: string,
+  line: string,
+  lineNumber: number,
+  rules: CompiledSecretRules,
+  customMatches: readonly string[]
+): SecretLineScan {
+  const limited = rules.patterns.length > 0 && line.length > MAX_CUSTOM_PATTERN_LINE_LENGTH;
+  const diagnostics = limited ? { customPatternTruncated: true as const } : {};
   const findings: SecretFinding[] = [];
   const addFinding = (reason: string): void => {
     findings.push({ path: relativePath, line: lineNumber, reason, redacted: "<redacted>" });
@@ -208,7 +235,7 @@ export function scanSecretsInLine(
     }
   }
 
-  for (const name of matchCustomSecretPatterns(rules, line)) {
+  for (const name of customMatches) {
     addFinding(`Possible ${name} detected.`);
   }
 
@@ -227,10 +254,10 @@ export function scanSecretsInLine(
   }
 
   if (findings.length > 0 && isLineAllowlisted(rules, relativePath, line)) {
-    return { findings: [], allowlisted: findings.length };
+    return { findings: [], allowlisted: findings.length, ...diagnostics };
   }
 
-  return { findings, allowlisted: 0 };
+  return { findings, allowlisted: 0, ...diagnostics };
 }
 
 /** Provider and structured credential signals shared by recording and watcherless analysis. */
