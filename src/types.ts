@@ -18,6 +18,22 @@ export interface ConfiguredAnalysisPolicy {
 
 export type ConfiguredAnalysisPolicies = Record<string, ConfiguredAnalysisPolicy>;
 
+export interface ConfiguredSecretPattern {
+  name: string;
+  /** JavaScript regular expression source; matched against single lines, never against whole files. */
+  pattern: string;
+  ignoreCase?: boolean;
+}
+
+export interface ConfiguredSecretAllowlistEntry {
+  /** Repository path or path segment (same matching as `exclude`); the finding's file must match. */
+  path?: string;
+  /** Literal text the matching line must contain. Never put a real secret here. */
+  contains?: string;
+  /** Why the match is safe; required so suppressions stay reviewable. */
+  reason: string;
+}
+
 export interface AgentBlackBoxConfig {
   $schema?: string;
   configVersion: 1;
@@ -26,6 +42,8 @@ export interface AgentBlackBoxConfig {
   riskPatterns: string[];
   maxFileSizeKb: number;
   analysisPolicies?: ConfiguredAnalysisPolicies;
+  secretPatterns?: ConfiguredSecretPattern[];
+  secretAllowlist?: ConfiguredSecretAllowlistEntry[];
   retention?: {
     days?: number;
     keep?: number;
@@ -132,6 +150,8 @@ export interface RiskSummary {
   score: number;
   maxSeverity: RiskSeverity | "none";
   possibleSecretCount: number;
+  /** Present only when the configured allowlist suppressed at least one possible-secret finding. */
+  allowlistedSecretCount?: number;
   severityCounts: Record<RiskSeverity, number>;
 }
 

@@ -1,9 +1,10 @@
-import { execFile, execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { execFile, execFileSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { runCli, spawnCli, stopChild, waitForExit, waitForOutput } from "./cliRunner.js";
 import { createTempDir, initGitRepo, removeTempDir } from "./testUtils.js";
 import { DEFAULT_CONFIG } from "../src/config/defaults.js";
 import {
@@ -18,13 +19,30 @@ import { pathExists } from "../src/utils/files.js";
 
 const require = createRequire(import.meta.url);
 const tsxLoader = pathToFileURL(require.resolve("tsx")).href;
-const cliPath = path.resolve(process.cwd(), "src/cli.ts");
+const devCliPath = path.resolve(process.cwd(), "src/cli.ts");
 
 const spawnedProcesses: ChildProcessWithoutNullStreams[] = [];
 
 describe("CLI end-to-end", () => {
   afterEach(async () => {
     await Promise.all(spawnedProcesses.splice(0).map((child) => stopChild(child)));
+  });
+
+  // Everything else runs the compiled CLI; this keeps the tsx development entry point (`pnpm dev`) covered.
+  it("starts through the tsx development entry point", async () => {
+    const run = (args: string[]) =>
+      new Promise<{ stdout: string; exitCode: number }>((resolve) => {
+        execFile(process.execPath, ["--import", tsxLoader, devCliPath, ...args], (error, stdout) => {
+          resolve({ stdout, exitCode: typeof error?.code === "number" ? error.code : error ? 1 : 0 });
+        });
+      });
+
+    const version = await run(["--version"]);
+    expect(version.exitCode).toBe(0);
+    expect(version.stdout.trim()).toMatch(/^\d+\.\d+\.\d+/);
+    const help = await run(["--help"]);
+    expect(help.exitCode).toBe(0);
+    expect(help.stdout).toContain("Usage: abb");
   });
 
   it("reports persisted capture health without exposing ownership or modifying session state", async () => {
@@ -728,69 +746,3 @@ describe("CLI end-to-end", () => {
     }
   }, 120_000);
 });
-
-function runCli(cwd: string, args: string[]): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  return new Promise((resolve) => {
-    execFile(process.execPath, ["--import", tsxLoader, cliPath, ...args], { cwd }, (error, stdout, stderr) => {
-      resolve({
-        stdout,
-        stderr,
-        exitCode: typeof error?.code === "number" ? error.code : 0,
-      });
-    });
-  });
-}
-
-function spawnCli(cwd: string, args: string[]): ChildProcessWithoutNullStreams {
-  return spawn(process.execPath, ["--import", tsxLoader, cliPath, ...args], {
-    cwd,
-    stdio: "pipe",
-  });
-}
-
-function waitForOutput(child: ChildProcessWithoutNullStreams, expected: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    let output = "";
-    const timeout = setTimeout(() => reject(new Error(`Timed out waiting for output: ${expected}\n${output}`)), 15_000);
-
-    child.stdout.on("data", (chunk: Buffer) => {
-      output += chunk.toString("utf8");
-      if (output.includes(expected)) {
-        clearTimeout(timeout);
-        resolve();
-      }
-    });
-
-    child.stderr.on("data", (chunk: Buffer) => {
-      output += chunk.toString("utf8");
-    });
-
-    child.once("exit", (code) => {
-      clearTimeout(timeout);
-      reject(new Error(`Process exited with ${code} while waiting for output: ${expected}\n${output}`));
-    });
-  });
-}
-
-function waitForExit(child: ChildProcessWithoutNullStreams): Promise<void> {
-  if (child.exitCode !== null) {
-    return Promise.resolve();
-  }
-
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("Timed out waiting for CLI process to exit.")), 15_000);
-    child.once("exit", () => {
-      clearTimeout(timeout);
-      resolve();
-    });
-  });
-}
-
-function stopChild(child: ChildProcessWithoutNullStreams): Promise<void> {
-  if (child.exitCode !== null) {
-    return Promise.resolve();
-  }
-
-  child.kill("SIGTERM");
-  return waitForExit(child).catch(() => undefined);
-}

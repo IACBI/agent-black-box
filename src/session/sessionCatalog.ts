@@ -11,12 +11,13 @@ import type {
   SessionReport,
 } from "../types.js";
 import { summarizeRisks } from "../risks/riskDetector.js";
-import { pathExists, readJsonFileLimited } from "../utils/files.js";
+import { pathExists } from "../utils/files.js";
 import { mapWithConcurrency } from "../utils/concurrency.js";
 import { buildChangeEvidence, selectSessionRelevantChanges } from "./changeEvidence.js";
 import { digestNdjsonRecords, isCapturedCommandEvent, isCapturedFileEvent, readNdjsonRecords } from "./ndjson.js";
 import {
   assertMaterializationBudget,
+  digestBuffer,
   digestRecords,
   digestRegularFile,
   INLINE_REPORT_BYTES,
@@ -24,9 +25,12 @@ import {
   MAX_REPORT_BYTES,
   MaterializationBudgetError,
   REPORT_REPLAY_FILE,
+  readJsonFileWithinBudget,
+  readBufferWithinBudget,
   type ReportReplay,
   validateMaterializationLimit,
 } from "./reportStorage.js";
+import { isRecord } from "../utils/records.js";
 
 export const SESSION_METADATA_FILE = "session-metadata.json";
 const SESSION_REPORT_FILE = "session.json";
@@ -169,7 +173,10 @@ export function resolveSessionEntry(entries: SessionCatalogEntry[], selector: st
     throw new Error(`Session selector is ambiguous: ${normalizedSelector}`);
   }
 
-  const selected = matches[0];
+  const [selected] = matches;
+  if (!selected) {
+    throw new Error(`Session not found: ${normalizedSelector}`);
+  }
   if (selected.state === "incomplete") {
     throw new Error(`Session ${selected.id} is incomplete and has no finalized report.`);
   }
@@ -182,13 +189,18 @@ export function resolveSessionEntry(entries: SessionCatalogEntry[], selector: st
 export async function resolveSession(
   repoRoot: string,
   config: AgentBlackBoxConfig,
-  selector?: string
+  selector?: string,
+  options: SessionCatalogOptions = {}
 ): Promise<SessionCatalogEntry> {
-  return resolveSessionEntry(await listSessionCatalog(repoRoot, config), selector);
+  return resolveSessionEntry(await listSessionCatalog(repoRoot, config, options), selector);
 }
 
-export async function readCatalogSessionReport(entry: SessionCatalogEntry): Promise<SessionReport> {
-  return readCatalogSessionReportWithinLimit(entry);
+export async function readCatalogSessionReport(
+  entry: SessionCatalogEntry,
+  options: SessionCatalogOptions = {}
+): Promise<SessionReport> {
+  validateMaterializationLimit(options.maxMaterializedBytes);
+  return readCatalogSessionReportWithinLimit(entry, options.maxMaterializedBytes);
 }
 
 async function readCatalogSessionReportWithinLimit(
@@ -393,14 +405,8 @@ async function readJsonUnknown(
     const maxBytes =
       limitBytes ??
       (path.basename(filePath) === SESSION_REPORT_FILE ? INLINE_REPORT_BYTES : MAX_SESSION_METADATA_BYTES);
-    if (maxMaterializedBytes !== undefined) {
-      const file = await lstat(filePath);
-      if (file.isFile() && file.size <= maxBytes) {
-        assertMaterializationBudget(filePath, file.size, maxMaterializedBytes);
-      }
-    }
     return {
-      value: await readJsonFileLimited<unknown>(filePath, Math.min(maxBytes, maxMaterializedBytes ?? maxBytes)),
+      value: await readJsonFileWithinBudget<unknown>(filePath, maxBytes, maxMaterializedBytes),
     };
   } catch (error) {
     if (error instanceof MaterializationBudgetError) {
@@ -423,10 +429,7 @@ async function readStoredReportUnknown(
     }
     if (reportFile.size <= INLINE_REPORT_BYTES) {
       assertMaterializationBudget(reportPath, reportFile.size, options.maxMaterializedBytes);
-      return readJsonUnknown(
-        reportPath,
-        Math.min(INLINE_REPORT_BYTES, options.maxMaterializedBytes ?? INLINE_REPORT_BYTES)
-      );
+      return readJsonUnknown(reportPath, INLINE_REPORT_BYTES, options.maxMaterializedBytes);
     }
     if (reportFile.size > MAX_REPORT_BYTES) {
       throw new Error(`session.json exceeds the ${MAX_REPORT_BYTES / 1024 / 1024} MiB size limit.`);
@@ -435,7 +438,43 @@ async function readStoredReportUnknown(
     const replayPath = path.join(sessionDir, REPORT_REPLAY_FILE);
     if (!(await pathExists(replayPath))) {
       assertMaterializationBudget(reportPath, reportFile.size, options.maxMaterializedBytes);
-      return readJsonUnknown(reportPath, Math.min(MAX_REPORT_BYTES, options.maxMaterializedBytes ?? MAX_REPORT_BYTES));
+      return readJsonUnknown(reportPath, MAX_REPORT_BYTES, options.maxMaterializedBytes);
+    }
+    if (options.maxMaterializedBytes !== undefined && !options.metadataOnly) {
+      const replayFile = await lstat(replayPath);
+      if (!replayFile.isFile() || replayFile.size === 0) {
+        throw new Error("Large report replay metadata is missing or invalid.");
+      }
+      if (replayFile.size > INLINE_REPORT_BYTES) {
+        throw new Error(`session-replay.json exceeds the ${INLINE_REPORT_BYTES / 1024 / 1024} MiB size limit.`);
+      }
+      assertMaterializationBudget(reportPath, reportFile.size + replayFile.size, options.maxMaterializedBytes);
+      const { replay, core } = await readLargeReplayCore(
+        sessionDir,
+        id,
+        reportFile.size,
+        options.maxMaterializedBytes - reportFile.size
+      );
+      // The fixed report allowance leaves the rest of the quota for replay metadata, even if it grows.
+      const buffer = await readBufferWithinBudget(reportPath, MAX_REPORT_BYTES, reportFile.size);
+      if (digestBuffer(buffer) !== replay.reportDigest) {
+        throw new Error("session.json changed after finalization.");
+      }
+      const value: unknown = JSON.parse(buffer.toString("utf8"));
+      const stored = parseSessionReport(value);
+      if (
+        !stored ||
+        stored.id !== id ||
+        stored.events.length !== replay.eventCount ||
+        stored.commands.length !== replay.commandCount ||
+        digestRecords(stored.events) !== replay.eventsDigest ||
+        digestRecords(stored.commands) !== replay.commandsDigest ||
+        digestRecords([{ ...stored, events: [], commands: [] }]) !== digestRecords([core])
+      ) {
+        throw new Error("Large report records no longer match replay metadata.");
+      }
+      await verifyReplayEventLogs(sessionDir, replay, core);
+      return { value: { ...replay.report, events: stored.events, commands: stored.commands } };
     }
     const { replay, core } = await readLargeReplayCore(sessionDir, id, reportFile.size, options.maxMaterializedBytes);
     if (options.metadataOnly) {
@@ -491,12 +530,7 @@ async function readLargeReplayCore(
   maxMaterializedBytes?: number
 ): Promise<{ replay: ReportReplay; core: SessionReport }> {
   const replayPath = path.join(sessionDir, REPORT_REPLAY_FILE);
-  const replayFile = await lstat(replayPath);
-  assertMaterializationBudget(replayPath, replayFile.size, maxMaterializedBytes);
-  const value = await readJsonFileLimited<unknown>(
-    replayPath,
-    Math.min(INLINE_REPORT_BYTES, maxMaterializedBytes ?? INLINE_REPORT_BYTES)
-  );
+  const value = await readJsonFileWithinBudget<unknown>(replayPath, INLINE_REPORT_BYTES, maxMaterializedBytes);
   if (!isReportReplay(value) || value.id !== id || value.reportBytes !== reportBytes) {
     throw new Error("Large report replay metadata is missing or invalid.");
   }
@@ -505,7 +539,7 @@ async function readLargeReplayCore(
     throw new Error("Large report replay metadata has an invalid report body.");
   }
 
-  const storedReport = await digestRegularFile(path.join(sessionDir, SESSION_REPORT_FILE));
+  const storedReport = await digestRegularFile(path.join(sessionDir, SESSION_REPORT_FILE), MAX_REPORT_BYTES);
   if (storedReport.bytes !== value.reportBytes || storedReport.digest !== value.reportDigest) {
     throw new Error("session.json changed after finalization.");
   }
@@ -702,6 +736,7 @@ function isRiskSummary(value: unknown): value is SessionReport["riskSummary"] {
     typeof value.maxSeverity === "string" &&
     ["none", "low", "medium", "high"].includes(value.maxSeverity) &&
     isNonNegativeInteger(value.possibleSecretCount) &&
+    (value.allowlistedSecretCount === undefined || isNonNegativeInteger(value.allowlistedSecretCount)) &&
     isRecord(value.severityCounts) &&
     isNonNegativeInteger(value.severityCounts.low) &&
     isNonNegativeInteger(value.severityCounts.medium) &&
@@ -825,8 +860,4 @@ function isOptionalString(value: unknown): value is string | undefined {
 
 function sanitizeSingleLine(value: string): string {
   return value.replace(/[\r\n\0]/g, " ").slice(0, 240);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

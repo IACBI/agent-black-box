@@ -8,9 +8,16 @@ import { appendCommandEvent, inspectSessionRecoveryState, registerInFlightComman
 import { removeFileIfExists } from "../utils/files.js";
 import { resolveWindowsExecutable } from "../utils/executables.js";
 import { isPathInside, toRepoRelative } from "../utils/paths.js";
+import { redactKnownSecretTokens } from "../risks/secretDetector.js";
+import {
+  compileSecretRules,
+  NO_SECRET_RULES,
+  redactCustomSecretPatterns,
+  type CompiledSecretRules,
+} from "../risks/secretRules.js";
 
 const SENSITIVE_PATTERN =
-  /(api[_-]?key|secret|token|password|passwd|private[_-]?key|client[_-]?secret|access[_-]?key|authorization|cookie)/i;
+  /(api[_-]?key|secret|token|password|passwd|passphrase|pwd|credential|private[_-]?key|client[_-]?secret|access[_-]?key|authorization|cookie)/i;
 const MAX_COMMAND_PART_LENGTH = 4096;
 const MAX_RECORDED_COMMAND_LENGTH = 32_768;
 
@@ -49,7 +56,8 @@ export async function recordAndRunCommand(
   const startedAtMonotonic = performance.now();
   const startedAtDate = new Date();
   const startedAt = startedAtDate.toISOString();
-  const redactedCommand = formatCommand(redactCommandParts(normalizedCommandParts));
+  const secretRules = compileSecretRules(config);
+  const redactedCommand = formatCommand(redactCommandParts(normalizedCommandParts, secretRules));
 
   const inFlightMarker = await registerInFlightCommand(active);
   let recorded = false;
@@ -62,9 +70,9 @@ export async function recordAndRunCommand(
       endedAt: endedAtDate.toISOString(),
       command: redactedCommand,
       cwd: toRepoRelative(repoRoot, runCwd) || ".",
-      ...optionalMetadata("label", options.label),
-      ...optionalMetadata("group", options.group),
-      ...optionalMetadata("phase", options.phase),
+      ...optionalMetadata("label", options.label, secretRules),
+      ...optionalMetadata("group", options.group, secretRules),
+      ...optionalMetadata("phase", options.phase, secretRules),
       exitCode: result.exitCode,
       durationMs: Math.round(performance.now() - startedAtMonotonic),
       ...(result.error ? { error: result.error } : {}),
@@ -143,15 +151,29 @@ export function normalizeCommandParts(parts: string[]): string[] {
   return parts[0] === "--" ? parts.slice(1) : parts;
 }
 
-export function redactCommandParts(parts: string[]): string[] {
+export function redactCommandParts(parts: string[], secretRules: CompiledSecretRules = NO_SECRET_RULES): string[] {
   const redacted: string[] = [];
+  const toolRule = findToolFlagRule(parts);
   let redactNext = false;
 
-  for (const part of parts) {
+  for (const [index, part] of parts.entries()) {
     if (redactNext) {
       redacted.push("<redacted>");
       redactNext = false;
       continue;
+    }
+
+    if (index > 0 && toolRule) {
+      if (toolRule.valueFollows.has(part)) {
+        redacted.push(part);
+        redactNext = true;
+        continue;
+      }
+      const attached = toolRule.attachedValue.exec(part);
+      if (attached) {
+        redacted.push(`${attached[1]}<redacted>`);
+        continue;
+      }
     }
 
     if (isSensitiveAssignment(part)) {
@@ -167,7 +189,7 @@ export function redactCommandParts(parts: string[]): string[] {
 
     const redactedUrl = redactUrlPart(part);
     if (redactedUrl !== part) {
-      redacted.push(redactedUrl);
+      redacted.push(scrubCommandPart(redactedUrl, secretRules));
       continue;
     }
 
@@ -189,10 +211,72 @@ export function redactCommandParts(parts: string[]): string[] {
       continue;
     }
 
-    redacted.push(truncateCommandPart(part));
+    redacted.push(scrubCommandPart(part, secretRules));
   }
 
   return redacted;
+}
+
+interface ToolFlagRule {
+  /** Flags whose next argument is a credential. */
+  valueFollows: ReadonlySet<string>;
+  /** Flags that carry the credential in the same argument; group 1 is the part to keep. */
+  attachedValue: RegExp;
+}
+
+const NO_ATTACHED_VALUE = /(?!)/;
+const MYSQL_FAMILY: ToolFlagRule = { valueFollows: new Set(), attachedValue: /^(-p)(?=.)/ };
+const TOOL_FLAG_RULES: Record<string, ToolFlagRule> = {
+  curl: {
+    valueFollows: new Set(["-u", "--user", "-U", "--proxy-user"]),
+    attachedValue: /^(--(?:proxy-)?user=|-[uU](?=.))/,
+  },
+  mysql: MYSQL_FAMILY,
+  mysqladmin: MYSQL_FAMILY,
+  mysqldump: MYSQL_FAMILY,
+  mariadb: MYSQL_FAMILY,
+  "redis-cli": { valueFollows: new Set(["-a"]), attachedValue: NO_ATTACHED_VALUE },
+  sshpass: { valueFollows: new Set(["-p"]), attachedValue: /^(-p)(?=.)/ },
+  docker: { valueFollows: new Set(["-p"]), attachedValue: NO_ATTACHED_VALUE },
+  podman: { valueFollows: new Set(["-p"]), attachedValue: NO_ATTACHED_VALUE },
+};
+
+/**
+ * Short credential flags (`curl -u`, `mysql -pSECRET`) cannot be recognised by name, so they are matched per
+ * tool. `docker -p` publishes a port everywhere except `login`, hence the subcommand check.
+ */
+function findToolFlagRule(parts: readonly string[]): ToolFlagRule | undefined {
+  const executable = path
+    .basename(parts[0] ?? "")
+    .toLowerCase()
+    .replace(/\.(?:exe|cmd|bat)$/, "");
+  const rule = Object.hasOwn(TOOL_FLAG_RULES, executable) ? TOOL_FLAG_RULES[executable] : undefined;
+  if ((executable === "docker" || executable === "podman") && !parts.includes("login")) {
+    return undefined;
+  }
+  return rule;
+}
+
+const EMBEDDED_SCRIPT_MARKER = /[\s;&|]/;
+const EMBEDDED_ASSIGNMENT = /(?<![A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_-]*)=("[^"]*"|'[^']*'|[^\s"';&|]+)/g;
+const EMBEDDED_HEADER = /(?<![A-Za-z0-9_-])([A-Za-z][A-Za-z0-9-]*)(\s*:\s*)([^"'\n;&|]+)/g;
+const EMBEDDED_FLAG = /(?<![A-Za-z0-9_-])(--[A-Za-z0-9_-]+)(=|\s+)("[^"]*"|'[^']*'|[^\s"';&|]+)/g;
+
+/**
+ * Last line of defence for one argument: credentials embedded in a script string (`sh -c "export TOKEN=x"`),
+ * provider token shapes with no name to give them away, and the repository's own patterns.
+ */
+function scrubCommandPart(part: string, secretRules: CompiledSecretRules): string {
+  let scrubbed = part.length > MAX_COMMAND_PART_LENGTH + 256 ? part.slice(0, MAX_COMMAND_PART_LENGTH + 256) : part;
+  if (EMBEDDED_SCRIPT_MARKER.test(scrubbed)) {
+    const hideSensitive = (match: string, key: string, separator: string): string =>
+      SENSITIVE_PATTERN.test(key) ? `${key}${separator}<redacted>` : match;
+    scrubbed = scrubbed
+      .replace(EMBEDDED_ASSIGNMENT, (match, key: string) => hideSensitive(match, key, "="))
+      .replace(EMBEDDED_HEADER, (match, key: string, separator: string) => hideSensitive(match, key, separator))
+      .replace(EMBEDDED_FLAG, (match, key: string, separator: string) => hideSensitive(match, key, separator));
+  }
+  return truncateCommandPart(redactCustomSecretPatterns(secretRules, redactKnownSecretTokens(scrubbed)));
 }
 
 export function formatCommand(parts: string[]): string {
@@ -204,7 +288,8 @@ export function formatCommand(parts: string[]): string {
 
 function optionalMetadata<K extends "label" | "group" | "phase">(
   key: K,
-  value: string | undefined
+  value: string | undefined,
+  secretRules: CompiledSecretRules
 ): Partial<Record<K, string>> {
   const normalized = value?.trim().replace(/\s+/g, " ");
   if (!normalized) {
@@ -214,16 +299,16 @@ function optionalMetadata<K extends "label" | "group" | "phase">(
     return { [key]: "<redacted>" } as Partial<Record<K, string>>;
   }
   for (const match of normalized.matchAll(/(?:^|\s)([A-Za-z_][A-Za-z0-9_-]*)\s*[:=]/g)) {
-    if (SENSITIVE_PATTERN.test(match[1])) {
+    if (SENSITIVE_PATTERN.test(match[1] ?? "")) {
       return { [key]: "<redacted>" } as Partial<Record<K, string>>;
     }
   }
-  const redacted = redactCommandParts(normalized.split(" ")).join(" ");
+  const redacted = redactCommandParts(normalized.split(" "), secretRules).join(" ");
   return { [key]: redacted.slice(0, 80) } as Partial<Record<K, string>>;
 }
 
 function spawnCommand(commandParts: string[], cwd: string): Promise<{ exitCode: number | null; error?: string }> {
-  const [command, ...args] = commandParts;
+  const [command = "", ...args] = commandParts;
   const executable = resolveExecutable(command, cwd);
   if (executable === null) {
     return Promise.resolve({ exitCode: null, error: formatSpawnError({ code: "ENOENT" } as NodeJS.ErrnoException) });
@@ -370,14 +455,15 @@ function redactNestedSensitiveAssignment(part: string): string | null {
 }
 
 function redactSensitiveUrl(part: string): string {
-  if (!/^https?:\/\//i.test(part)) {
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(part)) {
     return part;
   }
 
   try {
     const url = new URL(part);
     let changed = false;
-    if (url.username) {
+    // A bare username is only a credential for HTTP(S) (e.g. token@host); ssh://git@host is not secret.
+    if (url.username && /^https?:$/.test(url.protocol)) {
       url.username = "<redacted>";
       changed = true;
     }
@@ -409,7 +495,7 @@ function redactUrlPart(part: string): string {
 function redactSensitiveJson(part: string): string {
   const keyPattern = /"([^"\\]{1,128})"\s*:/g;
   for (const match of part.matchAll(keyPattern)) {
-    if (SENSITIVE_PATTERN.test(match[1])) {
+    if (SENSITIVE_PATTERN.test(match[1] ?? "")) {
       const separator = part.indexOf("=");
       const prefix = separator > 0 ? part.slice(0, separator + 1) : "";
       return /^--[A-Za-z0-9_-]+=$/.test(prefix) ? `${prefix}<redacted>` : "<redacted>";

@@ -1,13 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { access, link, mkdir, open, rename, rm } from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "./records.js";
 
 export async function pathExists(filePath: string): Promise<boolean> {
   try {
     await access(filePath);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    if (isRecord(error) && (error.code === "ENOENT" || error.code === "ENOTDIR")) {
+      return false;
+    }
+    throw error;
   }
 }
 
@@ -21,6 +25,10 @@ export async function readJsonFileLimited<T>(filePath: string, maxBytes: number)
 }
 
 export async function readTextFileLimited(filePath: string, maxBytes: number): Promise<string> {
+  return (await readFileLimited(filePath, maxBytes)).toString("utf8");
+}
+
+export async function readFileLimited(filePath: string, maxBytes: number): Promise<Buffer> {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
     throw new Error("File size limit must be a non-negative safe integer.");
   }
@@ -43,7 +51,7 @@ export async function readTextFileLimited(filePath: string, maxBytes: number): P
       const buffer = Buffer.alloc(Math.min(64 * 1024, maxBytes - totalBytes + 1));
       const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
       if (bytesRead === 0) {
-        return Buffer.concat(chunks, totalBytes).toString("utf8");
+        return Buffer.concat(chunks, totalBytes);
       }
       totalBytes += bytesRead;
       if (totalBytes > maxBytes) {

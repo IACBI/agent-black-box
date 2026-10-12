@@ -24,6 +24,15 @@ describe("terminal presentation", () => {
     );
   });
 
+  it("escapes bidirectional marks and overrides that could disguise a path", () => {
+    const spoofed = "src/\u202egnp.exe\u2066x\u2069\u200e\u200f\u061c";
+    const formatted = formatTerminalValue(spoofed);
+    expect(formatted).toBe('"src/\\u202egnp.exe\\u2066x\\u2069\\u200e\\u200f\\u061c"');
+    expect(JSON.parse(formatted)).toBe(spoofed);
+    expect(escapeTerminalControls(spoofed)).toBe("src/\\u202egnp.exe\\u2066x\\u2069\\u200e\\u200f\\u061c");
+    expect(formatTerminalValue("日本語/zero\u200dwidth-joiner.ts")).toBe("日本語/zero\u200dwidth-joiner.ts");
+  });
+
   it("preserves ordinary command previews and escapes control-bearing arguments visibly", () => {
     expect(renderPosixCommand("git diff --", ["src/index.ts", "src/a'b.ts"])).toBe(
       "git diff -- 'src/index.ts' 'src/a'\\''b.ts'"

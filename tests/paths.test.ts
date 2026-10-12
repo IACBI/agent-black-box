@@ -4,14 +4,33 @@ import {
   isPathExcluded,
   isPathInside,
   normalizePath,
+  normalizeRepoPath,
   pathMatchesPattern,
   resolveRepoPath,
   shellQuotePath,
+  toRepoRelative,
 } from "../src/utils/paths.js";
 
 describe("path utilities", () => {
   it("normalizes Windows-style paths", () => {
     expect(normalizePath(".\\src\\cli.ts")).toBe("src/cli.ts");
+  });
+
+  it("treats a backslash as a separator for repository paths only where the platform does", () => {
+    expect(normalizeRepoPath(".\\src\\cli.ts", true)).toBe("src/cli.ts");
+    expect(normalizeRepoPath("a\\b", false)).toBe("a\\b");
+    expect(normalizeRepoPath("./src//cli.ts", false)).toBe("src/cli.ts");
+    expect(normalizeRepoPath("src/cli.ts", false)).toBe("src/cli.ts");
+    expect(normalizeRepoPath("a\\b")).toBe(path.sep === "\\" ? "a/b" : "a\\b");
+  });
+
+  it("makes relative repository paths that contain a backslash distinct from nested paths on POSIX", () => {
+    if (path.sep === "\\") {
+      expect(toRepoRelative("C:\\repo", "C:\\repo\\a\\b")).toBe("a/b");
+    } else {
+      expect(toRepoRelative("/repo", "/repo/a\\b")).toBe("a\\b");
+      expect(toRepoRelative("/repo", "/repo/a/b")).toBe("a/b");
+    }
   });
 
   it("detects ignored paths by segment and prefix", () => {

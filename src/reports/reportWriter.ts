@@ -62,6 +62,19 @@ export async function writeReports(report: SessionReport): Promise<void> {
     }
   }
 
+  // Render every payload before starting writes; a rendering failure must not leave publications running.
+  const publications: Array<readonly [string, string]> = [
+    [path.join(report.sessionDir, "session.json"), reportText],
+    ...(replayText ? [[replayPath, replayText] as const] : []),
+    ...(searchable ? [[searchPath, searchText] as const] : []),
+    [path.join(report.sessionDir, "summary.md"), generateSummaryMarkdown(report)],
+    [path.join(report.sessionDir, "commands.md"), generateCommandsMarkdown(report)],
+    [path.join(report.sessionDir, "timeline.md"), generateTimelineMarkdown(report)],
+    [path.join(report.sessionDir, "diff-summary.md"), generateDiffSummaryMarkdown(report)],
+    [path.join(report.sessionDir, "risks.md"), generateRisksMarkdown(report)],
+    [path.join(report.sessionDir, "rollback.md"), generateRollbackMarkdown(report)],
+  ];
+
   await ensureDir(report.sessionDir);
   await removeFileIfExists(path.join(report.sessionDir, SESSION_METADATA_FILE));
   if (!replayText) {
@@ -70,16 +83,13 @@ export async function writeReports(report: SessionReport): Promise<void> {
   if (!searchable) {
     await removeFileIfExists(searchPath);
   }
-  await Promise.all([
-    writeTextFileAtomic(path.join(report.sessionDir, "session.json"), reportText),
-    ...(replayText ? [writeTextFileAtomic(replayPath, replayText)] : []),
-    ...(searchable ? [writeTextFileAtomic(searchPath, searchText)] : []),
-    writeTextFileAtomic(path.join(report.sessionDir, "summary.md"), generateSummaryMarkdown(report)),
-    writeTextFileAtomic(path.join(report.sessionDir, "commands.md"), generateCommandsMarkdown(report)),
-    writeTextFileAtomic(path.join(report.sessionDir, "timeline.md"), generateTimelineMarkdown(report)),
-    writeTextFileAtomic(path.join(report.sessionDir, "diff-summary.md"), generateDiffSummaryMarkdown(report)),
-    writeTextFileAtomic(path.join(report.sessionDir, "risks.md"), generateRisksMarkdown(report)),
-    writeTextFileAtomic(path.join(report.sessionDir, "rollback.md"), generateRollbackMarkdown(report)),
-  ]);
+  // Finish sibling writes before rejecting so a recovery retry cannot race their publication.
+  const writes = await Promise.allSettled(
+    publications.map(([filePath, contents]) => writeTextFileAtomic(filePath, contents))
+  );
+  const failure = writes.find((result) => result.status === "rejected");
+  if (failure) {
+    throw failure.reason;
+  }
   await writeJsonFile(path.join(report.sessionDir, SESSION_METADATA_FILE), buildSessionMetadata(report));
 }

@@ -1,55 +1,34 @@
+// eslint-disable-next-line no-control-regex -- Repository text must not inject terminal control characters into reports.
+const UNSAFE_CONTROL_PATTERN = /[\u0000-\u001F\u007F]/g;
+// Bidirectional marks and overrides can make a path read differently from what it is, so they are shown literally.
+const BIDI_CONTROL_PATTERN = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
+const MARKDOWN_TEXT_SPECIALS = /[\\`*_{}[\]()#+!|&<>]/g;
+const MARKDOWN_TABLE_SPECIALS = /[\\`|[\]&<>]/g;
+const TABLE_HTML_SPECIALS = /[&<>|`]/g;
+
+const MARKDOWN_TEXT_REPLACEMENTS: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;" };
+const TABLE_HTML_REPLACEMENTS: Record<string, string> = {
+  "&": "&amp;",
+  "<": "&lt;",
+  ">": "&gt;",
+  "|": "&#124;",
+  "`": "&#96;",
+};
+
+function replaceMarkdownSpecial(character: string): string {
+  return MARKDOWN_TEXT_REPLACEMENTS[character] ?? `\\${character}`;
+}
+
 export function normalizeMarkdownText(value: string): string {
-  let result = "";
+  return value.replace(UNSAFE_CONTROL_PATTERN, " ").replace(BIDI_CONTROL_PATTERN, showControlEscape);
+}
 
-  for (const character of value) {
-    if (character === "\r" || character === "\n" || character === "\t" || isUnsafeControl(character)) {
-      result += " ";
-      continue;
-    }
-
-    result += character;
-  }
-
-  return result;
+function showControlEscape(character: string): string {
+  return `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`;
 }
 
 export function escapeMarkdownText(value: string): string {
-  let result = "";
-
-  for (const character of normalizeMarkdownText(value)) {
-    switch (character) {
-      case "\\":
-      case "`":
-      case "*":
-      case "_":
-      case "{":
-      case "}":
-      case "[":
-      case "]":
-      case "(":
-      case ")":
-      case "#":
-      case "+":
-      case "!":
-      case "|":
-        result += `\\${character}`;
-        break;
-      case "&":
-        result += "&amp;";
-        break;
-      case "<":
-        result += "&lt;";
-        break;
-      case ">":
-        result += "&gt;";
-        break;
-      default:
-        result += character;
-        break;
-    }
-  }
-
-  return result;
+  return normalizeMarkdownText(value).replace(MARKDOWN_TEXT_SPECIALS, replaceMarkdownSpecial);
 }
 
 export function markdownInlineCode(value: string): string {
@@ -73,73 +52,29 @@ export function markdownTableCode(value: string): string {
 }
 
 export function markdownCodeBlock(value: string, language = ""): string {
-  // eslint-disable-next-line no-control-regex -- Repository text must not inject terminal control characters into reports.
-  const normalized = value.replace(/\r\n?/g, "\n").replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, " ");
+  const normalized = value
+    .replace(/\r\n?/g, "\n")
+    // eslint-disable-next-line no-control-regex -- Repository text must not inject terminal control characters into reports.
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, " ")
+    .replace(BIDI_CONTROL_PATTERN, showControlEscape);
   const fence = "`".repeat(Math.max(3, longestBacktickRun(normalized) + 1));
 
   return `${fence}${language}\n${normalized}\n${fence}`;
 }
 
 export function escapeMarkdownTableCell(value: string): string {
-  let result = "";
-
-  for (const character of normalizeMarkdownText(value)) {
-    switch (character) {
-      case "\\":
-      case "`":
-      case "|":
-      case "[":
-      case "]":
-        result += `\\${character}`;
-        break;
-      case "&":
-        result += "&amp;";
-        break;
-      case "<":
-        result += "&lt;";
-        break;
-      case ">":
-        result += "&gt;";
-        break;
-      default:
-        result += character;
-        break;
-    }
-  }
-
-  return result;
+  return normalizeMarkdownText(value).replace(MARKDOWN_TABLE_SPECIALS, replaceMarkdownSpecial);
 }
 
 function escapeHtmlForTable(value: string): string {
-  let result = "";
-
-  for (const character of value) {
-    switch (character) {
-      case "&":
-        result += "&amp;";
-        break;
-      case "<":
-        result += "&lt;";
-        break;
-      case ">":
-        result += "&gt;";
-        break;
-      case "|":
-        result += "&#124;";
-        break;
-      case "`":
-        result += "&#96;";
-        break;
-      default:
-        result += character;
-        break;
-    }
-  }
-
-  return result;
+  return value.replace(TABLE_HTML_SPECIALS, (character) => TABLE_HTML_REPLACEMENTS[character] ?? character);
 }
 
 function longestBacktickRun(value: string): number {
+  if (!value.includes("`")) {
+    return 0;
+  }
+
   let longest = 0;
   let current = 0;
 
@@ -153,9 +88,4 @@ function longestBacktickRun(value: string): number {
   }
 
   return longest;
-}
-
-function isUnsafeControl(character: string): boolean {
-  const codePoint = character.codePointAt(0);
-  return codePoint !== undefined && (codePoint < 32 || codePoint === 127);
 }

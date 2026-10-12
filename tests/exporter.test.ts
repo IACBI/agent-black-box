@@ -47,10 +47,69 @@ describe("session exporter", () => {
     expect(JSON.parse(json)).toMatchObject({ id: "session-export" });
   });
 
+  it("renders a SARIF log without disturbing the markdown and JSON formats", () => {
+    const sarif = renderSessionExport(report, { format: "sarif" });
+    const log = JSON.parse(sarif) as { version: string; runs: Array<{ results: Array<{ ruleId: string }> }> };
+
+    expect(sarif.endsWith("}\n")).toBe(true);
+    expect(sarif).toBe(`${JSON.stringify(log, null, 2)}\n`);
+    expect(log.version).toBe("2.1.0");
+    expect(log.runs[0]?.results.map((result) => result.ruleId)).toEqual(["session-risk:Environment file"]);
+
+    const json = JSON.parse(renderSessionExport(report, { format: "json" })) as Record<string, unknown>;
+    expect(json).not.toHaveProperty("runs");
+    expect(renderSessionExport(report, { format: "markdown" })).not.toContain('"runs"');
+  });
+
+  it("applies the risk filter to SARIF risks but never to possible secrets", () => {
+    const mixed = buildSessionReport(
+      { id: "session-sarif", repoRoot: "/repo", sessionDir: "/repo/s", startedAt: "2026-01-01T00:00:00.000Z" },
+      "2026-01-01T00:01:00.000Z",
+      "test",
+      [],
+      [],
+      { repoRoot: "/repo", statusText: "", diffSummaryText: "", changedFiles: [] },
+      [
+        {
+          path: ".env",
+          category: "Environment file",
+          severity: "high",
+          score: 90,
+          reason: "Environment file changed.",
+        },
+        {
+          path: "package.json",
+          category: "Package manager file",
+          severity: "low",
+          score: 20,
+          reason: "Manifest changed.",
+        },
+      ],
+      [{ path: "src/key.ts", line: 9, reason: "Possible token detected.", redacted: "ghp_SHOULDNEVERAPPEAR" }]
+    );
+
+    const filtered = renderSessionExport(mixed, { format: "sarif", riskFilter: { minSeverity: "high" } });
+    const log = JSON.parse(filtered) as { runs: Array<{ results: Array<{ ruleId: string }> }> };
+
+    expect(log.runs[0]?.results.map((result) => result.ruleId).sort()).toEqual([
+      "possible-secret",
+      "session-risk:Environment file",
+    ]);
+    expect(filtered).not.toContain("SHOULDNEVERAPPEAR");
+
+    const byCategory = JSON.parse(
+      renderSessionExport(mixed, { format: "sarif", riskFilter: { category: "no such category" } })
+    ) as { runs: Array<{ results: Array<{ ruleId: string }> }> };
+    expect(byCategory.runs[0]?.results.map((result) => result.ruleId)).toEqual(["possible-secret"]);
+    expect(mixed.risks).toHaveLength(2);
+  });
+
   it("parses supported options and rejects unsupported values", () => {
     expect(parseExportFormat("json")).toBe("json");
+    expect(parseExportFormat("markdown")).toBe("markdown");
+    expect(parseExportFormat("sarif")).toBe("sarif");
     expect(parseRiskSeverity("medium")).toBe("medium");
-    expect(() => parseExportFormat("zip")).toThrow("Export format");
+    expect(() => parseExportFormat("zip")).toThrow("`markdown`, `json` or `sarif`");
     expect(() => parseRiskSeverity("critical")).toThrow("--min-severity");
   });
 

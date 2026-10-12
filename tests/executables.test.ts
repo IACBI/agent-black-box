@@ -48,6 +48,23 @@ describe("Windows executable resolution", () => {
     }
   });
 
+  it("expands PATHEXT for dotted names whose suffix is not an executable extension", async () => {
+    const dir = await createTempDir();
+    try {
+      await writeFile(path.join(dir, "python3.12.exe"), "");
+      await writeFile(path.join(dir, "release.v2"), "");
+      await writeFile(path.join(dir, "tool.v1.exe"), "");
+      await writeFile(path.join(dir, "tool.v1"), "");
+
+      expect(resolveWindowsExecutable("python3.12", dir, { PATH: dir })).toBe(path.join(dir, "python3.12.exe"));
+      expect(resolveWindowsExecutable("tool.v1", dir, { PATH: dir })).toBe(path.join(dir, "tool.v1.exe"));
+      expect(resolveWindowsExecutable("release.v2", dir, { PATH: dir })).toBe(path.join(dir, "release.v2"));
+      expect(resolveWindowsExecutable("python3.11", dir, { PATH: dir })).toBeNull();
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
   it("skips directories that share an executable's name", async () => {
     const dir = await createTempDir();
     try {

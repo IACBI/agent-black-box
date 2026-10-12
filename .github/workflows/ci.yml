@@ -43,6 +43,13 @@ jobs:
       - name: Build
         run: pnpm build
 
+      - name: Smoke-test the built CLI
+        shell: bash
+        run: |
+          set -e
+          node dist/cli.js --version
+          node dist/cli.js --help
+
       - name: Test
         run: pnpm test
 
