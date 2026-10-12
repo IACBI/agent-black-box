@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { access, link, mkdir, open, rename, rm } from "node:fs/promises";
+import { access, link, mkdir, open, rename, rm, type FileHandle } from "node:fs/promises";
+import { platform } from "node:os";
 import path from "node:path";
 import { isRecord } from "./records.js";
 
@@ -111,6 +112,13 @@ export async function writeTextFileAtomic(
       failures.push(error);
     }
   }
+  if (failures.length === 0) {
+    try {
+      await syncDirectory(directory);
+    } catch (error) {
+      failures.push(error);
+    }
+  }
   if (failures.length === 1) {
     throw failures[0];
   }
@@ -121,6 +129,39 @@ export async function writeTextFileAtomic(
 
 export async function removeFileIfExists(filePath: string): Promise<void> {
   await rm(filePath, { force: true });
+}
+
+/** Node cannot flush Windows directory entries; file contents are still synced before publication. */
+export async function syncDirectory(directory: string): Promise<void> {
+  if (platform() === "win32") return;
+  await syncAndClose(await open(directory, "r"));
+}
+
+/** Flush accepted evidence before publishing its completion metadata. */
+export async function syncRegularFile(filePath: string): Promise<void> {
+  const handle = await open(filePath, "r+");
+  await syncAndClose(handle, true);
+}
+
+async function syncAndClose(handle: FileHandle, requireRegularFile = false): Promise<void> {
+  const failures: unknown[] = [];
+  try {
+    if (requireRegularFile && !(await handle.stat()).isFile()) {
+      throw new Error("Cannot synchronize evidence that is not a regular file.");
+    }
+    await handle.sync();
+  } catch (error) {
+    failures.push(error);
+  }
+  try {
+    await handle.close();
+  } catch (error) {
+    failures.push(error);
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) {
+    throw new AggregateError(failures, "Filesystem synchronization and descriptor close both failed.");
+  }
 }
 
 function formatByteLimit(maxBytes: number): string {

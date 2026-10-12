@@ -90,7 +90,8 @@ export async function writeSessionExport(
 
     if (!options.force && isHardLinkPublicationError(error)) {
       throw new Error(
-        `Atomic export publication requires hard-link support and permission on the destination filesystem: ${resolvedPath}.`,
+        `Atomic export publication requires hard-link support and permission on the destination filesystem: ${resolvedPath}. ` +
+          "Choose a supported destination, omit --output to use stdout, or use --force for atomic replacement only if replacing any existing destination is intended.",
         { cause: error }
       );
     }

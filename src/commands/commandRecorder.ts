@@ -154,11 +154,12 @@ export function normalizeCommandParts(parts: string[]): string[] {
 export function redactCommandParts(parts: string[], secretRules: CompiledSecretRules = NO_SECRET_RULES): string[] {
   const redacted: string[] = [];
   const commandIndex = findWrappedCommandIndex(parts);
-  if (commandIndex === null) {
-    // Ambiguous env syntax can hide credentials in split strings or change argument boundaries.
+  const toolFlags = commandIndex === null ? null : findToolFlagRule(parts, commandIndex);
+  if (commandIndex === null || toolFlags === null) {
+    // Unknown wrapper/global options can change command or credential argument boundaries.
     return parts.map((part, index) => (index === 0 ? scrubCommandPart(part, secretRules) : "<redacted>"));
   }
-  const toolRule = findToolFlagRule(parts, commandIndex);
+  const toolRule = toolFlags?.rule;
   let redactNext = false;
 
   for (const [index, part] of parts.entries()) {
@@ -173,7 +174,7 @@ export function redactCommandParts(parts: string[], secretRules: CompiledSecretR
       continue;
     }
 
-    if (index > commandIndex && toolRule) {
+    if (toolFlags && index > toolFlags.commandIndex && toolRule) {
       if (toolRule.valueFollows.has(part)) {
         redacted.push(part);
         redactNext = true;
@@ -234,7 +235,6 @@ interface ToolFlagRule {
   attachedValue: RegExp;
 }
 
-const NO_ATTACHED_VALUE = /(?!)/;
 const MYSQL_FAMILY: ToolFlagRule = { valueFollows: new Set(), attachedValue: /^(-p)(?=.)/ };
 const TOOL_FLAG_RULES: Record<string, ToolFlagRule> = {
   curl: {
@@ -247,25 +247,190 @@ const TOOL_FLAG_RULES: Record<string, ToolFlagRule> = {
   mariadb: MYSQL_FAMILY,
   "redis-cli": { valueFollows: new Set(["-a", "--pass"]), attachedValue: /^(--pass=)/ },
   sshpass: { valueFollows: new Set(["-p"]), attachedValue: /^(-p)(?=.)/ },
-  docker: { valueFollows: new Set(["-p"]), attachedValue: NO_ATTACHED_VALUE },
-  podman: { valueFollows: new Set(["-p"]), attachedValue: NO_ATTACHED_VALUE },
+  docker: { valueFollows: new Set(["-p"]), attachedValue: /^(-p=?)(?=.)/ },
+  podman: { valueFollows: new Set(["-p"]), attachedValue: /^(-p=?)(?=.)/ },
 };
 
 /**
  * Short credential flags (`curl -u`, `mysql -pSECRET`) cannot be recognised by name, so they are matched per
  * tool. `docker -p` publishes a port everywhere except `login`, hence the subcommand check.
  */
-function findToolFlagRule(parts: readonly string[], commandIndex: number): ToolFlagRule | undefined {
+function findToolFlagRule(
+  parts: readonly string[],
+  commandIndex: number
+): { rule: ToolFlagRule; commandIndex: number } | null | undefined {
   const executable = executableName(parts[commandIndex] ?? "");
   const rule = Object.hasOwn(TOOL_FLAG_RULES, executable) ? TOOL_FLAG_RULES[executable] : undefined;
-  if ((executable === "docker" || executable === "podman") && !parts.slice(commandIndex + 1).includes("login")) {
-    return undefined;
+  if (executable === "docker" || executable === "podman") {
+    const subcommandIndex = findOptionOperandIndex(parts, commandIndex + 1, CONTAINER_GLOBAL_OPTIONS[executable]!);
+    if (subcommandIndex === null) return null;
+    if (parts[subcommandIndex] !== "login") return undefined;
+    commandIndex = subcommandIndex;
   }
-  return rule;
+  return rule ? { rule, commandIndex } : undefined;
 }
 
 const MAX_WRAPPER_ARGUMENTS = 128;
-const MAX_ENV_WRAPPERS = 8;
+const MAX_COMMAND_WRAPPERS = 8;
+
+interface CommandPrefixOptions {
+  flags: ReadonlySet<string>;
+  valueFlags: ReadonlySet<string>;
+  optionalValueFlags?: ReadonlySet<string>;
+  booleanValues?: boolean;
+}
+
+const WRAPPER_OPTIONS: Record<string, CommandPrefixOptions> = {
+  sudo: {
+    flags: new Set([
+      "A",
+      "b",
+      "E",
+      "H",
+      "K",
+      "k",
+      "n",
+      "P",
+      "S",
+      "--askpass",
+      "--background",
+      "--preserve-env",
+      "--set-home",
+      "--reset-timestamp",
+      "--remove-timestamp",
+      "--non-interactive",
+      "--preserve-groups",
+      "--stdin",
+    ]),
+    valueFlags: new Set([
+      "u",
+      "g",
+      "h",
+      "p",
+      "C",
+      "D",
+      "R",
+      "T",
+      "r",
+      "t",
+      "--user",
+      "--group",
+      "--host",
+      "--prompt",
+      "--close-from",
+      "--chdir",
+      "--chroot",
+      "--command-timeout",
+      "--role",
+      "--type",
+    ]),
+    optionalValueFlags: new Set(["--preserve-env"]),
+  },
+  nohup: { flags: new Set(), valueFlags: new Set() },
+  nice: { flags: new Set(), valueFlags: new Set(["n", "--adjustment"]) },
+  timeout: {
+    flags: new Set(["f", "p", "v", "--foreground", "--preserve-status", "--verbose"]),
+    valueFlags: new Set(["k", "s", "--kill-after", "--signal"]),
+  },
+};
+
+const CONTAINER_GLOBAL_OPTIONS: Record<string, CommandPrefixOptions> = {
+  docker: {
+    flags: new Set(["D", "--debug", "--tls", "--tlsverify"]),
+    valueFlags: new Set([
+      "c",
+      "H",
+      "l",
+      "--config",
+      "--context",
+      "--host",
+      "--log-level",
+      "--tlscacert",
+      "--tlscert",
+      "--tlskey",
+    ]),
+    booleanValues: true,
+  },
+  podman: {
+    flags: new Set(["r", "--remote", "--syslog", "--transient-store"]),
+    valueFlags: new Set([
+      "c",
+      "--cdi-spec-dir",
+      "--cgroup-manager",
+      "--config",
+      "--conmon",
+      "--connection",
+      "--events-backend",
+      "--hooks-dir",
+      "--identity",
+      "--imagestore",
+      "--log-level",
+      "--module",
+      "--network-config-dir",
+      "--out",
+      "--root",
+      "--runroot",
+      "--runtime",
+      "--runtime-flag",
+      "--ssh",
+      "--storage-driver",
+      "--storage-opt",
+      "--tls-ca",
+      "--tls-cert",
+      "--tls-details",
+      "--tls-key",
+      "--tmpdir",
+      "--url",
+      "--volumepath",
+    ]),
+    booleanValues: true,
+  },
+};
+
+/** Parse only explicit, bounded argv. Unknown options and shell modes stay opaque. */
+function findOptionOperandIndex(parts: readonly string[], start: number, options: CommandPrefixOptions): number | null {
+  let index = start;
+  while (index < parts.length) {
+    if (!isBoundedWrapperOperand(parts, index)) return null;
+    const part = parts[index]!;
+    if (part === "--") return index + 1;
+    if (!part.startsWith("-")) return index;
+    if (part.startsWith("--")) {
+      const separator = part.indexOf("=");
+      const flag = separator < 0 ? part : part.slice(0, separator);
+      if (options.flags.has(flag)) {
+        if (
+          separator >= 0 &&
+          !options.optionalValueFlags?.has(flag) &&
+          !(options.booleanValues && /^(?:true|false|0|1)$/.test(part.slice(separator + 1)))
+        )
+          return null;
+        index += 1;
+        continue;
+      }
+      if (!options.valueFlags.has(flag)) return null;
+      if (separator >= 0) {
+        index += 1;
+        continue;
+      }
+      if (!isBoundedWrapperOperand(parts, index + 1)) return null;
+      index += 2;
+      continue;
+    }
+    if (part === "-") return null;
+    let consumesNext = false;
+    for (let offset = 1; offset < part.length; offset += 1) {
+      const flag = part[offset]!;
+      if (options.flags.has(flag)) continue;
+      if (!options.valueFlags.has(flag)) return null;
+      consumesNext = offset === part.length - 1;
+      break;
+    }
+    if (consumesNext && !isBoundedWrapperOperand(parts, index + 1)) return null;
+    index += consumesNext ? 2 : 1;
+  }
+  return index;
+}
 
 function executableName(command: string): string {
   return path
@@ -274,18 +439,37 @@ function executableName(command: string): string {
     .replace(/\.(?:exe|cmd|bat)$/, "");
 }
 
-/** Resolve explicit env argv only; -S strings and unknown options are intentionally opaque. */
+/** Resolve explicit wrapper argv only; split strings and shell modes are intentionally opaque. */
 function findWrappedCommandIndex(parts: readonly string[]): number | null {
   let commandIndex = 0;
   let wrappers = 0;
-  while (executableName(parts[commandIndex] ?? "") === "env") {
+  while (true) {
+    const executable = executableName(parts[commandIndex] ?? "");
+    const options = Object.hasOwn(WRAPPER_OPTIONS, executable) ? WRAPPER_OPTIONS[executable] : undefined;
+    if (executable !== "env" && !options) return commandIndex;
     wrappers += 1;
-    if (wrappers > MAX_ENV_WRAPPERS) return null;
-    const childIndex = findEnvCommandIndex(parts, commandIndex + 1);
+    if (wrappers > MAX_COMMAND_WRAPPERS) return null;
+    let childIndex =
+      executable === "env"
+        ? findEnvCommandIndex(parts, commandIndex + 1)
+        : findOptionOperandIndex(parts, commandIndex + 1, options!);
     if (childIndex === null) return null;
+    if (executable === "sudo") {
+      while (parts[childIndex]?.includes("=")) {
+        if (!isBoundedWrapperOperand(parts, childIndex)) return null;
+        childIndex += 1;
+      }
+    } else if (executable === "timeout") {
+      if (
+        !isBoundedWrapperOperand(parts, childIndex) ||
+        !/^(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?[smhd]?$/.test(parts[childIndex]!)
+      )
+        return null;
+      childIndex += 1;
+    }
+    if (childIndex < parts.length && !isBoundedWrapperOperand(parts, childIndex)) return null;
     commandIndex = childIndex;
   }
-  return commandIndex;
 }
 
 function findEnvCommandIndex(parts: readonly string[], start: number): number | null {
