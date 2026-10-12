@@ -100,6 +100,12 @@ The added wrapper/container regressions initially failed 25 cases; the assignmen
 
 Evidence is under `.cache/audit-followup/`, notably `final-hardening-check-complete.log`, `final-hardening-perf-confirmed.log`, `final-hardening-package-confirmed.log`, and `final-hardening-dependencies.log`. Fresh hosted Windows/Linux/macOS Node.js 22/24 CI and CodeQL must pass before merging this update into protected `main`. Dependencies, coverage thresholds, configuration defaults, CLI contracts, and report formats remain unchanged.
 
+### Post-merge CI follow-up
+
+PR #75 passed the complete hosted matrix and CodeQL before merge. The subsequent main run (`38316511316`) passed every substantive job except Linux Node.js 22: the batching regression had already completed its batch call, then one of 150 redundant single-line reference calls reached the unchanged 500 ms worker deadline. This is consistent with test-process contention; the log does not establish excessive regex CPU work.
+
+The regression now uses independent expected findings for all 150 rows across both batch limits and checks both representative single-line outcomes separately. It preserves the row count, pattern-order assertions, byte/line-boundary coverage, failure guards, test count, and production resource limits while removing 148 unnecessary worker round trips. The 33-test rule file passed locally under Node.js 22.23.3 and 24.12.0; lint and source/test type checks also passed. Fresh full hosted CI remains required before merging this test-only follow-up.
+
 ## Decisions and remaining limits
 
 - The previously blocked advisory and CodeQL checks are now verified; no dependency update was justified.

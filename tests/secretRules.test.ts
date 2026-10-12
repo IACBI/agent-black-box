@@ -162,7 +162,7 @@ describe("compiled secret rules", () => {
     expect(matchCustomSecretPatterns(rules, `corp_abcdef012345${padding}`)).toEqual(["Internal token"]);
   });
 
-  it("matches independent lines across both message limits in the same order as single-line scans", () => {
+  it("matches independent lines across both message limits while preserving pattern order", () => {
     const rules = compileSecretRules({
       secretPatterns: [
         { name: "Internal token", pattern: "corp_[a-z0-9]{12}" },
@@ -172,9 +172,11 @@ describe("compiled secret rules", () => {
     const lines = Array.from({ length: 150 }, (_, index) =>
       index % 3 === 0 ? "corp_abcdef012345 LEGACY-ABCDEF" : "x".repeat(MAX_CUSTOM_PATTERN_LINE_LENGTH)
     );
-    expect(matchCustomSecretPatternsInLines(rules, lines)).toEqual(
-      lines.map((line) => matchCustomSecretPatterns(rules, line))
-    );
+    const expected = lines.map((_line, index) => (index % 3 === 0 ? ["Internal token", "Legacy token"] : []));
+    expect(matchCustomSecretPatternsInLines(rules, lines)).toEqual(expected);
+    // Check both single-line outcomes without 150 redundant worker round trips under suite contention.
+    expect(matchCustomSecretPatterns(rules, lines[0]!)).toEqual(expected[0]);
+    expect(matchCustomSecretPatterns(rules, lines[1]!)).toEqual(expected[1]);
     expect(matchCustomSecretPatternsInLines(NO_SECRET_RULES, lines)).toEqual(lines.map(() => []));
     expect(matchCustomSecretPatternsInLines(rules, [])).toEqual([]);
     expect(describeCustomSecretPatternLimit(rules, ["x".repeat(4096)])).toBeUndefined();
