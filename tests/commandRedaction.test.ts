@@ -208,6 +208,87 @@ describe("explicit env command wrappers", () => {
   });
 });
 
+describe("bounded command wrapper chains", () => {
+  it.each([
+    [["sudo", "-n", "-u", "curl", "curl", "-u", secret]],
+    [["sudo", "--user=root", "--group", "staff", "MODE=safe", "curl", "--pass", secret]],
+    [["sudo", "-Euuser", "--", "curl", `-u${secret}`]],
+    [["sudo", "--preserve-env=MODE", "--non-interactive", "--chdir=workspace", "curl", "--pass", secret]],
+    [["nohup", "curl", "-u", secret]],
+    [["nice", "-n", "-5", "curl", "--pass", secret]],
+    [["nice", "--adjustment=5", "curl", "-u", secret]],
+    [["timeout", "-vk2s", "--signal", "TERM", "10s", "curl", "--pass", secret]],
+    [["timeout", "--foreground", "--preserve-status", "--kill-after=2", "--", "1.5m", "curl", `-u${secret}`]],
+    [["env", "MODE=safe", "sudo", "-n", "nohup", "nice", "-n5", "timeout", "10", "curl", "-u", secret]],
+  ])("redacts child credentials through %j without changing execution argv", (parts) => {
+    const original = [...parts];
+    const redacted = redactCommandParts(parts);
+    expect(parts).toEqual(original);
+    expect(redacted.join(" ")).not.toContain(secret);
+    expect(redacted.at(-1)).toContain("<redacted>");
+    expect(redacted.slice(0, -1)).toEqual(parts.slice(0, -1));
+  });
+
+  it.each([
+    [["sudo", "-u", "curl", "echo", "-u", "ordinary"]],
+    [["nohup", "--", "echo", "curl", "-u", "ordinary"]],
+    [["nice", "-n", "5", "echo", "-u", "ordinary"]],
+    [["timeout", "-s", "curl", "1", "echo", "-u", "ordinary"]],
+  ])("preserves wrapper operands and ordinary child arguments in %j", (parts) => {
+    expect(redactCommandParts(parts)).toEqual(parts);
+  });
+
+  it.each([
+    [["sudo", "-s", "curl", "-u", secret]],
+    [["sudo", "--login", `curl -u ${secret}`]],
+    [["sudo", "--unknown", "curl", "-u", secret]],
+    [["sudo", "-u"]],
+    [["nice", "--unknown", "curl", "-u", secret]],
+    [["timeout", "--kill-after"]],
+    [["timeout", "not-a-duration", "curl", "-u", secret]],
+    [["sudo", "--background=unexpected", "curl", "-u", secret]],
+    [["nohup", "curl".repeat(2000), "-u", secret]],
+    [["nohup", "--unknown", "curl", "-u", secret]],
+    [[...Array<string>(9).fill("nohup"), "curl", "-u", secret]],
+  ])("hides ambiguous wrapper syntax in %j", (parts) => {
+    expect(redactCommandParts(parts)).toEqual(parts.map((part, index) => (index === 0 ? part : "<redacted>")));
+  });
+});
+
+describe("container login command boundaries", () => {
+  it.each([
+    [["docker", "--config", "login", "run", "-p", "8080:80", "login"]],
+    [["docker", "-D", "--context=login", "run", "-p8080:80", "login"]],
+    [["podman", "--connection", "login", "run", "-p", "8080:80", "login"]],
+    [["env", "docker", "run", "-p", "8080:80", "login"]],
+  ])("preserves port flags when login is an operand in %j", (parts) => {
+    expect(redactCommandParts(parts)).toEqual(parts);
+  });
+
+  it.each([
+    [["docker", "-H", "tcp://host:2375", "--config=login", "login", `-p${secret}`]],
+    [["docker", "-D", "--tls=false", "--context", "login", "login", `-p=${secret}`]],
+    [["podman", "-r", "--connection=remote", "login", "-p", secret]],
+    [["sudo", "docker", "--", "login", "-p", secret]],
+  ])("redacts credentials only after the login subcommand in %j", (parts) => {
+    expect(redactCommandParts(parts).at(-1)).toContain("<redacted>");
+    expect(redactCommandParts(parts).join(" ")).not.toContain(secret);
+  });
+
+  it("hides unknown global-option syntax conservatively", () => {
+    const parts = ["docker", "--unknown", "value", "login", "-p", secret];
+    expect(redactCommandParts(parts)).toEqual(["docker", ...Array<string>(5).fill("<redacted>")]);
+  });
+
+  it.each([
+    [["docker", "--context"]],
+    [["docker", "--tls=unexpected", "login", "-p", secret]],
+    [["docker", "-X", "login", "-p", secret]],
+  ])("hides malformed or ambiguous container prefixes in %j", (parts) => {
+    expect(redactCommandParts(parts)).toEqual(parts.map((part, index) => (index === 0 ? part : "<redacted>")));
+  });
+});
+
 describe("credentials embedded in script arguments", () => {
   it.each(["'", '"'])("redacts long quoted credentials before truncating script arguments (%s)", (quote) => {
     const credential = "synthetic-private-value-".repeat(250);

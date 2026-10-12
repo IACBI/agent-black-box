@@ -1,4 +1,5 @@
 import * as fs from "node:fs/promises";
+import * as fileUtils from "../src/utils/files.js";
 import { mkdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -9,6 +10,7 @@ import {
   getActiveSessionPath,
   getSessionLockPath,
   inspectSessionRecoveryState,
+  readActiveSession,
   readSessionLock,
   recoverActiveSession,
   writeStopRequest,
@@ -19,6 +21,15 @@ import { createTempDir, initGitRepo, removeTempDir } from "./testUtils.js";
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   return { ...actual, rm: vi.fn(actual.rm), link: vi.fn(actual.link) };
+});
+vi.mock("../src/utils/files.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/utils/files.js")>();
+  return {
+    ...actual,
+    syncDirectory: vi.fn(actual.syncDirectory),
+    syncRegularFile: vi.fn(actual.syncRegularFile),
+    writeJsonFile: vi.fn(actual.writeJsonFile),
+  };
 });
 
 async function completedCleanupFixture(dir: string) {
@@ -34,6 +45,134 @@ async function completedCleanupFixture(dir: string) {
 }
 
 describe("completed session cleanup recovery", () => {
+  it("keeps the matching lock recoverable when active-state publication succeeds before start fails", async () => {
+    const dir = await createTempDir();
+    const actual = await vi.importActual<typeof import("../src/utils/files.js")>("../src/utils/files.js");
+    try {
+      initGitRepo(dir);
+      const activePath = getActiveSessionPath(dir, DEFAULT_CONFIG);
+      const failure = Object.assign(new Error("Post-publication directory flush failed."), { code: "EIO" });
+      vi.mocked(fileUtils.writeJsonFile).mockImplementation(async (filePath, value) => {
+        await actual.writeJsonFile(filePath, value);
+        if (filePath === activePath) throw failure;
+      });
+      await expect(createSession(dir, DEFAULT_CONFIG)).rejects.toBe(failure);
+      const active = await readActiveSession(dir, DEFAULT_CONFIG);
+      if (!active) throw new Error("Expected published ownership after the failed start.");
+      const lock = await readSessionLock(dir, DEFAULT_CONFIG);
+      expect(lock).toMatchObject({ sessionId: active.id, ownerToken: active.ownerToken });
+      expect(await pathExists(path.join(active.sessionDir, "session-metadata.json"))).toBe(false);
+      vi.mocked(fileUtils.writeJsonFile).mockImplementation(actual.writeJsonFile);
+      await writeFile(activePath, JSON.stringify({ ...active, pid: 999_999 }));
+      await writeFile(getSessionLockPath(dir, DEFAULT_CONFIG), JSON.stringify({ ...lock, pid: 999_999 }));
+      await expect(recoverActiveSession(dir, DEFAULT_CONFIG)).resolves.toMatchObject({
+        state: "recoverable",
+        report: { id: active.id },
+      });
+      expect(await pathExists(getSessionLockPath(dir, DEFAULT_CONFIG))).toBe(false);
+    } finally {
+      vi.mocked(fileUtils.writeJsonFile).mockImplementation(actual.writeJsonFile);
+      await removeTempDir(dir);
+    }
+  });
+
+  it("preserves both startup and lock-release failures", async () => {
+    const dir = await createTempDir();
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    try {
+      initGitRepo(dir);
+      const startFailure = new Error("Startup metadata write failed.");
+      const cleanupFailure = Object.assign(new Error("Lock release failed."), { code: "EACCES" });
+      vi.mocked(fileUtils.writeJsonFile).mockRejectedValueOnce(startFailure);
+      const lockPath = getSessionLockPath(dir, DEFAULT_CONFIG);
+      vi.mocked(fs.rm).mockImplementation(async (filePath, options) => {
+        if (filePath === lockPath) throw cleanupFailure;
+        await actual.rm(filePath, options);
+      });
+      const failure: unknown = await createSession(dir, DEFAULT_CONFIG).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect((failure as AggregateError).errors).toEqual([startFailure, cleanupFailure]);
+      expect((failure as AggregateError).cause).toBe(cleanupFailure);
+      expect(await pathExists(getActiveSessionPath(dir, DEFAULT_CONFIG))).toBe(false);
+      expect(await pathExists(lockPath)).toBe(true);
+    } finally {
+      vi.mocked(fs.rm).mockImplementation(actual.rm);
+      await removeTempDir(dir);
+    }
+  });
+
+  it.each(["receipt", "active-removal"])(
+    "retains recoverable proof after the %s durability barrier fails",
+    async (stage) => {
+      const dir = await createTempDir();
+      const actual = await vi.importActual<typeof import("../src/utils/files.js")>("../src/utils/files.js");
+      try {
+        initGitRepo(dir);
+        const session = await createSession(dir, DEFAULT_CONFIG);
+        const lock = await readSessionLock(dir, DEFAULT_CONFIG);
+        const activePath = getActiveSessionPath(dir, DEFAULT_CONFIG);
+        const lockPath = getSessionLockPath(dir, DEFAULT_CONFIG);
+        await writeFile(activePath, JSON.stringify({ ...session, pid: 999_999 }));
+        await writeFile(lockPath, JSON.stringify({ ...lock, pid: 999_999 }));
+        const failure = Object.assign(new Error("Directory flush failed."), { code: "EIO" });
+        const deniedPath = stage === "receipt" ? session.sessionDir : path.dirname(activePath);
+        vi.mocked(fileUtils.syncDirectory).mockImplementation(async (directory) => {
+          if (directory === deniedPath) throw failure;
+          await actual.syncDirectory(directory);
+        });
+
+        await expect(recoverActiveSession(dir, DEFAULT_CONFIG)).rejects.toBe(failure);
+        expect(await pathExists(activePath)).toBe(stage === "receipt");
+        expect(await pathExists(lockPath)).toBe(true);
+        expect(await pathExists(path.join(session.sessionDir, "session-cleanup.json"))).toBe(true);
+        const reportPath = path.join(session.sessionDir, "session.json");
+        const reportBytes = await readFile(reportPath, "utf8");
+        vi.mocked(fileUtils.syncDirectory).mockImplementation(actual.syncDirectory);
+
+        await expect(recoverActiveSession(dir, DEFAULT_CONFIG)).resolves.toEqual({ state: "already-complete" });
+        expect(await readFile(reportPath, "utf8")).toBe(reportBytes);
+        expect(await pathExists(lockPath)).toBe(false);
+      } finally {
+        vi.mocked(fileUtils.syncDirectory).mockImplementation(actual.syncDirectory);
+        await removeTempDir(dir);
+      }
+    }
+  );
+
+  it("does not publish completion or discard ownership when evidence flushing fails", async () => {
+    const dir = await createTempDir();
+    try {
+      initGitRepo(dir);
+      const session = await createSession(dir, DEFAULT_CONFIG);
+      const failure = Object.assign(new Error("Evidence flush failed."), { code: "EIO" });
+      vi.mocked(fileUtils.syncRegularFile).mockRejectedValueOnce(failure);
+      await expect(finalizeSession(session, DEFAULT_CONFIG, "test")).rejects.toBe(failure);
+      expect(await pathExists(path.join(session.sessionDir, "session-metadata.json"))).toBe(false);
+      expect(await pathExists(getActiveSessionPath(dir, DEFAULT_CONFIG))).toBe(true);
+      expect(await pathExists(getSessionLockPath(dir, DEFAULT_CONFIG))).toBe(true);
+      await expect(finalizeSession(session, DEFAULT_CONFIG, "retry")).resolves.toMatchObject({ id: session.id });
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
+  it("preserves empty-log finalization when evidence files were already absent", async () => {
+    const dir = await createTempDir();
+    try {
+      initGitRepo(dir);
+      const session = await createSession(dir, DEFAULT_CONFIG);
+      await rm(path.join(session.sessionDir, "events.ndjson"));
+      await rm(path.join(session.sessionDir, "commands.ndjson"));
+      await expect(finalizeSession(session, DEFAULT_CONFIG, "test")).resolves.toMatchObject({
+        events: [],
+        commands: [],
+      });
+      expect(await pathExists(getActiveSessionPath(dir, DEFAULT_CONFIG))).toBe(false);
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
   it("recovers after primary lock deletion fails without rewriting completed evidence", async () => {
     const dir = await createTempDir();
     const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");

@@ -41,6 +41,37 @@ describe("secret detector", () => {
     expect(JSON.stringify(findings)).not.toContain("a".repeat(12));
   });
 
+  it.each(["passphrase", "pwd", "credential", "credentials", "cookie"])(
+    "detects %s assignments and escaped JSON keys without exposing values",
+    (key) => {
+      const value = "synthetic0123456789";
+      const escapedKey = `\\u${key.charCodeAt(0).toString(16).padStart(4, "0")}${key.slice(1)}`;
+      for (const line of [
+        `${key}=${value}`,
+        `SESSION_${key.toUpperCase()}='${value}'`,
+        `{"${escapedKey}":"${value}"}`,
+      ]) {
+        const findings = detectSecretsInLine("settings.env", line, 7);
+        expect(findings).toContainEqual({
+          path: "settings.env",
+          line: 7,
+          reason: "Possible Secret assignment-like value detected.",
+          redacted: "<redacted>",
+        });
+        expect(JSON.stringify(findings)).not.toContain(value);
+      }
+      for (const line of [
+        `${key}_hint=${value}`,
+        `prefix${key}=${value}`,
+        `${key}=short`,
+        `{"\\u0070refix${key}":"${value}"}`,
+        `{"${escapedKey}_hint":"${value}"}`,
+      ]) {
+        expect(detectSecretsInLine("settings.env", line, 1)).toEqual([]);
+      }
+    }
+  );
+
   it.each([
     `max_token_count=${"1".repeat(12)}`,
     `tokenizer = "${"a".repeat(12)}"`,

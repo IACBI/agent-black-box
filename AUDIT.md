@@ -74,13 +74,39 @@ The first Node.js 22 run used a Node.js 24 `node` on PATH for wrapped commands, 
 
 Evidence: initial logs/coverage under `.cache/audit/`; confirmed final checks, both runtime suites, performance, package contents, dependency/CodeQL snapshots, and Git probe under `.cache/audit-followup/`.
 
+## Reliability completion (2026-10-13)
+
+Base: `158f743ccd9c2af0d997c3d32d2d2d37bd79c96d`. The earlier audit and its hosted Windows/Linux/macOS Node.js 22/24 matrix and CodeQL checks passed before and after merging PR #74.
+
+- Added bounded explicit `sudo`, `nohup`, `nice`, and `timeout` wrapper chains alongside `env`. Unknown options, shell modes, oversized prefixes, and excessive nesting redact conservatively; executed argv is unchanged. Docker/Podman now select the actual `login` subcommand after known global options, preserving ordinary port flags and masking attached password arguments.
+- Expanded recorded assignment detection for `passphrase`, `pwd`, `credential(s)`, and cookie names, including escaped JSON. Negative identifier-boundary tests prevent the added names from creating avoidable entropy false positives. Watcherless exclusions and all resource bounds are unchanged.
+- Added POSIX directory synchronization after atomic publication and temporary cleanup. Session locks and existing evidence logs are flushed; receipt/session-root entries precede active-state removal, shared state is synchronized before and after lock release, and old local cleanup follows. I/O, permission, and unsupported-sync failures remain explicit; complete published destinations are preserved when a later barrier fails.
+- Fixed failed startup to retain the lock when active-state publication already succeeded or ownership is ambiguous. Recovery tests cover post-publication startup failure, cleanup barrier failures, log flush failure, concurrent ownership, and existing absent-log behavior.
+- Made unsupported hard-link export errors actionable. Tested explicit atomic `--force` publication and replacement while hard links are rejected, preserving the default exclusive publication and competing-file protections.
+
+Primary references: [Node FileHandle.sync](https://nodejs.org/docs/latest-v22.x/api/fs.html#filehandlesync), [sudo command grammar](https://github.com/sudo-project/sudo/blob/main/docs/sudo.man.in), [GNU command wrappers](https://www.gnu.org/software/coreutils/manual/html_node/Modified-command-invocation.html), [Docker options](https://docs.docker.com/reference/cli/docker/), and [Podman options](https://docs.podman.io/en/latest/markdown/podman.1.html).
+
+The added wrapper/container regressions initially failed 25 cases; the assignment regressions initially failed all five new names. Targeted regressions passed after fixes. The initial full test run crossed source edits and retained earlier assignment matching while loading the new negative tests; it was not used as final evidence. A later lint check required preserving the cleanup error as the aggregate cause; that was corrected without weakening the rule. The complete check then ran against frozen source and passed.
+
+| Final local check, Windows / Node.js 24.12.0 | Result                                                                            |
+| -------------------------------------------- | --------------------------------------------------------------------------------- |
+| `pnpm check`                                 | Format, lint, source/test types, both dead-code checks, build and coverage passed |
+| Full suite                                   | 63 files passed; 886 tests passed, 9 existing skips                               |
+| Coverage                                     | Lines 93.16%; statements 93.08%; functions 97.33%; branches 89.31%                |
+| `pnpm perf`                                  | All unchanged budgets passed                                                      |
+| Final rebuilt package and `doctor --json`    | Passed                                                                            |
+| Dependency audit                             | No known vulnerabilities returned                                                 |
+| Source/staged diff checks                    | Passed                                                                            |
+
+Evidence is under `.cache/audit-followup/`, notably `final-hardening-check-complete.log`, `final-hardening-perf-confirmed.log`, `final-hardening-package-confirmed.log`, and `final-hardening-dependencies.log`. Fresh hosted Windows/Linux/macOS Node.js 22/24 CI and CodeQL must pass before merging this update into protected `main`. Dependencies, coverage thresholds, configuration defaults, CLI contracts, and report formats remain unchanged.
+
 ## Decisions and remaining limits
 
 - The previously blocked advisory and CodeQL checks are now verified; no dependency update was justified.
 - The published baseline commit's Windows/Linux/macOS Node.js 22/24 CI matrix and CodeQL analysis passed. The audit changes were also tested locally on Windows with both runtimes. Fresh hosted CI and CodeQL must pass for the proposed commit before merging into the protected `main` branch. This audit does not tag or publish a release.
 - A real Git textconv fixture did not invoke its converter for `--stat`, `--numstat`, `--name-status`, or `--raw`; the patch positive control did invoke it. No speculative Git change was made.
-- Cleanup publication protects against process interruption and retryable lock deletion failures. Full power-loss durability across filesystem directory updates is not claimed; missing proof remains preserved.
-- Detection remains heuristic and storage/repository configuration remains trusted. Arbitrary shell syntax and other wrappers are not treated as parsed tool invocations. Docker's broader subcommand grammar remains unchanged.
-- Atomic no-overwrite exports require hard-link support/permission; no partial-copy fallback was added.
+- Cleanup now includes POSIX directory barriers and file-content synchronization. Windows has no portable Node directory-entry flush, and filesystem/device behavior plus newly created ancestor directories prevent a universal power-loss guarantee. Missing proof remains preserved.
+- Detection remains heuristic and storage/repository configuration remains trusted. The supported explicit wrappers and container command grammar were extended above; arbitrary shell programs and other wrappers remain outside the bounded parser. Configured custom rules and independent review remain the extension path for unknown/encoded credentials.
+- Atomic no-overwrite exports require hard-link support/permission. Explicit `--force` atomic rename and stdout provide existing compatible alternatives; an automatic partial-copy fallback would violate complete publication and was not added.
 
 - The temporary fixture from the initial mismatched-runtime run was successfully recovered with the final CLI. Its recursive removal was refused by the execution policy (`blocked by policy`), including after the exact path was verified. It remains at `C:/Users/bozdo/AppData/Local/Temp/abb-e2e-ekbsvl`, outside the project; final source/tests and package checks are unaffected.

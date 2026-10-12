@@ -210,6 +210,26 @@ describe("session exporter", () => {
     }
   });
 
+  it("uses atomic replacement explicitly on a filesystem that rejects hard links", async () => {
+    const dir = await createTempDir();
+    try {
+      const outputPath = path.join(dir, "abb-export.md");
+      const failure = Object.assign(new Error("Hard links are unavailable."), { code: "ENOTSUP", syscall: "link" });
+      vi.mocked(fs.link).mockRejectedValue(failure);
+      await expect(writeSessionExport(outputPath, "complete\n")).rejects.toThrow("omit --output to use stdout");
+      expect(await readdir(dir)).toEqual([]);
+      await writeSessionExport(outputPath, "complete\n", { force: true });
+      expect(await readFile(outputPath, "utf8")).toBe("complete\n");
+      await writeSessionExport(outputPath, "replacement\n", { force: true });
+      expect(await readFile(outputPath, "utf8")).toBe("replacement\n");
+      expect(await readdir(dir)).toEqual(["abb-export.md"]);
+    } finally {
+      const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+      vi.mocked(fs.link).mockImplementation(actual.link);
+      await removeTempDir(dir);
+    }
+  });
+
   it("lets only one concurrent exporter publish a complete file", async () => {
     const dir = await createTempDir();
     try {

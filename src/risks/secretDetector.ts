@@ -17,7 +17,7 @@ import {
 const FILE_SCAN_CONCURRENCY = Math.min(8, availableParallelism());
 
 const SECRET_KEYWORD_PATTERN =
-  /(api[_-]?key|secret|token|password|passwd|private[_-]?key|client[_-]?secret|access[_-]?key)/i;
+  /(api[_-]?key|secret|token|password|passwd|private[_-]?key|client[_-]?secret|access[_-]?key|(?<![A-Za-z0-9])(?:passphrase|pwd|credentials?|cookie)\b)/i;
 
 const AWS_ACCESS_KEY = /(?:AKIA|ASIA)[0-9A-Z]{16}/;
 const GITHUB_TOKEN = /gh[pousr]_[A-Za-z0-9_]{20,}/;
@@ -60,7 +60,7 @@ const SECRET_PATTERNS: Array<{ name: string; matches: (line: string) => boolean 
     name: "Secret assignment-like value",
     matches: (line) =>
       hasEscapedSecretAssignment(line) ||
-      /(?<![A-Za-z0-9])(?:api[_-]?key|secret|token|password|passwd|private[_-]?key|client[_-]?secret|access[_-]?key)\b["']?\s*[:=]\s*["']?([A-Za-z0-9_./+=:-]{12,})["']?/i.test(
+      /(?<![A-Za-z0-9])(?:api[_-]?key|secret|token|password|passwd|passphrase|pwd|credentials?|cookie|private[_-]?key|client[_-]?secret|access[_-]?key)\b["']?\s*[:=]\s*["']?([A-Za-z0-9_./+=:-]{12,})["']?/i.test(
         line
       ),
   },
@@ -313,7 +313,11 @@ function hasEscapedSecretAssignment(line: string): boolean {
       // Malformed JSON keys must not abort scanning or command recording.
       continue;
     }
-    if (/(?:api[_-]?key|secret|token|password|passwd|private[_-]?key|client[_-]?secret|access[_-]?key)$/i.test(key)) {
+    if (
+      /(?:api[_-]?key|secret|token|password|passwd|private[_-]?key|client[_-]?secret|access[_-]?key|(?<![A-Za-z0-9])(?:passphrase|pwd|credentials?|cookie))$/i.test(
+        key
+      )
+    ) {
       return true;
     }
   }

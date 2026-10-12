@@ -22,6 +22,8 @@ import {
   pathExists,
   readJsonFileLimited,
   removeFileIfExists,
+  syncDirectory,
+  syncRegularFile,
   writeJsonFile,
   writeTextFileAtomic,
 } from "../utils/files.js";
@@ -174,7 +176,17 @@ export async function createSession(repoRoot: string, config: AgentBlackBoxConfi
 
     return session;
   } catch (error) {
-    await releaseSessionLock(repoRoot, config, session);
+    try {
+      const activeState = await readActiveSessionState(repoRoot, config);
+      // Publication can succeed before its directory flush fails; preserve ambiguous or published ownership.
+      if (!activeState.value && !activeState.corrupted) await releaseSessionLock(repoRoot, config, session);
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "Session start failed and its lock could not be safely released.",
+        { cause: cleanupError }
+      );
+    }
     throw error;
   }
 }
@@ -507,6 +519,10 @@ async function finalizeOwnedSession(
   } catch {
     report.integrity.warnings.push("Rollback safety snapshot could not be saved; automatic restore is unavailable.");
   }
+  for (const logPath of [getEventsPath(active.sessionDir), getCommandsPath(active.sessionDir)]) {
+    // Existing missing-log semantics remain an empty log; inaccessible or disappearing logs still fail.
+    if (await pathExists(logPath)) await syncRegularFile(logPath);
+  }
   await writeReports(report);
   await clearSessionState(active, config);
 
@@ -583,6 +599,7 @@ async function acquireSessionLock(repoRoot: string, config: AgentBlackBoxConfig,
     const handle = await open(lockPath, "wx");
     try {
       await handle.writeFile(`${JSON.stringify(lock, null, 2)}\n`, "utf8");
+      await handle.sync();
     } finally {
       await handle.close();
     }
@@ -621,11 +638,18 @@ async function clearSessionState(
     // The primary lock remains the start barrier until this recoverable proof is fully published.
     await writeTextFileAtomic(receiptPath, `${JSON.stringify({ cleanupVersion: 1, active })}\n`, { overwrite: false });
   }
+  // Also flush reused receipts and their containing directory entry before discarding ownership.
+  await syncDirectory(cleanupDirectory);
+  await syncDirectory(getSessionRoot(active.repoRoot, config));
   await assertSessionOwnership(active, config, allowCompletedCleanup);
   await removeFileIfExists(getActiveSessionPath(active.repoRoot, config));
+  await syncDirectory(getStateDir(active.repoRoot, config));
   await releaseSessionLock(active.repoRoot, config, active);
-  // A replacement session may now start; only touch this completed session's local files.
+  // A new owner can already start; flushing directory entries does not mutate its state.
+  await syncDirectory(getStateDir(active.repoRoot, config));
+  // Only remove this completed session's local files after releasing the primary lock.
   await removeFileIfExists(receiptPath);
+  await syncDirectory(cleanupDirectory);
 }
 
 async function assertSessionOwnership(
