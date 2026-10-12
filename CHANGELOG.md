@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Screen unsafe configured regex shapes before compilation or execution, with rejection regressions through the repository configuration boundary.
 - Added opt-in history read/search budgets, visible unavailable-metadata diagnostics, and exact parsed-byte verification for budgeted large reports without changing storage limits or defaults.
 - Added explicit initial staged analysis and managed hook opt-ins for first-commit policy enforcement and persisted trusted external-storage authorization.
 - Exposed Git-verified rename sources on text/SARIF findings while preserving destination locations and JSON comparison contracts.

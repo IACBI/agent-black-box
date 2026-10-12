@@ -50,6 +50,13 @@ describe("secret rules in .agentblackbox.json", () => {
 
   it.each([
     ["a catastrophic pattern", { secretPatterns: [{ name: "x", pattern: "(a+)+b" }] }, "nest quantifiers"],
+    ["an anchored nested pattern", { secretPatterns: [{ name: "x", pattern: "^x(\\w+\\s?)*$" }] }, "nest quantifiers"],
+    ["a nested empty group", { secretPatterns: [{ name: "x", pattern: "b(a*)*c" }] }, "nest quantifiers"],
+    [
+      "a nested pattern also matching empty input",
+      { secretPatterns: [{ name: "x", pattern: "(a+)*" }] },
+      "nest quantifiers",
+    ],
     ["an allowlist entry without a reason", { secretAllowlist: [{ path: "tests" }] }, "reason is required"],
     [
       "an allowlist entry that is too broad",
@@ -64,10 +71,12 @@ describe("secret rules in .agentblackbox.json", () => {
   ])("fails loading for %s instead of ignoring it", async (_label, rules, expected) => {
     const dir = await createTempDir();
     try {
-      await writeFile(getConfigPath(dir), JSON.stringify(rules));
+      const original = JSON.stringify(rules);
+      await writeFile(getConfigPath(dir), original);
 
       await expect(loadConfig(dir)).rejects.toThrow(expected);
       await expect(migrateConfigFile(dir)).rejects.toThrow("Cannot migrate invalid");
+      expect(await readFile(getConfigPath(dir), "utf8")).toBe(original);
     } finally {
       await removeTempDir(dir);
     }

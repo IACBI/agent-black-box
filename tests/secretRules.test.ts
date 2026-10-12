@@ -118,8 +118,6 @@ describe("secret rule configuration", () => {
   it("describes why a pattern is refused and accepts ordinary ones", () => {
     expect(describeUnsafeSecretPattern("corp_[a-z0-9]{24}", false)).toBeUndefined();
     expect(describeUnsafeSecretPattern("AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}", false)).toBeUndefined();
-    expect(describeUnsafeSecretPattern("^x(\\w+\\s?)*$", false)).toContain("nest quantifiers");
-    expect(describeUnsafeSecretPattern("b(a*)*c", false)).toContain("nest quantifiers");
     expect(describeUnsafeSecretPattern("(?:ab){2,}c", false)).toBeUndefined();
     expect(describeUnsafeSecretPattern("", false)).toContain("1 to 256");
   });

@@ -37,6 +37,13 @@ export function describeUnsafeSecretPattern(source: string, ignoreCase: boolean)
   if (source.length === 0 || source.length > MAX_SECRET_PATTERN_LENGTH) {
     return `must be 1 to ${MAX_SECRET_PATTERN_LENGTH} characters`;
   }
+  // Reject screened unsafe expressions before compiling or executing them, including the empty-match check.
+  if (BACKREFERENCE.test(source)) {
+    return "must not use backreferences";
+  }
+  if (NESTED_QUANTIFIER.test(source)) {
+    return "must not nest quantifiers inside a quantified group (risk of catastrophic backtracking)";
+  }
   let expression: RegExp;
   try {
     expression = new RegExp(source, ignoreCase ? "i" : "");
@@ -45,12 +52,6 @@ export function describeUnsafeSecretPattern(source: string, ignoreCase: boolean)
   }
   if (expression.test("")) {
     return "must not match an empty string";
-  }
-  if (BACKREFERENCE.test(source)) {
-    return "must not use backreferences";
-  }
-  if (NESTED_QUANTIFIER.test(source)) {
-    return "must not nest quantifiers inside a quantified group (risk of catastrophic backtracking)";
   }
   return undefined;
 }
