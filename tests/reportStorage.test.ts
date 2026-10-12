@@ -16,7 +16,7 @@ import { createTempDir, removeTempDir } from "./testUtils.js";
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
-  return { ...actual, open: vi.fn(actual.open) };
+  return { ...actual, lstat: vi.fn(actual.lstat), open: vi.fn(actual.open) };
 });
 
 describe("report storage input quotas", () => {
@@ -112,6 +112,67 @@ describe("report storage input quotas", () => {
         return handle;
       });
       await expect(digestRegularFile(filePath)).rejects.toThrow("changed during verification");
+      expect(close).toHaveBeenCalledOnce();
+    } finally {
+      vi.restoreAllMocks();
+      await removeTempDir(directory);
+    }
+  });
+
+  it("distinguishes file identities that collide when rounded to numbers", async () => {
+    const directory = await createTempDir("abb-report-large-inode-");
+    const filePath = path.join(directory, "session.json");
+    const originalIdentity = 2n ** 60n;
+    const replacementIdentity = originalIdentity + 1n;
+    expect(Number(originalIdentity)).toBe(Number(replacementIdentity));
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    let inspections = 0;
+    try {
+      await writeFile(filePath, "original");
+      vi.mocked(fs.lstat).mockImplementation(async (...args) => {
+        const details = await actual.lstat(...args);
+        const identity = inspections++ === 0 ? originalIdentity : replacementIdentity;
+        return Object.assign(details, {
+          ino: args[1]?.bigint ? identity : Number(identity),
+        });
+      });
+      let close: ReturnType<typeof vi.spyOn> | undefined;
+      vi.mocked(fs.open).mockImplementationOnce(async (...args) => {
+        const handle = await actual.open(...args);
+        const stat = handle.stat.bind(handle);
+        vi.spyOn(handle, "stat").mockImplementation(async (options) => {
+          const details = await stat(options);
+          return Object.assign(details, {
+            ino: options?.bigint ? replacementIdentity : Number(replacementIdentity),
+          });
+        });
+        close = vi.spyOn(handle, "close");
+        return handle;
+      });
+      await expect(digestRegularFile(filePath)).rejects.toThrow("changed during verification");
+      expect(close).toHaveBeenCalledOnce();
+    } finally {
+      vi.restoreAllMocks();
+      vi.mocked(fs.lstat).mockImplementation(actual.lstat);
+      await removeTempDir(directory);
+    }
+  });
+
+  it("refuses file lengths that cannot be streamed with exact numeric offsets", async () => {
+    const directory = await createTempDir("abb-report-unsafe-size-");
+    const filePath = path.join(directory, "session.json");
+    try {
+      await writeFile(filePath, "original");
+      const handle = await fs.open(filePath, "r");
+      const details = await handle.stat({ bigint: true });
+      vi.spyOn(handle, "stat").mockResolvedValueOnce(
+        Object.assign(details, { size: BigInt(Number.MAX_SAFE_INTEGER) + 1n })
+      );
+      const read = vi.spyOn(handle, "read");
+      const close = vi.spyOn(handle, "close");
+      vi.mocked(fs.open).mockResolvedValueOnce(handle);
+      await expect(digestRegularFile(filePath)).rejects.toThrow("supported digest size limit");
+      expect(read).not.toHaveBeenCalled();
       expect(close).toHaveBeenCalledOnce();
     } finally {
       vi.restoreAllMocks();

@@ -175,7 +175,8 @@ async function digestOpenedRegularFile(
   sizeError: () => Error,
   onChunk?: (chunk: Buffer) => void
 ): Promise<{ bytes: number; digest: string }> {
-  const details = await lstat(filePath);
+  // Windows file identities can exceed Number.MAX_SAFE_INTEGER; compare them without rounding.
+  const details = await lstat(filePath, { bigint: true });
   if (!details.isFile()) {
     throw new Error(`${path.basename(filePath)} is not a regular file.`);
   }
@@ -185,43 +186,47 @@ async function digestOpenedRegularFile(
   let bytes = 0;
   let digest = "";
   try {
-    const opened = await handle.stat();
+    const opened = await handle.stat({ bigint: true });
     if (!opened.isFile() || opened.dev !== details.dev || opened.ino !== details.ino) {
       throw new Error(`${path.basename(filePath)} changed during verification.`);
     }
-    if (maxBytes !== undefined && opened.size > maxBytes) {
+    if (maxBytes !== undefined && opened.size > BigInt(maxBytes)) {
       throw sizeError();
+    }
+    const openedSize = Number(opened.size);
+    if (!Number.isSafeInteger(openedSize)) {
+      throw new Error(`${path.basename(filePath)} exceeds the supported digest size limit.`);
     }
     const hash = createHash("sha256");
     const buffer = Buffer.alloc(FILE_DIGEST_STREAM_BYTES);
     while (true) {
       // Read at most the opened length plus one byte, so a growing file cannot keep verification alive.
-      const length = Math.min(buffer.length, opened.size - bytes + 1);
+      const length = Math.min(buffer.length, openedSize - bytes + 1);
       const { bytesRead } = await handle.read(buffer, 0, length, null);
       if (bytesRead === 0) {
         break;
       }
       bytes += bytesRead;
-      if (bytes > opened.size) {
+      if (bytes > openedSize) {
         throw new Error(`${path.basename(filePath)} changed during verification.`);
       }
       const chunk = buffer.subarray(0, bytesRead);
       hash.update(chunk);
       onChunk?.(chunk);
     }
-    const finished = await handle.stat();
-    const current = await lstat(filePath);
+    const finished = await handle.stat({ bigint: true });
+    const current = await lstat(filePath, { bigint: true });
     if (
-      bytes !== opened.size ||
+      bytes !== openedSize ||
       finished.size !== opened.size ||
-      finished.mtimeMs !== opened.mtimeMs ||
-      finished.ctimeMs !== opened.ctimeMs ||
+      finished.mtimeNs !== opened.mtimeNs ||
+      finished.ctimeNs !== opened.ctimeNs ||
       !current.isFile() ||
       current.dev !== opened.dev ||
       current.ino !== opened.ino ||
       current.size !== finished.size ||
-      current.mtimeMs !== finished.mtimeMs ||
-      current.ctimeMs !== finished.ctimeMs
+      current.mtimeNs !== finished.mtimeNs ||
+      current.ctimeNs !== finished.ctimeNs
     ) {
       throw new Error(`${path.basename(filePath)} changed during verification.`);
     }
