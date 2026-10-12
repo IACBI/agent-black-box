@@ -23,8 +23,7 @@ export function resolveWindowsExecutable(
         .map((directory) => directory.replace(/^"(.*)"$/, "$1"))
         .filter((directory) => path.isAbsolute(directory));
   const baseName = path.basename(command);
-  // An explicit extension is used as given; only extensionless names are expanded.
-  const extensions = path.extname(baseName) === "" ? getWindowsExecutableExtensions(env) : [""];
+  const extensions = candidateExtensions(baseName, env);
 
   for (const directory of directories) {
     for (const extension of extensions) {
@@ -39,6 +38,19 @@ export function resolveWindowsExecutable(
     }
   }
   return null;
+}
+
+/**
+ * An executable extension (`git.exe`) is used as given and an extensionless name is expanded. Any other
+ * dotted name (`python3.12`) is also expanded, as cmd.exe does, and then tried verbatim as a last resort.
+ */
+function candidateExtensions(baseName: string, env: NodeJS.ProcessEnv): string[] {
+  const extension = path.extname(baseName).toLowerCase();
+  if (WINDOWS_EXECUTABLE_EXTENSIONS.includes(extension)) {
+    return [""];
+  }
+  const expanded = getWindowsExecutableExtensions(env);
+  return extension === "" ? expanded : [...expanded, ""];
 }
 
 function getWindowsExecutableExtensions(env: NodeJS.ProcessEnv): string[] {

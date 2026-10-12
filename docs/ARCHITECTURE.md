@@ -4,15 +4,16 @@ A local TypeScript CLI for reviewing Git state, file events and explicitly wrapp
 
 ## Modules
 
-| Module                             | Responsibility                                                           |
-| ---------------------------------- | ------------------------------------------------------------------------ |
-| `cli.ts`, `index.ts`               | CLI orchestration and public exports.                                    |
-| `config/`, `doctor/`               | Configuration, storage validation and diagnostics.                       |
-| `git/`, `utils/`                   | Git snapshots, bounded inspection, paths, persistence and concurrency.   |
-| `watcher/`, `commands/`            | File capture and command execution/redacted metadata.                    |
-| `session/`                         | Ownership, recovery, logs, evidence, history, verification, retention.   |
-| `risks/`, `analyze/`               | Separate recorded-session and watcherless/staged detectors; CI policies. |
-| `reports/`, `export/`, `rollback/` | Reports, exports and explicit guarded restore.                           |
+| Module                             | Responsibility                                                                                                           |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `cli.ts`, `index.ts`               | CLI orchestration and public exports (`main`/`types` in `package.json`).                                                 |
+| `config/`, `doctor/`               | Configuration, storage validation and diagnostics.                                                                       |
+| `git/`, `utils/`                   | Git snapshots, bounded inspection, paths, persistence and concurrency.                                                   |
+| `watcher/`, `commands/`            | File capture and command execution/redacted metadata.                                                                    |
+| `session/`                         | Ownership, recovery, logs, evidence, history, verification, retention.                                                   |
+| `risks/`, `analyze/`               | Separate recorded-session and watcherless/staged detectors; CI policies; shared custom secret rules; analysis rendering. |
+| `hooks/`                           | Managed Git pre-commit hook (install, status, uninstall).                                                                |
+| `reports/`, `export/`, `rollback/` | Reports, exports (Markdown, JSON, SARIF), pull request comments and explicit guarded restore.                            |
 
 ## Data flow
 
@@ -24,6 +25,10 @@ A local TypeScript CLI for reviewing Git state, file events and explicitly wrapp
 6. History uses metadata/search indices with report fallback. Structural reads reconstruct large reports; streaming uses lighter verification. Pruning validates records; archives verify copies and preserve originals.
 
 Watcherless analysis reads worktree files; staged analysis reads index blobs. Fixed-commit baselines suppress matching secret-like lines by occurrence count and use Git-established rename sources. `new-secrets`/`complete-review` define CI criteria and required coverage. Recorded/watcherless heuristics remain separate; see [Usage](USAGE.md).
+
+Explicit initial-commit analysis requires staged input and an unborn HEAD; all content findings are new and there is no synthetic baseline. Managed hooks retain external-storage authorization and initial policy selection only through explicit opt-ins; their defaults remain unchanged.
+
+Optional `secretPatterns` and `secretAllowlist` are validated once in `config/secretRules.ts` and compiled into one shared rule set (`risks/secretRules.ts`). The recorded-session detector, the watcherless analyzer (including both sides of a baseline comparison) and command redaction all use it, so a pattern or exception means the same thing everywhere. Hidden findings are counted, not silently dropped.
 
 Optional named `analysisPolicies` are validated and selected explicitly. Metadata-risk severity/category gates complement independent secret and coverage gates; evaluation retains all findings. Existing built-in policy behavior and result shapes are preserved.
 
@@ -41,11 +46,17 @@ Rollback defaults to guidance. CLI apply requires the latest session, eligible t
 
 Watching excludes heavy/generated/storage directories and bounds its queue. NDJSON is streamed with a 1 MiB line limit, 1,000,000 accepted records per log and bounded warnings; discarded records are explicit diagnostics.
 
-Inspection classifies text/binary/large/missing/non-regular paths. CLI worktree, staged and baseline reads cap bytes at the configured limit or 256 KiB, whichever is smaller. The public analyzer defaults to 262,144 JavaScript string characters; callers can configure that limit. Untracked estimates read small text files. Git/recorded-secret inspection uses deterministic concurrency capped at eight workers and available CPUs.
+Git start baselines use a separate 32 MiB serialized UTF-8 JSON limit for both publication and reading. Size and shape are checked before session ownership is published. Active-session, lock and stop-request state retain their 1 MiB read limit.
+
+Inspection classifies text/binary/large/missing/non-regular paths. CLI worktree, staged and baseline reads cap bytes at the configured limit or 256 KiB, whichever is smaller. The public analyzer defaults to 262,144 JavaScript string characters; callers can configure that limit. Untracked estimates read small text files. Git/recorded-secret inspection uses deterministic concurrency capped at eight workers and available CPUs; the CLI's own reads use four. Staged and baseline blobs are read through one `git cat-file --batch` process, and the watcher writes bursts of file events in ordered batches of up to 256, so a large checkout costs a few appends rather than one per event.
+
+Baseline tree lookups group exact literal pathspecs into batches of at most 64 paths, with a conservative 16 KiB argument budget and four concurrent queries. An individually oversized path retains Git's existing handling. Returned entries are matched to requested paths; input order, duplicates and Git-verified rename sources are preserved.
 
 Reports retain full JSON under a 256 MiB policy; see [Reports](REPORTS.md) for replay/index limits. Replay verification streams canonical record digests without retaining log arrays. Full reads, finalization and pruning still materialize records. Catalog metadata uses batches of 32; report fallback parsing runs one report at a time to avoid simultaneous large allocations. Retention defaults do not schedule background work.
 
 Verification optionally budgets encoded JSON inputs and stream buffers, reducing worker count and metadata batches before inspection. Budgeted catalog fallback derives metadata from the compact core and streamed log digests. Inputs exceeding their quota fail before parsing; inability to obtain catalog timestamps prevents an ambiguous `latest` selection. The quota excludes decoded strings, parsed objects, retained catalog/results, and V8 overhead; it is not an RSS cap.
+
+History listing, browsing, showing and comparison accept the same optional budget with one read worker. Budgeted searches serialize compact-index/report reads and propagate refusals. Missing metadata is visible and prevents ambiguous metadata filters, limits and latest markers. Full budgeted replay reads share their encoded-input quota between stored JSON and replay, verify the exact text parsed, and stream event digests; unbudgeted reconstruction remains unchanged.
 
 Capture-health inspection walks at most 10,000 directory entries and checks durable marker metadata without reading logs or mutating storage. Unknown/linked/malformed markers prevent a healthy conclusion; persisted failures remain degraded even during an incomplete inspection. Doctor and opt-in status diagnostics expose this bounded evidence, not live watcher-buffer health.
 

@@ -1,5 +1,11 @@
 import path from "node:path";
 import type { ChangedFile, RiskSeverity } from "../types.js";
+import {
+  isLineAllowlisted,
+  matchCustomSecretPatterns,
+  NO_SECRET_RULES,
+  type CompiledSecretRules,
+} from "../risks/secretRules.js";
 import type { AnalysisPolicyEvaluation } from "./policy.js";
 
 const DEFAULT_MAX_CONTENT_CHARACTERS = 256 * 1024;
@@ -71,6 +77,8 @@ export interface WatcherlessAnalysisResult {
   findings: AnalysisFinding[];
   summary: AnalysisSummary;
   coverage?: AnalysisCoverage;
+  /** Explicit initial-commit analysis: no prior content exists, so all staged findings are new. */
+  initialCommitAnalysis?: true;
   baselineComparison?: {
     commit: string;
     suppressedExistingSecrets: number;
@@ -80,10 +88,14 @@ export interface WatcherlessAnalysisResult {
     renameSources: Array<{ path: string; sourcePath: string; suppressedExistingSecrets: number }>;
   };
   policyEvaluation?: AnalysisPolicyEvaluation;
+  /** Present only when a secret allowlist was applied; counts findings it hid from this result. */
+  secretAllowlist?: { suppressedFindings: number };
 }
 
 export interface AnalyzeChangedFilesOptions {
   maxContentCharacters?: number;
+  /** Compiled custom secret patterns and allowlist; see `compileSecretRules`. */
+  secretRules?: CompiledSecretRules;
 }
 
 /**
@@ -96,16 +108,24 @@ export function analyzeChangedFiles(
   options: AnalyzeChangedFilesOptions = {}
 ): WatcherlessAnalysisResult {
   const maxContentCharacters = normalizeContentLimit(options.maxContentCharacters);
-  const findings = files.flatMap((file) => analyzeFile(file, maxContentCharacters));
+  const rules = options.secretRules ?? NO_SECRET_RULES;
+  const allowlist = { suppressed: 0 };
+  const findings = files.flatMap((file) => analyzeFile(file, maxContentCharacters, rules, allowlist));
   const sortedFindings = dedupeFindings(findings).sort(compareFindings);
 
   return {
     findings: sortedFindings,
     summary: summarizeAnalysisFindings(sortedFindings),
+    ...(rules.allowlist.length > 0 ? { secretAllowlist: { suppressedFindings: allowlist.suppressed } } : {}),
   };
 }
 
-function analyzeFile(file: AnalysisInputFile, maxContentCharacters: number): AnalysisFinding[] {
+function analyzeFile(
+  file: AnalysisInputFile,
+  maxContentCharacters: number,
+  rules: CompiledSecretRules,
+  allowlist: { suppressed: number }
+): AnalysisFinding[] {
   const normalizedPath = normalizeAnalysisPath(file.path);
   if (!normalizedPath) {
     return [
@@ -138,7 +158,7 @@ function analyzeFile(file: AnalysisInputFile, maxContentCharacters: number): Ana
   }
 
   const contentToInspect = content.slice(0, maxContentCharacters);
-  findings.push(...detectPossibleSecrets(normalizedPath, contentToInspect));
+  findings.push(...detectPossibleSecrets(normalizedPath, contentToInspect, rules, allowlist));
   return findings;
 }
 
@@ -261,12 +281,21 @@ function shouldInspectContent(file: AnalysisInputFile): file is AnalysisInputFil
   );
 }
 
-function detectPossibleSecrets(relativePath: string, content: string): AnalysisFinding[] {
+function detectPossibleSecrets(
+  relativePath: string,
+  content: string,
+  rules: CompiledSecretRules,
+  allowlist: { suppressed: number }
+): AnalysisFinding[] {
   const findings: AnalysisFinding[] = [];
   const lines = content.split(/\r?\n/);
 
   for (const [index, line] of lines.entries()) {
-    if (!looksLikeSecret(line)) {
+    if (!looksLikeSecret(line, rules)) {
+      continue;
+    }
+    if (isLineAllowlisted(rules, relativePath, line)) {
+      allowlist.suppressed += 1;
       continue;
     }
 
@@ -285,13 +314,13 @@ function detectPossibleSecrets(relativePath: string, content: string): AnalysisF
   return findings;
 }
 
-function looksLikeSecret(line: string): boolean {
-  if (PRIVATE_KEY_HEADER.test(line) || TOKEN_VALUE.test(line)) {
+function looksLikeSecret(line: string, rules: CompiledSecretRules): boolean {
+  if (PRIVATE_KEY_HEADER.test(line) || TOKEN_VALUE.test(line) || matchCustomSecretPatterns(rules, line).length > 0) {
     return true;
   }
 
   for (const assignment of line.matchAll(ASSIGNMENT_PATTERN)) {
-    if (SENSITIVE_KEY_NAMES.test(assignment[1]) && isPlausibleCredentialValue(assignment[2])) {
+    if (SENSITIVE_KEY_NAMES.test(assignment[1] ?? "") && isPlausibleCredentialValue(assignment[2] ?? "")) {
       return true;
     }
   }

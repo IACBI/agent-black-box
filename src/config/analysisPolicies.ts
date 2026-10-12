@@ -4,6 +4,7 @@ import type {
   ConfiguredAnalysisPolicy,
   RiskSeverity,
 } from "../types.js";
+import { isRecord } from "../utils/records.js";
 
 const PROFILE_NAME = /^[a-z][a-z0-9-]{0,63}$/;
 const RESERVED_PROFILES = new Set(["new-secrets", "complete-review"]);
@@ -89,8 +90,4 @@ export function normalizeAnalysisPolicies(
     policies[name] = policy;
   }
   return errors.length === initialErrorCount ? { analysisPolicies: policies } : {};
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

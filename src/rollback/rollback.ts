@@ -9,7 +9,7 @@ import { collectGitSnapshot } from "../git/git.js";
 import { indexFileChangeEvidence } from "../session/changeEvidence.js";
 import { mapWithConcurrency } from "../utils/concurrency.js";
 import { readJsonFileLimited, writeJsonFile } from "../utils/files.js";
-import { isPathInside, resolveRepoPath } from "../utils/paths.js";
+import { isPathInside, normalizeRepoPath, resolveRepoPath } from "../utils/paths.js";
 import { formatTerminalValue, renderPosixCommand } from "../utils/terminal.js";
 
 export interface RollbackPlan {
@@ -345,7 +345,7 @@ export async function applyRollbackPlan(repoRoot: string, plan: RollbackPlan): P
 }
 
 export function toLiteralGitPathspec(filePath: string): string {
-  return `:(top,literal)${filePath.replace(/\\/g, "/")}`;
+  return `:(top,literal)${normalizeRepoPath(filePath)}`;
 }
 
 export function getConfirmationText(plan: RollbackPlan): string {

@@ -86,9 +86,9 @@ export async function applySessionRetention(
     throw new Error("Session root is not a regular directory.");
   }
   const physicalRoot = await realpath(sessionRoot);
-  const entries = await listSessionCatalog(repoRoot, config);
+  const completeEntries = indexCompleteEntries(await listSessionCatalog(repoRoot, config));
   for (const session of plan.sessions) {
-    const entry = entries.find((candidate) => candidate.id === session.id && candidate.state === "complete");
+    const entry = completeEntries.get(session.id);
     if (!entry || entry.startedAt !== session.startedAt) {
       throw new Error(`Session ${session.id} changed since the preview.`);
     }
@@ -141,8 +141,9 @@ export async function archiveSessionRetention(
     throw new Error("Session root is not a regular directory.");
   }
   const physicalRoot = await realpath(sessionRoot);
+  const completeEntries = indexCompleteEntries(entries);
   for (const session of plan.sessions) {
-    const entry = entries.find((candidate) => candidate.id === session.id && candidate.state === "complete");
+    const entry = completeEntries.get(session.id);
     if (!entry || entry.startedAt !== session.startedAt) {
       throw new Error(`Session ${session.id} changed since the preview.`);
     }
@@ -183,6 +184,54 @@ export async function archiveSessionRetention(
       { encoding: "utf8", flag: "wx", mode: 0o600 }
     );
   }
+}
+
+function indexCompleteEntries(entries: readonly SessionCatalogEntry[]): Map<string, SessionCatalogEntry> {
+  return new Map(entries.filter((entry) => entry.state === "complete").map((entry) => [entry.id, entry]));
+}
+
+/**
+ * Chooses the archive destination. An explicit `--to` is the caller's own decision and is used as given.
+ * A destination read from repository configuration must stay physically inside the repository: a cloned
+ * repository could otherwise redirect `abb sessions archive --apply` to write session copies anywhere the user can.
+ */
+export async function resolveArchiveDestination(
+  repoRoot: string,
+  explicitDestination: string | undefined,
+  configuredDestination: string | undefined
+): Promise<string | undefined> {
+  if (explicitDestination !== undefined) {
+    return explicitDestination;
+  }
+  if (configuredDestination === undefined) {
+    return undefined;
+  }
+  if (!configuredDestination.trim() || /^(?:\\\\|\/\/)/.test(configuredDestination)) {
+    throw new Error("retention.archiveDir must be a non-empty local path.");
+  }
+
+  const [physicalRepo, physicalAncestor] = await Promise.all([
+    realpath(repoRoot),
+    realpath(await nearestExistingAncestor(path.resolve(repoRoot, configuredDestination))),
+  ]);
+  if (!isPathInside(physicalRepo, physicalAncestor)) {
+    throw new Error(
+      "retention.archiveDir must stay inside the repository. Pass --to to choose an external destination explicitly."
+    );
+  }
+  return configuredDestination;
+}
+
+async function nearestExistingAncestor(candidate: string): Promise<string> {
+  let current = candidate;
+  while (!(await existsStrict(current))) {
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return current;
+    }
+    current = parent;
+  }
+  return current;
 }
 
 export function renderSessionArchivePlan(plan: SessionRetentionPlan, archiveDir: string): string {

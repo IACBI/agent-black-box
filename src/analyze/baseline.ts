@@ -2,6 +2,7 @@ import {
   analyzeChangedFiles,
   summarizeAnalysisFindings,
   type AnalysisInputFile,
+  type AnalyzeChangedFilesOptions,
   type WatcherlessAnalysisResult,
 } from "./analyzer.js";
 
@@ -9,7 +10,9 @@ export function compareAnalysisWithBaseline(
   stagedFiles: readonly AnalysisInputFile[],
   baselineFiles: readonly AnalysisInputFile[],
   current: WatcherlessAnalysisResult,
-  commit: string
+  commit: string,
+  /** Use the same options as the current analysis so custom patterns and the allowlist apply to both sides. */
+  options: AnalyzeChangedFilesOptions = {}
 ): WatcherlessAnalysisResult {
   const existingSecretLines = new Map<string, Map<string, number>>();
   const stagedLines = new Map<string, string[]>();
@@ -37,7 +40,7 @@ export function compareAnalysisWithBaseline(
     scannedTextFiles += 1;
     const lines = file.content.split(/\r?\n/);
     const counts = new Map<string, number>();
-    for (const finding of analyzeChangedFiles([file]).findings) {
+    for (const finding of analyzeChangedFiles([file], options).findings) {
       if (finding.kind !== "possible-secret" || finding.line === undefined) {
         continue;
       }

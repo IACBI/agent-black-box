@@ -1,14 +1,25 @@
-import { execFile } from "node:child_process";
 import type { SimpleGit } from "simple-git";
-import { createGit, gitExecutable } from "../git/executable.js";
+import { readGitBlobs } from "../git/blobReader.js";
+import { createGit } from "../git/executable.js";
 import type { AgentBlackBoxConfig } from "../types.js";
 import { collectStagedChanges } from "../git/git.js";
 import { mapWithConcurrency } from "../utils/concurrency.js";
 import { isLikelyBinary } from "../utils/fileInspection.js";
-import { isPathExcluded, normalizePath } from "../utils/paths.js";
+import { isPathExcluded, normalizeRepoPath } from "../utils/paths.js";
 import type { AnalysisInputFile } from "./analyzer.js";
+import { ANALYSIS_IO_CONCURRENCY, MAX_ANALYSIS_BYTES } from "./limits.js";
 
-const MAX_ANALYSIS_BYTES = 256 * 1024;
+interface TreeEntry {
+  mode: string;
+  objectId: string;
+}
+
+const MAX_BASELINE_PATHS_PER_BATCH = 64;
+const MAX_BASELINE_ARGUMENT_BYTES = 16 * 1024;
+
+function isRegularFileMode(mode: string): boolean {
+  return mode === "100644" || mode === "100755";
+}
 
 export async function collectStagedAnalysisInputFiles(
   repoRoot: string,
@@ -20,42 +31,64 @@ export async function collectStagedAnalysisInputFiles(
   }
 
   const git = createGit(repoRoot);
-  const indexEntries = new Map<string, { mode: string; objectId: string }>();
+  const indexEntries = new Map<string, TreeEntry>();
   const indexOutput = await git.raw(["ls-files", "--stage", "-z"]);
   for (const entry of indexOutput.split("\0")) {
     const match = /^([0-7]{6}) ([0-9a-f]{40,64}) 0\t([\s\S]+)$/.exec(entry);
     if (match) {
-      indexEntries.set(normalizePath(match[3]), { mode: match[1], objectId: match[2] });
+      const [, mode = "", objectId = "", filePath = ""] = match;
+      indexEntries.set(normalizeRepoPath(filePath), { mode, objectId });
     }
   }
 
   const maxBytes = Math.min(config.maxFileSizeKb * 1024, MAX_ANALYSIS_BYTES);
-  return mapWithConcurrency(changedFiles, 4, async (file) => {
+  const entries = changedFiles.map((file) => (file.status === "deleted" ? undefined : indexEntries.get(file.path)));
+  const blobs = await readRegularFileBlobs(repoRoot, entries, maxBytes);
+
+  return changedFiles.map((file, index): AnalysisInputFile => {
     if (file.status === "deleted") {
       return file;
     }
-    const indexEntry = indexEntries.get(file.path);
+    const indexEntry = entries[index];
     if (!indexEntry) {
-      return { ...file, kind: "missing" as const, analysisSkipReason: "No complete staged blob exists for this path." };
+      return { ...file, kind: "missing", analysisSkipReason: "No complete staged blob exists for this path." };
     }
-    if (indexEntry.mode !== "100644" && indexEntry.mode !== "100755") {
-      return { ...file, kind: "not-file" as const, analysisSkipReason: "The staged entry is not a regular file." };
+    if (!isRegularFileMode(indexEntry.mode)) {
+      return { ...file, kind: "not-file", analysisSkipReason: "The staged entry is not a regular file." };
     }
 
-    const blob = await readGitBlob(repoRoot, indexEntry.objectId, maxBytes);
-    if (blob === null) {
-      return { ...file, kind: "large" as const, analysisSkipReason: `The staged blob exceeds ${maxBytes} bytes.` };
+    const blob = blobs[index];
+    if (blob === null || blob === undefined) {
+      return { ...file, kind: "large", analysisSkipReason: `The staged blob exceeds ${maxBytes} bytes.` };
     }
     if (isLikelyBinary(blob)) {
-      return {
-        ...file,
-        kind: "binary" as const,
-        sizeBytes: blob.length,
-        analysisSkipReason: "Binary-like staged content.",
-      };
+      return { ...file, kind: "binary", sizeBytes: blob.length, analysisSkipReason: "Binary-like staged content." };
     }
-    return { ...file, kind: "text" as const, sizeBytes: blob.length, content: blob.toString("utf8") };
+    return { ...file, kind: "text", sizeBytes: blob.length, content: blob.toString("utf8") };
   });
+}
+
+/** Reads every regular-file entry with one Git process; other positions stay `undefined`. */
+async function readRegularFileBlobs(
+  repoRoot: string,
+  entries: ReadonlyArray<TreeEntry | undefined>,
+  maxBytes: number
+): Promise<Array<Buffer | null | undefined>> {
+  const positions: number[] = [];
+  const objectIds: string[] = [];
+  entries.forEach((entry, index) => {
+    if (entry && isRegularFileMode(entry.mode)) {
+      positions.push(index);
+      objectIds.push(entry.objectId);
+    }
+  });
+
+  const blobs = await readGitBlobs(repoRoot, objectIds, maxBytes);
+  const byPosition: Array<Buffer | null | undefined> = new Array(entries.length).fill(undefined);
+  positions.forEach((position, index) => {
+    byPosition[position] = blobs[index];
+  });
+  return byPosition;
 }
 
 export async function resolveBaselineCommit(repoRoot: string, reference: string): Promise<string> {
@@ -85,45 +118,63 @@ export async function collectBaselineAnalysisInputFiles(
   }
   const git = createGit(repoRoot);
   const maxBytes = Math.min(config.maxFileSizeKb * 1024, MAX_ANALYSIS_BYTES);
-  const samePathEntries = await mapWithConcurrency(stagedFiles, 4, (file) =>
-    file.status === "deleted" ? Promise.resolve(null) : findBaselineBlob(git, commit, file.path)
+  const samePathEntries = await findBaselineBlobs(
+    git,
+    commit,
+    stagedFiles.filter((file) => file.status !== "deleted").map((file) => file.path)
   );
-  const needsRenameLookup = stagedFiles.some((file, index) => file.status !== "deleted" && !samePathEntries[index]);
+  const needsRenameLookup = stagedFiles.some((file) => file.status !== "deleted" && !samePathEntries.has(file.path));
   const renameSources = needsRenameLookup
     ? await collectBaselineRenameSources(git, commit, config.exclude)
     : new Map<string, string>();
-  return mapWithConcurrency(stagedFiles, 4, async (file, index) => {
-    if (file.status === "deleted") {
-      return { ...file, analysisSkipReason: "Deleted staged paths have no content finding to compare." };
-    }
-    let entry = samePathEntries[index];
+  const sourcePaths = stagedFiles
+    .filter((file) => file.status !== "deleted" && !samePathEntries.has(file.path))
+    .map((file) => renameSources.get(file.path))
+    .filter((sourcePath): sourcePath is string => sourcePath !== undefined);
+  const sourceEntries = await findBaselineBlobs(git, commit, sourcePaths);
+
+  const lookups = stagedFiles.map((file) => {
+    let entry = file.status === "deleted" ? undefined : samePathEntries.get(file.path);
     let baselineSourcePath: string | undefined;
-    if (!entry) {
+    if (file.status !== "deleted" && !entry) {
       const sourcePath = renameSources.get(file.path);
       if (sourcePath) {
-        entry = await findBaselineBlob(git, commit, sourcePath);
+        entry = sourceEntries.get(sourcePath);
         if (entry) {
           baselineSourcePath = sourcePath;
         }
       }
     }
-    if (!entry) {
-      return { path: file.path, status: file.status, kind: "missing" as const };
+    return { entry, baselineSourcePath };
+  });
+  const blobs = await readRegularFileBlobs(
+    repoRoot,
+    lookups.map((lookup) => lookup.entry),
+    maxBytes
+  );
+
+  return stagedFiles.map((file, index): AnalysisInputFile => {
+    if (file.status === "deleted") {
+      return { ...file, analysisSkipReason: "Deleted staged paths have no content finding to compare." };
     }
-    if (entry.mode !== "100644" && entry.mode !== "100755") {
+    const { entry, baselineSourcePath } = lookups[index] ?? {};
+    if (!entry) {
+      return { path: file.path, status: file.status, kind: "missing" };
+    }
+    if (!isRegularFileMode(entry.mode)) {
       return {
         path: file.path,
         status: file.status,
-        kind: "not-file" as const,
+        kind: "not-file",
         analysisSkipReason: "The baseline entry is not a regular file.",
       };
     }
-    const blob = await readGitBlob(repoRoot, entry.objectId, maxBytes);
-    if (blob === null) {
+    const blob = blobs[index];
+    if (blob === null || blob === undefined) {
       return {
         path: file.path,
         status: file.status,
-        kind: "large" as const,
+        kind: "large",
         analysisSkipReason: `The baseline blob exceeds ${maxBytes} bytes.`,
       };
     }
@@ -131,14 +182,14 @@ export async function collectBaselineAnalysisInputFiles(
       return {
         path: file.path,
         status: file.status,
-        kind: "binary" as const,
+        kind: "binary",
         analysisSkipReason: "Binary-like baseline content.",
       };
     }
     return {
       path: file.path,
       status: file.status,
-      kind: "text" as const,
+      kind: "text",
       content: blob.toString("utf8"),
       ...(baselineSourcePath ? { baselineSourcePath } : {}),
     };
@@ -164,10 +215,10 @@ async function collectBaselineRenameSources(
   const tokens = output.split("\0");
   const sources = new Map<string, string>();
   for (let index = 0; index < tokens.length - 1;) {
-    const status = tokens[index++];
+    const status = tokens[index++] ?? "";
     if (/^[RC]\d+$/.test(status)) {
-      const source = normalizePath(tokens[index++] ?? "");
-      const destination = normalizePath(tokens[index++] ?? "");
+      const source = normalizeRepoPath(tokens[index++] ?? "");
+      const destination = normalizeRepoPath(tokens[index++] ?? "");
       if (status.startsWith("R") && source && destination && !isPathExcluded(source, excludePatterns)) {
         sources.set(destination, source);
       }
@@ -178,42 +229,59 @@ async function collectBaselineRenameSources(
   return sources;
 }
 
-async function findBaselineBlob(
+async function findBaselineBlobs(
   git: SimpleGit,
   commit: string,
-  filePath: string
-): Promise<{ mode: string; objectId: string } | null> {
-  const tree = await git.raw(["ls-tree", "-r", "-z", commit, "--", `:(top,literal)${filePath}`]);
-  for (const item of tree.split("\0")) {
-    const match = /^([0-7]{6}) blob ([0-9a-f]{40,64})\t([\s\S]+)$/.exec(item);
-    if (match && normalizePath(match[3]) === filePath) {
-      return { mode: match[1], objectId: match[2] };
+  paths: readonly string[]
+): Promise<Map<string, TreeEntry>> {
+  const batches: string[][] = [];
+  let batch: string[] = [];
+  // Reserve room for fixed arguments; doubling each UTF-8 pathspec also allows for command-line quoting.
+  let argumentBytes = 1024;
+  for (const filePath of new Set(paths)) {
+    const pathspecBytes = Buffer.byteLength(`:(top,literal)${filePath}`) * 2 + 3;
+    if (
+      batch.length > 0 &&
+      (batch.length >= MAX_BASELINE_PATHS_PER_BATCH || argumentBytes + pathspecBytes > MAX_BASELINE_ARGUMENT_BYTES)
+    ) {
+      batches.push(batch);
+      batch = [];
+      argumentBytes = 1024;
+    }
+    // A single unusually long path retains its existing Git behavior rather than introducing a new path limit.
+    batch.push(filePath);
+    argumentBytes += pathspecBytes;
+  }
+  if (batch.length > 0) {
+    batches.push(batch);
+  }
+
+  const results = await mapWithConcurrency(batches, ANALYSIS_IO_CONCURRENCY, async (filePaths) => {
+    const requestedPaths = new Set(filePaths);
+    const tree = await git.raw([
+      "ls-tree",
+      "-r",
+      "-z",
+      commit,
+      "--",
+      ...filePaths.map((filePath) => `:(top,literal)${filePath}`),
+    ]);
+    const entries = new Map<string, TreeEntry>();
+    for (const item of tree.split("\0")) {
+      const match = /^([0-7]{6}) blob ([0-9a-f]{40,64})\t([\s\S]+)$/.exec(item);
+      const [, mode = "", objectId = "", itemPath = ""] = match ?? [];
+      const filePath = normalizeRepoPath(itemPath);
+      if (match && requestedPaths.has(filePath)) {
+        entries.set(filePath, { mode, objectId });
+      }
+    }
+    return entries;
+  });
+  const entries = new Map<string, TreeEntry>();
+  for (const result of results) {
+    for (const [filePath, entry] of result) {
+      entries.set(filePath, entry);
     }
   }
-  return null;
-}
-
-function readGitBlob(repoRoot: string, objectId: string, maxBytes: number): Promise<Buffer | null> {
-  return new Promise((resolve, reject) => {
-    execFile(
-      gitExecutable(),
-      ["cat-file", "blob", objectId],
-      { cwd: repoRoot, encoding: "buffer", maxBuffer: maxBytes + 1 },
-      (error, stdout) => {
-        if (error) {
-          if ("code" in error && error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
-            resolve(null);
-            return;
-          }
-          reject(new Error("Could not read a staged Git blob.", { cause: error }));
-          return;
-        }
-        if (!Buffer.isBuffer(stdout)) {
-          reject(new Error("Git returned an unexpected staged blob format."));
-          return;
-        }
-        resolve(stdout.length > maxBytes ? null : stdout);
-      }
-    );
-  });
+  return entries;
 }

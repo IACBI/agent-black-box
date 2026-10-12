@@ -26,7 +26,10 @@ Agent Black Box records file events, Git evidence, and the commands you run thro
 - Redacted command history through `abb run`.
 - Risk and possible-secret findings, plus watcherless and staged analysis with text, JSON, and SARIF output.
 - CI policies (`new-secrets`, `complete-review`) that compare staged content against a fixed commit.
+- A managed Git pre-commit hook (`abb hook install`) with explicit first-commit policy and external-storage options.
+- Your own secret patterns and a documented allowlist in `.agentblackbox.json`, applied to both detectors and to command redaction.
 - Session history, comparison, integrity verification, verified archives, and guarded pruning and rollback.
+- Pull request comments (`abb pr-comment`) and SARIF export for recorded sessions.
 
 ### Requirements
 
@@ -62,9 +65,10 @@ pnpm dev risks
 | Setup and diagnostics | `abb init`, `abb config validate`, `abb config migrate`, `abb doctor`, `abb status`                                             |
 | Recording             | `abb start`, `abb run -- <command>`, `abb stop`, `abb recover`                                                                  |
 | Independent analysis  | `abb analyze`                                                                                                                   |
+| Git hook              | `abb hook install`, `abb hook uninstall`, `abb hook status`                                                                     |
 | History               | `abb sessions list`, `abb sessions browse`, `abb sessions show <id>`, `abb sessions compare <from> <to>`, `abb sessions verify` |
 | Retention             | `abb sessions archive`, `abb sessions prune`                                                                                    |
-| Reports               | `abb report`, `abb summary`, `abb commands`, `abb timeline`, `abb risks`, `abb export`, `abb rollback`                          |
+| Reports               | `abb report`, `abb summary`, `abb commands`, `abb timeline`, `abb risks`, `abb export`, `abb pr-comment`, `abb rollback`        |
 
 Completed sessions are stored in `.agent-black-box/sessions/<session-id>/` as `session.json`, `session-metadata.json`, `summary.md`, `commands.md`, `timeline.md`, `diff-summary.md`, `risks.md`, and `rollback.md`. Select one with `--session <id>` using a full ID, a unique prefix, or `latest`. Reports separate pre-existing changes, watcher observations, and final Git evidence, including commits made between the starting and ending HEAD.
 
@@ -74,7 +78,29 @@ For a SARIF review of staged content against a fixed commit in CI:
 abb analyze --staged --baseline HEAD --policy complete-review --format sarif
 ```
 
-`new-secrets` fails on newly detected possible secrets; `complete-review` also fails when required content could not be scanned. Both require `--staged --baseline`.
+`new-secrets` fails on newly detected possible secrets; `complete-review` also fails when required content could not be scanned. Both require `--staged` with `--baseline`, or explicit `--initial` before the first commit. History commands also support opt-in encoded-input budgets; see [Usage](docs/USAGE.md#history-and-retention).
+
+Install the managed hook for staged reviews (foreign hooks require an explicit replacement with backup). Its first commit defaults to a high-severity gate; opt into the selected policy with `--first-commit policy`:
+
+```sh
+abb hook install
+```
+
+To share a recorded session, print a pull request comment or export it for code scanning. Neither command uploads anything; posting is your own command:
+
+```sh
+abb pr-comment | gh pr comment --body-file -
+abb export --format sarif --output session.sarif
+```
+
+Add your own patterns, and documented exceptions, to `.agentblackbox.json`:
+
+```json
+{
+  "secretPatterns": [{ "name": "Internal token", "pattern": "corp_[a-z0-9]{16}" }],
+  "secretAllowlist": [{ "path": "tests/fixtures", "reason": "synthetic credentials" }]
+}
+```
 
 Secret detection and command redaction are heuristic, so review reports before sharing them. Commands run outside `abb run` are not recorded. Archive, prune, and rollback preview first and need an interactive terminal with typed confirmation.
 
@@ -110,7 +136,10 @@ Agent Black Box; dosya olaylarını, Git verilerini ve kendi üzerinden çalış
 - `abb run` ile maskelenmiş komut geçmişi.
 - Risk ve olası gizli değer bulguları; izleyicisiz ve staged analiz (metin, JSON, SARIF çıktısı).
 - Staged içeriği sabit bir commit ile karşılaştıran CI politikaları (`new-secrets`, `complete-review`).
+- İlk commit politikası ve harici depolama için açık seçenekleri olan yönetilen bir Git pre-commit hook'u (`abb hook install`).
+- `.agentblackbox.json` içinde kendi gizli değer desenleriniz ve gerekçeli bir izin listesi; iki dedektöre ve komut maskelemeye de uygulanır.
 - Oturum geçmişi, karşılaştırma, bütünlük doğrulaması, doğrulanmış arşiv ile onaylı silme ve geri alma.
+- Pull request yorumları (`abb pr-comment`) ve kayıtlı oturumlar için SARIF dışa aktarımı.
 
 ### Gereksinimler
 
@@ -146,9 +175,10 @@ pnpm dev risks
 | Kurulum ve tanılama | `abb init`, `abb config validate`, `abb config migrate`, `abb doctor`, `abb status`                                             |
 | Kayıt               | `abb start`, `abb run -- <command>`, `abb stop`, `abb recover`                                                                  |
 | Bağımsız analiz     | `abb analyze`                                                                                                                   |
+| Git hook'u          | `abb hook install`, `abb hook uninstall`, `abb hook status`                                                                     |
 | Geçmiş              | `abb sessions list`, `abb sessions browse`, `abb sessions show <id>`, `abb sessions compare <from> <to>`, `abb sessions verify` |
 | Saklama             | `abb sessions archive`, `abb sessions prune`                                                                                    |
-| Raporlar            | `abb report`, `abb summary`, `abb commands`, `abb timeline`, `abb risks`, `abb export`, `abb rollback`                          |
+| Raporlar            | `abb report`, `abb summary`, `abb commands`, `abb timeline`, `abb risks`, `abb export`, `abb pr-comment`, `abb rollback`        |
 
 Tamamlanan oturumlar `.agent-black-box/sessions/<session-id>/` altında `session.json`, `session-metadata.json`, `summary.md`, `commands.md`, `timeline.md`, `diff-summary.md`, `risks.md` ve `rollback.md` dosyalarıyla saklanır. Birini seçmek için `--session <id>` ile tam kimlik, benzersiz ön ek veya `latest` kullanın. Raporlar önceden var olan değişiklikleri, izleyici gözlemlerini ve son Git verilerini ayırır; başlangıç ile bitiş HEAD arasında yapılan commit'leri de gösterir.
 
@@ -158,7 +188,29 @@ CI'da staged içeriği sabit bir commit ile karşılaştırıp SARIF çıktısı
 abb analyze --staged --baseline HEAD --policy complete-review --format sarif
 ```
 
-`new-secrets`, yeni saptanan olası gizli değerlerde başarısız olur; `complete-review` ayrıca gerekli içerik taranamadığında da başarısız olur. İkisi de `--staged --baseline` gerektirir.
+`new-secrets`, yeni saptanan olası gizli değerlerde başarısız olur; `complete-review` ayrıca gerekli içerik taranamadığında da başarısız olur. İkisi de `--staged` ile `--baseline` veya ilk commit öncesinde açık `--initial` seçeneği gerektirir. Geçmiş komutlarında isteğe bağlı kodlanmış girdi bütçeleri de kullanılabilir; ayrıntılar [Kullanım](docs/USAGE.md#history-and-retention) belgesindedir.
+
+Staged inceleme için yönetilen hook'u kurun (yabancı hook'u değiştirmek açık seçim ve yedek gerektirir). İlk commit varsayılan olarak yüksek önem eşiğini kullanır; seçilen politikayı uygulamak için `--first-commit policy` seçeneğini ekleyin:
+
+```sh
+abb hook install
+```
+
+Kaydedilen bir oturumu paylaşmak için pull request yorumu üretin veya kod taraması için dışa aktarın. İki komut da hiçbir şey yüklemez; göndermek sizin komutunuzdur:
+
+```sh
+abb pr-comment | gh pr comment --body-file -
+abb export --format sarif --output session.sarif
+```
+
+Kendi desenlerinizi ve gerekçeli istisnalarınızı `.agentblackbox.json` içine ekleyin:
+
+```json
+{
+  "secretPatterns": [{ "name": "Internal token", "pattern": "corp_[a-z0-9]{16}" }],
+  "secretAllowlist": [{ "path": "tests/fixtures", "reason": "synthetic credentials" }]
+}
+```
 
 Gizli değer tespiti ve komut maskeleme sezgiseldir; raporları paylaşmadan önce gözden geçirin. `abb run` dışında çalıştırılan komutlar kaydedilmez. Arşivleme, silme ve geri alma önce önizleme gösterir; etkileşimli terminal ve yazılı onay ister.
 
