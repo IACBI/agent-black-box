@@ -2,8 +2,9 @@ import path from "node:path";
 import { hasKnownCredentialMaterial } from "../risks/secretDetector.js";
 import type { ChangedFile, RiskSeverity } from "../types.js";
 import {
+  describeCustomSecretPatternLimit,
   isLineAllowlisted,
-  matchCustomSecretPatterns,
+  matchCustomSecretPatternsInLines,
   NO_SECRET_RULES,
   type CompiledSecretRules,
 } from "../risks/secretRules.js";
@@ -53,6 +54,8 @@ export interface AnalysisCoverage {
   source: "worktree" | "index";
   scannedTextFiles: number;
   skipped: Array<{ path: string; reason: string }>;
+  /** Text files whose configured custom patterns could not inspect complete lines. */
+  limited?: Array<{ path: string; reason: string; truncatedLines: number }>;
 }
 
 type AnalysisFindingKind = "metadata-risk" | "possible-secret" | "analysis-limit";
@@ -86,6 +89,7 @@ export interface WatcherlessAnalysisResult {
     scannedTextFiles: number;
     absentFiles: number;
     skipped: Array<{ path: string; reason: string }>;
+    limited?: Array<{ path: string; reason: string }>;
     renameSources: Array<{ path: string; sourcePath: string; suppressedExistingSecrets: number }>;
   };
   policyEvaluation?: AnalysisPolicyEvaluation;
@@ -290,9 +294,30 @@ function detectPossibleSecrets(
 ): AnalysisFinding[] {
   const findings: AnalysisFinding[] = [];
   const lines = content.split(/\r?\n/);
+  const limit = describeCustomSecretPatternLimit(rules, lines);
+  if (limit) {
+    findings.push(
+      createFinding(relativePath, "Custom secret pattern analysis limit", "analysis-limit", "low", limit.reason)
+    );
+  }
+  // Preserve the existing short circuit: known built-in credentials need no custom-pattern evaluation.
+  const knownSecrets = lines.map(looksLikeKnownSecret);
+  const customSecrets = new Set<number>();
+  if (rules.patterns.length > 0) {
+    const candidatePositions: number[] = [];
+    const candidateLines = lines.filter((_line, index) => {
+      if (knownSecrets[index]) return false;
+      candidatePositions.push(index);
+      return true;
+    });
+    const customMatches = matchCustomSecretPatternsInLines(rules, candidateLines);
+    candidatePositions.forEach((position, index) => {
+      if ((customMatches[index]?.length ?? 0) > 0) customSecrets.add(position);
+    });
+  }
 
   for (const [index, line] of lines.entries()) {
-    if (!looksLikeSecret(line, rules)) {
+    if (!knownSecrets[index] && !customSecrets.has(index) && !looksLikeSecretAssignment(line)) {
       continue;
     }
     if (isLineAllowlisted(rules, relativePath, line)) {
@@ -315,16 +340,11 @@ function detectPossibleSecrets(
   return findings;
 }
 
-function looksLikeSecret(line: string, rules: CompiledSecretRules): boolean {
-  if (
-    hasKnownCredentialMaterial(line) ||
-    PRIVATE_KEY_HEADER.test(line) ||
-    TOKEN_VALUE.test(line) ||
-    matchCustomSecretPatterns(rules, line).length > 0
-  ) {
-    return true;
-  }
+function looksLikeKnownSecret(line: string): boolean {
+  return hasKnownCredentialMaterial(line) || PRIVATE_KEY_HEADER.test(line) || TOKEN_VALUE.test(line);
+}
 
+function looksLikeSecretAssignment(line: string): boolean {
   for (const assignment of line.matchAll(ASSIGNMENT_PATTERN)) {
     if (SENSITIVE_KEY_NAMES.test(assignment[1] ?? "") && isPlausibleCredentialValue(assignment[2] ?? "")) {
       return true;

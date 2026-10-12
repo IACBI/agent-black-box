@@ -38,6 +38,10 @@ export function renderAnalysis(result: WatcherlessAnalysisResult, format: Analyz
   if (result.coverage) {
     lines.push(`Content scanned: ${result.coverage.scannedTextFiles} ${result.coverage.source} file(s).`);
     lines.push(`Content skipped: ${result.coverage.skipped.length} file(s).`);
+    if (result.coverage.limited) {
+      lines.push(`Custom-pattern content limited: ${result.coverage.limited.length} file(s).`);
+      lines.push(...result.coverage.limited.slice(0, 20).map(renderSkippedFile));
+    }
     if (result.coverage.skipped.length > 0) {
       lines.push(...result.coverage.skipped.slice(0, 20).map(renderSkippedFile));
       if (result.coverage.skipped.length > 20) {
@@ -52,6 +56,10 @@ export function renderAnalysis(result: WatcherlessAnalysisResult, format: Analyz
     lines.push(`Baseline text scanned: ${comparison.scannedTextFiles} file(s).`);
     lines.push(`Absent at baseline: ${comparison.absentFiles} file(s).`);
     lines.push(`Baseline content skipped: ${comparison.skipped.length} file(s).`);
+    if (comparison.limited) {
+      lines.push(`Baseline content limited: ${comparison.limited.length} file(s).`);
+      lines.push(...comparison.limited.slice(0, 20).map(renderSkippedFile));
+    }
     lines.push(...comparison.skipped.slice(0, 20).map(renderSkippedFile));
     lines.push(`Baseline rename sources: ${comparison.renameSources.length} file(s).`);
     lines.push(
@@ -71,6 +79,10 @@ export function renderAnalysis(result: WatcherlessAnalysisResult, format: Analyz
       lines.push(`Skipped staged content: ${evaluation.skippedStagedFiles} file(s).`);
       lines.push(`Skipped baseline content: ${evaluation.skippedBaselineFiles} file(s).`);
     }
+    if (evaluation.limitedStagedFiles !== undefined) {
+      lines.push(`Partially scanned staged content: ${evaluation.limitedStagedFiles} file(s).`);
+      lines.push(`Partially scanned baseline content: ${evaluation.limitedBaselineFiles} file(s).`);
+    }
     if (evaluation.severityRiskCount !== undefined) {
       lines.push(`Risk findings matching the policy threshold/categories: ${evaluation.severityRiskCount}.`);
     }
@@ -78,9 +90,9 @@ export function renderAnalysis(result: WatcherlessAnalysisResult, format: Analyz
   if (result.findings.length > 0) {
     const baselineSourcePaths = getBaselineSourcePaths(result);
     lines.push("");
-    lines.push(
-      ...result.findings.map((finding) => renderAnalysisFinding(finding, baselineSourcePaths.get(finding.path)))
-    );
+    for (const finding of result.findings) {
+      lines.push(renderAnalysisFinding(finding, baselineSourcePaths.get(finding.path)));
+    }
   }
   return lines.join("\n");
 }

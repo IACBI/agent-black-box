@@ -60,6 +60,30 @@ const baseReport = buildSessionReport(
 );
 
 describe("markdown reports", () => {
+  it("escapes C1 controls and Unicode separators in command labels, Git snippets, and warnings", () => {
+    const controls = "\u009b2J\u2028\u2029";
+    const report = {
+      ...baseReport,
+      commands: baseReport.commands.map((command) => ({ ...command, label: `tests${controls}` })),
+      git: { ...baseReport.git, statusText: ` M file${controls}`, diffSummaryText: `file${controls} | 2 +` },
+      integrity: { ...baseReport.integrity, warnings: [`capture warning${controls}`] },
+    };
+    const original = JSON.stringify(report);
+    for (const markdown of [
+      generateCommandsMarkdown(report),
+      generateDiffSummaryMarkdown(report),
+      generateSummaryMarkdown(report),
+    ]) {
+      for (const control of ["\u009b", "\u2028", "\u2029"]) {
+        expect(markdown).not.toContain(control);
+      }
+      expect(markdown).toContain("u009b2J");
+      expect(markdown).toContain("u2028");
+      expect(markdown).toContain("u2029");
+    }
+    expect(JSON.stringify(report)).toBe(original);
+  });
+
   it("uses literal Git pathspecs in manual rollback suggestions", () => {
     const markdown = generateRollbackMarkdown(baseReport);
     expect(markdown).toContain("git restore -- ':(top,literal)src/index.ts'");

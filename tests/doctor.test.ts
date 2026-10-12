@@ -1,4 +1,4 @@
-import { writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createDefaultConfig } from "../src/config/config.js";
@@ -114,6 +114,38 @@ describe("doctor", () => {
     }
   });
 
+  it("does not inspect denied external session storage but inspects it when explicitly allowed", async () => {
+    const dir = await createTempDir();
+    const externalDir = await createTempDir();
+    try {
+      initGitRepo(dir);
+      const sessionDir = path.join(externalDir, "sessions");
+      await mkdir(sessionDir);
+      await writeFile(path.join(dir, ".agentblackbox.json"), JSON.stringify({ ...DEFAULT_CONFIG, sessionDir }));
+      await writeFile(path.join(externalDir, "active-session.json"), "{not-json}");
+
+      const denied = await runDoctor(dir);
+      expect(denied.ok).toBe(false);
+      expect(denied.checks.find((check) => check.name === "Config")?.message).toContain("must stay inside");
+      expect(denied.checks.find((check) => check.name === "Session directory")?.message).toContain(
+        "Cannot inspect session storage until configuration is valid"
+      );
+      expect(denied.checks.some((check) => check.name === "Session state" || check.name === "Capture health")).toBe(
+        false
+      );
+      expect(renderDoctorReport(denied)).not.toContain(sessionDir);
+
+      const allowed = await runDoctor(dir, { allowExternalSessionDir: true });
+      expect(allowed.checks.find((check) => check.name === "Config")?.status).toBe("warn");
+      expect(allowed.checks.find((check) => check.name === "Session directory")?.status).toBe("pass");
+      expect(allowed.checks.find((check) => check.name === "Session state")?.message).toContain("unreadable");
+      expect(allowed.ok).toBe(false);
+    } finally {
+      await removeTempDir(dir);
+      await removeTempDir(externalDir);
+    }
+  });
+
   it("reports invalid config as a doctor failure", async () => {
     const dir = await createTempDir();
     try {
@@ -126,6 +158,10 @@ describe("doctor", () => {
       expect(report.ok).toBe(false);
       expect(rendered).toContain("FAIL Config");
       expect(rendered).toContain("Failed to parse");
+      expect(rendered).toContain("Cannot inspect session storage until configuration is valid");
+      expect(report.checks.some((check) => check.name === "Session state" || check.name === "Capture health")).toBe(
+        false
+      );
     } finally {
       await removeTempDir(dir);
     }

@@ -70,6 +70,26 @@ describe("watcherless analysis with custom secret rules", () => {
     expect(withoutRules.findings.filter((finding) => finding.kind === "possible-secret")).toHaveLength(1);
   });
 
+  it("reports bounded custom-pattern coverage even when no credential is found or an allowlist applies", () => {
+    const value = "corp_0123456789abcdef";
+    const content = "x".repeat(4096) + value;
+    for (const filePath of ["src/client.ts", "tests/fixtures/client.ts"]) {
+      const result = analyzeChangedFiles([textFile(filePath, content)], { secretRules: rules });
+      expect(result.findings).toEqual([
+        expect.objectContaining({
+          path: filePath,
+          kind: "analysis-limit",
+          category: "Custom secret pattern analysis limit",
+        }),
+      ]);
+      expect(JSON.stringify(result)).not.toContain(value);
+    }
+    expect(analyzeChangedFiles([textFile("src/client.ts", content)]).findings).toEqual([]);
+    expect(analyzeChangedFiles([textFile("src/client.ts", "x".repeat(4096))], { secretRules: rules }).findings).toEqual(
+      []
+    );
+  });
+
   it("keeps the allowlist count when a baseline comparison is layered on top", () => {
     const staged = [textFile("tests/fixtures/seed.env", "PASSWORD=hunter2hunter2\n")];
     const options = { secretRules: rules };

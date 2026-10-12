@@ -63,11 +63,17 @@ export async function runWatcher(session: ActiveSession, config: AgentBlackBoxCo
     finalized = true;
     finalizePromise = (async () => {
       cleanup();
-      await watcher.close();
-      do {
-        await flushPendingFileEvents();
-      } while (pendingFileEvents.length > 0);
-      await Promise.all(lossMarkerWrites);
+      try {
+        await watcher.close();
+      } catch (error) {
+        aborted = true;
+        throw error;
+      } finally {
+        do {
+          await flushPendingFileEvents();
+        } while (pendingFileEvents.length > 0);
+        await Promise.all(lossMarkerWrites);
+      }
       if (droppedFileEventCount > 0) {
         console.error(`Dropped ${droppedFileEventCount} file events because the watcher queue reached its limit.`);
       }

@@ -1,7 +1,7 @@
 // eslint-disable-next-line no-control-regex -- Repository text must not inject terminal control characters into reports.
 const UNSAFE_CONTROL_PATTERN = /[\u0000-\u001F\u007F]/g;
-// Bidirectional marks and overrides can make a path read differently from what it is, so they are shown literally.
-const BIDI_CONTROL_PATTERN = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
+// Show C1 controls, Unicode line separators, and bidirectional marks literally in presentation.
+const DISPLAY_CONTROL_PATTERN = /[\u0080-\u009f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]/g;
 const MARKDOWN_TEXT_SPECIALS = /[\\`*_{}[\]()#+!|&<>]/g;
 const MARKDOWN_TABLE_SPECIALS = /[\\`|[\]&<>]/g;
 const TABLE_HTML_SPECIALS = /[&<>|`]/g;
@@ -20,7 +20,7 @@ function replaceMarkdownSpecial(character: string): string {
 }
 
 export function normalizeMarkdownText(value: string): string {
-  return value.replace(UNSAFE_CONTROL_PATTERN, " ").replace(BIDI_CONTROL_PATTERN, showControlEscape);
+  return value.replace(UNSAFE_CONTROL_PATTERN, " ").replace(DISPLAY_CONTROL_PATTERN, showControlEscape);
 }
 
 function showControlEscape(character: string): string {
@@ -56,7 +56,7 @@ export function markdownCodeBlock(value: string, language = ""): string {
     .replace(/\r\n?/g, "\n")
     // eslint-disable-next-line no-control-regex -- Repository text must not inject terminal control characters into reports.
     .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, " ")
-    .replace(BIDI_CONTROL_PATTERN, showControlEscape);
+    .replace(DISPLAY_CONTROL_PATTERN, showControlEscape);
   const fence = "`".repeat(Math.max(3, longestBacktickRun(normalized) + 1));
 
   return `${fence}${language}\n${normalized}\n${fence}`;

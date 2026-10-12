@@ -261,21 +261,24 @@ program
   .command("doctor")
   .description("Check local prerequisites, repository state, config, and session health.")
   .option("--repair", "recover a stale session only when ownership is safely verified")
-  .action(async (options: { repair?: boolean }) => {
+  .option("--json", "print structured prerequisite, config, and session checks")
+  .action(async (options: { repair?: boolean; json?: boolean }) => {
     if (options.repair) {
       const repoRoot = await requireRepositoryRoot(process.cwd());
       const config = await loadRuntimeConfig(repoRoot);
       const recovery = await recoverActiveSession(repoRoot, config);
-      console.log(
-        recovery.report
-          ? `Recovered session. Reports written to ${formatTerminalValue(recovery.report.sessionDir)}`
-          : recovery.state === "no-active-session"
-            ? "No session recovery is needed."
-            : "Completed session state cleanup."
-      );
+      if (!options.json) {
+        console.log(
+          recovery.report
+            ? `Recovered session. Reports written to ${formatTerminalValue(recovery.report.sessionDir)}`
+            : recovery.state === "no-active-session"
+              ? "No session recovery is needed."
+              : "Completed session state cleanup."
+        );
+      }
     }
     const report = await runDoctor(process.cwd(), getConfigLoadOptions());
-    console.log(escapeTerminalControls(renderDoctorReport(report)));
+    console.log(escapeTerminalControls(options.json ? JSON.stringify(report, null, 2) : renderDoctorReport(report)));
     process.exitCode = report.ok ? 0 : 1;
   });
 
@@ -337,7 +340,7 @@ program
       const analysisOptions = { secretRules: compileSecretRules(config) };
       let result: WatcherlessAnalysisResult = {
         ...analyzeChangedFiles(files, analysisOptions),
-        coverage: summarizeAnalysisCoverage(files, options.staged ? "index" : "worktree"),
+        coverage: summarizeAnalysisCoverage(files, options.staged ? "index" : "worktree", analysisOptions),
         ...(options.initial ? { initialCommitAnalysis: true as const } : {}),
       };
       if (options.baseline) {

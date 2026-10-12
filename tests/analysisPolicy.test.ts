@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { analyzeChangedFiles, type AnalysisInputFile } from "../src/analyze/analyzer.js";
+import { compareAnalysisWithBaseline } from "../src/analyze/baseline.js";
+import { summarizeAnalysisCoverage } from "../src/analyze/worktree.js";
+import { compileSecretRules } from "../src/risks/secretRules.js";
 import { evaluateAnalysisPolicy, parseAnalysisPolicyProfile } from "../src/analyze/policy.js";
 import type { ConfiguredAnalysisPolicies } from "../src/types.js";
 
@@ -30,6 +33,56 @@ describe("staged analysis policies", () => {
       skippedBaselineFiles: 1,
     });
     expect(evaluateAnalysisPolicy(base, staged, "complete-review").failed).toBe(true);
+  });
+
+  it("fails complete review for limited staged or baseline custom patterns without inventing new secrets", () => {
+    const options = {
+      secretRules: compileSecretRules({ secretPatterns: [{ name: "Internal", pattern: "corp_[a-z0-9]{12}" }] }),
+    };
+    const files: AnalysisInputFile[] = [
+      { path: "client.txt", status: "modified", kind: "text", content: "x".repeat(4096) + "corp_abcdef012345" },
+    ];
+    const initial = {
+      ...analyzeChangedFiles(files, options),
+      coverage: summarizeAnalysisCoverage(files, "index", options),
+      initialCommitAnalysis: true as const,
+    };
+    expect(initial.coverage).toMatchObject({
+      scannedTextFiles: 1,
+      skipped: [],
+      limited: [{ path: "client.txt", truncatedLines: 1 }],
+    });
+    expect(evaluateAnalysisPolicy(initial, files, "complete-review")).toMatchObject({
+      failed: true,
+      newSecretCount: 0,
+      skippedStagedFiles: 0,
+      limitedStagedFiles: 1,
+      limitedBaselineFiles: 0,
+    });
+    expect(evaluateAnalysisPolicy(initial, files, "new-secrets").failed).toBe(false);
+    expect(evaluateAnalysisPolicy(initial, files, "team", { team: { requireCompleteCoverage: true } }).failed).toBe(
+      true
+    );
+    const currentFiles: AnalysisInputFile[] = [{ ...files[0], content: "corp_abcdef012345\n// changed\n" }];
+    const current = {
+      ...analyzeChangedFiles(currentFiles, options),
+      coverage: summarizeAnalysisCoverage(currentFiles, "index", options),
+    };
+    const baselineFiles: AnalysisInputFile[] = [{ ...files[0], content: "corp_abcdef012345\n" + "x".repeat(4097) }];
+    const compared = compareAnalysisWithBaseline(currentFiles, baselineFiles, current, "a".repeat(40), options);
+    expect(compared.baselineComparison).toMatchObject({
+      suppressedExistingSecrets: 1,
+      scannedTextFiles: 1,
+      skipped: [],
+      limited: [{ path: "client.txt" }],
+    });
+    expect(evaluateAnalysisPolicy(compared, currentFiles, "complete-review")).toMatchObject({
+      failed: true,
+      newSecretCount: 0,
+      limitedStagedFiles: 0,
+      limitedBaselineFiles: 1,
+    });
+    expect(evaluateAnalysisPolicy(compared, currentFiles, "new-secrets").failed).toBe(false);
   });
 
   it("fails both profiles for new secret findings", () => {

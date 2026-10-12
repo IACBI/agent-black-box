@@ -268,6 +268,60 @@ describe("watcher", () => {
     expect(mocks.watcher.close).toHaveBeenCalledTimes(1);
   });
 
+  it("drains accepted events and loss markers when closing a normal stop fails", async () => {
+    const closeFailure = new Error("close failed");
+    mocks.watcher.close.mockRejectedValueOnce(closeFailure);
+    mocks.readStopRequest.mockResolvedValue({ sessionId: session.id, requestedAt: "2026-01-01T00:00:01.000Z" });
+    let rejectPendingWrite: ((error: Error) => void) | undefined;
+    mocks.appendFileEvents.mockReturnValueOnce(
+      new Promise<undefined>((_resolve, reject) => {
+        rejectPendingWrite = reject;
+      })
+    );
+    let releaseFailureMarker: (() => void) | undefined;
+    mocks.markCaptureLoss.mockReturnValueOnce(
+      new Promise<undefined>((resolve) => {
+        releaseFailureMarker = () => resolve(undefined);
+      })
+    );
+    let settled = false;
+    const completion = runWatcher(session, DEFAULT_CONFIG);
+    const outcome = completion.then(
+      () => {
+        settled = true;
+        return undefined;
+      },
+      (error: unknown) => {
+        settled = true;
+        return error;
+      }
+    );
+    mocks.watcher.emit("all", "change", "src/first.ts");
+    mocks.watcher.emit("all", "change", "src/second.ts");
+
+    try {
+      await vi.advanceTimersByTimeAsync(500);
+      expect(settled).toBe(false);
+      mocks.watcher.emit("all", "change", "src/after-close-failure.ts");
+      rejectPendingWrite?.(new Error("write failed"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(false);
+      expect(mocks.appendFileEvents.mock.calls.flatMap(([, events]) => events.map((event) => event.path))).toEqual([
+        "src/first.ts",
+        "src/second.ts",
+      ]);
+      expect(mocks.markCaptureLoss).toHaveBeenCalledWith(session, "writeFailure");
+    } finally {
+      rejectPendingWrite?.(new Error("write failed"));
+      await vi.advanceTimersByTimeAsync(0);
+      releaseFailureMarker?.();
+      expect(await outcome).toBe(closeFailure);
+    }
+
+    expect(mocks.finalizeSession).not.toHaveBeenCalled();
+    expect(mocks.watcher.close).toHaveBeenCalledTimes(1);
+  });
+
   it("waits for an in-flight stop request read before polling again", async () => {
     let resolvePendingRead: (() => void) | undefined;
     mocks.readStopRequest.mockReturnValueOnce(

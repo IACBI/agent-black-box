@@ -62,6 +62,45 @@ describe("recorded sessions with secret rules", () => {
     }
   });
 
+  it("persists partial custom-scan warnings while built-in detectors inspect content after the line limit", async () => {
+    const repo = await createTempDir("abb-session-secret-limits-");
+    const custom = "corp_0123456789abcdef";
+    const builtin = "ghp_" + "a".repeat(24);
+    try {
+      initGitRepo(repo);
+      const report = await recordSession(repo, config, {
+        "src/client.txt": "x".repeat(4096) + " " + custom + " " + builtin + "\n",
+        "tests/fixtures/client.txt": "x".repeat(4096) + " " + custom + "\n",
+      });
+      expect(report.possibleSecrets).toEqual([
+        {
+          path: "src/client.txt",
+          line: 1,
+          reason: "Possible GitHub token-like value detected.",
+          redacted: "<redacted>",
+        },
+      ]);
+      const warnings = report.integrity.warnings.filter((warning) =>
+        warning.includes("Custom secret patterns inspected only")
+      );
+      expect(warnings).toHaveLength(2);
+      expect(warnings.some((warning) => warning.includes("src/client.txt"))).toBe(true);
+      expect(warnings.some((warning) => warning.includes("tests/fixtures/client.txt"))).toBe(true);
+      const stored = await readFile(path.join(report.sessionDir, "session.json"), "utf8");
+      const summary = await readFile(path.join(report.sessionDir, "summary.md"), "utf8");
+      expect(JSON.parse(stored).integrity.warnings).toEqual(report.integrity.warnings);
+      expect(summary).toContain("Custom secret patterns inspected only");
+      for (const output of [JSON.stringify(report), stored, summary]) {
+        expect(output).not.toContain(custom);
+        expect(output).not.toContain(builtin);
+      }
+      const reloaded = await readCatalogSessionReport(await resolveSession(repo, config, report.id));
+      expect(reloaded.integrity.warnings).toEqual(report.integrity.warnings);
+    } finally {
+      await removeTempDir(repo);
+    }
+  });
+
   it("leaves the report unchanged in shape when nothing was allowlisted", async () => {
     const repo = await createTempDir("abb-session-secrets-");
     try {

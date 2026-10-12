@@ -2,7 +2,8 @@ import type { ChangedFile } from "../types.js";
 import { mapWithConcurrency } from "../utils/concurrency.js";
 import { inspectTextFile } from "../utils/fileInspection.js";
 import { resolveRepoPath } from "../utils/paths.js";
-import type { AnalysisCoverage, AnalysisInputFile } from "./analyzer.js";
+import type { AnalysisCoverage, AnalysisInputFile, AnalyzeChangedFilesOptions } from "./analyzer.js";
+import { describeCustomSecretPatternLimit, NO_SECRET_RULES } from "../risks/secretRules.js";
 import {
   ANALYSIS_IO_CONCURRENCY,
   MAX_ANALYSIS_BYTES,
@@ -46,15 +47,22 @@ export async function collectAnalysisInputFiles(
 /** Counts scanned files and lists, with a reason, every changed path whose content was not scanned. */
 export function summarizeAnalysisCoverage(
   files: readonly AnalysisInputFile[],
-  source: AnalysisCoverage["source"]
+  source: AnalysisCoverage["source"],
+  options: AnalyzeChangedFilesOptions = {}
 ): AnalysisCoverage {
   let scannedTextFiles = 0;
   const skipped: AnalysisCoverage["skipped"] = [];
+  const limited: NonNullable<AnalysisCoverage["limited"]> = [];
+  const rules = options.secretRules ?? NO_SECRET_RULES;
   for (const file of files) {
     if (file.status === "deleted") {
       skipped.push({ path: file.path, reason: "Deleted files have no current content to scan." });
     } else if (file.kind === "text" && file.content !== undefined) {
       scannedTextFiles += 1;
+      if (rules.patterns.length > 0) {
+        const limit = describeCustomSecretPatternLimit(rules, file.content.split(/\r?\n/));
+        if (limit) limited.push({ path: file.path, ...limit });
+      }
     } else {
       skipped.push({
         path: file.path,
@@ -62,5 +70,5 @@ export function summarizeAnalysisCoverage(
       });
     }
   }
-  return { source, scannedTextFiles, skipped };
+  return { source, scannedTextFiles, skipped, ...(limited.length > 0 ? { limited } : {}) };
 }

@@ -80,6 +80,24 @@ describe("analysis output", () => {
     expect(text).not.toContain("hunter2hunter2");
   });
 
+  it("renders every finding from many bounded files without exceeding the argument limit", () => {
+    const files: AnalysisInputFile[] = Array.from({ length: 15 }, (_, index) => ({
+      path: `fixtures/file-${String(index).padStart(2, "0")}.txt`,
+      status: "modified",
+      kind: "text",
+      content: "password=abcdef\n".repeat(10_000),
+    }));
+    const result = analyzeChangedFiles(files);
+    const text = renderAnalysis(result, "text");
+    const findingLines = text.split("\n").filter((line) => line.startsWith("[high]"));
+
+    expect(result.findings).toHaveLength(150_000);
+    expect(findingLines).toHaveLength(150_000);
+    expect(findingLines[0]).toContain("fixtures/file-00.txt:1 — Possible secret:");
+    expect(findingLines.at(-1)).toContain("fixtures/file-14.txt:10000 — Possible secret:");
+    expect(text).not.toContain("abcdef");
+  });
+
   it("adds verified rename context to remaining findings without changing JSON or exposing credentials", () => {
     const result = renamedResult();
     const text = renderAnalysis(result, "text");

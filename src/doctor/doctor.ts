@@ -48,15 +48,23 @@ export async function runDoctor(cwd: string, configOptions?: ConfigLoadOptions):
   }
 
   let config: AgentBlackBoxConfig = DEFAULT_CONFIG;
+  let configValid = false;
   try {
     const configResult = await loadConfigWithMeta(repoRoot, configOptions);
-    config = configResult.config;
     checks.push(await checkConfig(repoRoot, configResult));
+    if (configResult.errors.length === 0) {
+      config = configResult.config;
+      configValid = true;
+    }
   } catch (error) {
     checks.push(fail("Config", (error as Error).message));
   }
 
   checks.push(await checkWritable(repoRoot, "Repository write access"));
+  if (!configValid) {
+    checks.push(fail("Session directory", "Cannot inspect session storage until configuration is valid."));
+    return { ok: false, repoRoot, checks };
+  }
   checks.push(await checkSessionDirectory(repoRoot, config));
   const recovery = await inspectSessionRecoveryState(repoRoot, config);
   checks.push(checkSessionRecovery(recovery));

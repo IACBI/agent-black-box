@@ -11,6 +11,9 @@ export interface AnalysisPolicyEvaluation {
   newSecretCount: number;
   skippedStagedFiles: number;
   skippedBaselineFiles: number;
+  /** Present when one or more staged or baseline files were only partially scanned. */
+  limitedStagedFiles?: number;
+  limitedBaselineFiles?: number;
   /** Custom profiles only: metadata risks matching the severity and category gates. */
   severityRiskCount?: number;
 }
@@ -46,6 +49,11 @@ export function evaluateAnalysisPolicy(
     (file) => file.status !== "deleted" && (file.kind !== "text" || file.content === undefined)
   ).length;
   const skippedBaselineFiles = result.baselineComparison?.skipped.length ?? 0;
+  const limitedStagedFiles = new Set([
+    ...result.findings.filter((finding) => finding.kind === "analysis-limit").map((finding) => finding.path),
+    ...(result.coverage.limited ?? []).map((file) => file.path),
+  ]).size;
+  const limitedBaselineFiles = new Set((result.baselineComparison?.limited ?? []).map((file) => file.path)).size;
   const policies = validateConfiguredPolicies(configuredPolicies);
   const builtInProfile = profile === "new-secrets" || profile === "complete-review";
   let configuredPolicy: ConfiguredAnalysisPolicy | undefined;
@@ -71,11 +79,13 @@ export function evaluateAnalysisPolicy(
     profile,
     failed:
       (failOnNewSecrets && newSecretCount > 0) ||
-      (requireCompleteCoverage && (skippedStagedFiles > 0 || skippedBaselineFiles > 0)) ||
+      (requireCompleteCoverage &&
+        (skippedStagedFiles > 0 || skippedBaselineFiles > 0 || limitedStagedFiles > 0 || limitedBaselineFiles > 0)) ||
       severityRiskCount > 0,
     newSecretCount,
     skippedStagedFiles,
     skippedBaselineFiles,
+    ...(limitedStagedFiles > 0 || limitedBaselineFiles > 0 ? { limitedStagedFiles, limitedBaselineFiles } : {}),
     ...(builtInProfile ? {} : { severityRiskCount }),
   };
 }

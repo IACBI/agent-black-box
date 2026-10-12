@@ -4,6 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { analyzeChangedFiles } from "../src/analyze/analyzer.js";
+import {
+  compileSecretRules,
+  matchCustomSecretPatterns,
+  matchCustomSecretPatternsInLines,
+} from "../src/risks/secretRules.js";
 import { DEFAULT_CONFIG } from "../src/config/defaults.js";
 import { buildSessionReport, generateTimelineMarkdown } from "../src/reports/markdown.js";
 import { writeReports } from "../src/reports/reportWriter.js";
@@ -198,6 +203,48 @@ try {
   if (analysisDuration > 30_000) {
     throw new Error(`Large-repository analysis budget exceeded: ${Math.round(analysisDuration)}ms > 30000ms.`);
   }
+  const customLines = Array.from({ length: 25_000 }, (_, index) =>
+    index % 1000 === 0 ? "id corp_abcdef012345" : "ordinary"
+  );
+  const customRules = compileSecretRules({ secretPatterns: [{ name: "Internal", pattern: "corp_[a-z0-9]{12}" }] });
+  // Warm the shared evaluator so both measurements exclude worker startup.
+  matchCustomSecretPatterns(customRules, "ordinary");
+  const singleLineStarted = performance.now();
+  const singleLineMatches = customLines.map((line) => matchCustomSecretPatterns(customRules, line));
+  const singleLineDuration = performance.now() - singleLineStarted;
+  const batchStarted = performance.now();
+  const batchMatches = matchCustomSecretPatternsInLines(customRules, customLines);
+  const batchDuration = performance.now() - batchStarted;
+  if (JSON.stringify(batchMatches) !== JSON.stringify(singleLineMatches)) {
+    throw new Error("Batched custom patterns changed per-line matches or their order.");
+  }
+  const customAnalysisStarted = performance.now();
+  const customAnalysis = analyzeChangedFiles(
+    [{ path: "src/generated.txt", status: "modified", content: customLines.join("\n") }],
+    { secretRules: customRules }
+  );
+  const customAnalysisDuration = performance.now() - customAnalysisStarted;
+  if (
+    customAnalysis.findings.length !== 25 ||
+    customAnalysis.findings.some((finding) => finding.kind !== "possible-secret")
+  ) {
+    throw new Error("Custom-pattern repository analysis lost findings or reported unexpected limits.");
+  }
+  if (batchDuration > MAX_DURATION_MS || customAnalysisDuration > MAX_DURATION_MS) {
+    throw new Error("Custom-pattern batching performance budget exceeded.");
+  }
+  console.log(
+    JSON.stringify({
+      scenario: "custom-pattern-many-lines",
+      lines: customLines.length,
+      findings: customAnalysis.findings.length,
+      singleLineMatchingDurationMs: Math.round(singleLineDuration),
+      batchedMatchingDurationMs: Math.round(batchDuration),
+      analysisDurationMs: Math.round(customAnalysisDuration),
+      maxDurationMs: MAX_DURATION_MS,
+    })
+  );
+
   // Every tenth path carries Markdown and terminal-control characters so escaping stays on the measured path.
   const timelineEvents = result.records.map((event, index) =>
     index % 10 === 0 ? { ...event, path: `docs/odd|name_[${index}]\`*\u001b[31m.md` } : event

@@ -43,7 +43,25 @@ describe("markdown utilities", () => {
   it("replaces every C0 control character and DEL with a space", () => {
     const controls = Array.from({ length: 32 }, (_, code) => String.fromCharCode(code)).join("") + "\u007F";
     expect(normalizeMarkdownText(`a${controls}b`)).toBe(`a${" ".repeat(33)}b`);
-    expect(normalizeMarkdownText("a\u0080b")).toBe("a\u0080b");
+    expect(normalizeMarkdownText("a\u0080b")).toBe("a\\u0080b");
+  });
+
+  it("shows C1 controls and Unicode line separators literally in text and code blocks", () => {
+    const controls =
+      Array.from({ length: 32 }, (_, index) => String.fromCharCode(0x80 + index)).join("") + "\u2028\u2029";
+    const visible = [...controls]
+      .map((control) => `\\u${control.charCodeAt(0).toString(16).padStart(4, "0")}`)
+      .join("");
+    expect(normalizeMarkdownText(controls)).toBe(visible);
+    expect(markdownInlineCode(controls)).toBe("`" + visible + "`");
+    expect(markdownTableCode(controls)).toBe(`<code>${visible}</code>`);
+    expect(markdownCodeBlock(`first\n${controls}\tlast`, "text")).toBe("```text\nfirst\n" + visible + "\tlast\n```");
+    for (const renderer of [escapeMarkdownText, escapeMarkdownTableCell]) {
+      const rendered = renderer(controls);
+      for (const control of controls) {
+        expect(rendered).not.toContain(control);
+      }
+    }
   });
 
   it("escapes only table-significant characters in table cells", () => {
