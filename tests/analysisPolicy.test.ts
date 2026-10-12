@@ -48,6 +48,62 @@ describe("staged analysis policies", () => {
     );
   });
 
+  it("enforces initial-commit secret policies without inventing prior baseline content", () => {
+    const files: AnalysisInputFile[] = [
+      { path: "settings.ts", status: "added", kind: "text", content: 'const apiKey = "test_credential_987654321";' },
+    ];
+    const initial = {
+      ...analyzeChangedFiles(files),
+      coverage: { source: "index" as const, scannedTextFiles: 1, skipped: [] },
+      initialCommitAnalysis: true as const,
+    };
+    expect(evaluateAnalysisPolicy(initial, files, "new-secrets")).toEqual({
+      profile: "new-secrets",
+      failed: true,
+      newSecretCount: 1,
+      skippedStagedFiles: 0,
+      skippedBaselineFiles: 0,
+    });
+    expect(evaluateAnalysisPolicy(initial, files, "complete-review").failed).toBe(true);
+    expect(evaluateAnalysisPolicy(initial, files, "team", { team: { failOnNewSecrets: false } })).toMatchObject({
+      failed: false,
+      newSecretCount: 1,
+      skippedBaselineFiles: 0,
+    });
+    expect(initial).not.toHaveProperty("baselineComparison");
+  });
+
+  it("applies selected metadata and coverage gates to an initial commit", () => {
+    const files: AnalysisInputFile[] = [
+      { path: ".github/workflows/build.yml", status: "added", kind: "text", content: "name: Build\n" },
+      { path: "large.bin", status: "added", kind: "large" },
+    ];
+    const initial = {
+      ...analyzeChangedFiles(files),
+      coverage: { source: "index" as const, scannedTextFiles: 1, skipped: [{ path: "large.bin", reason: "large" }] },
+      initialCommitAnalysis: true as const,
+    };
+    expect(evaluateAnalysisPolicy(initial, files, "new-secrets")).toMatchObject({ failed: false });
+    expect(evaluateAnalysisPolicy(initial, files, "complete-review")).toMatchObject({
+      failed: true,
+      skippedStagedFiles: 1,
+      skippedBaselineFiles: 0,
+    });
+    expect(
+      evaluateAnalysisPolicy(initial, files, "team", { team: { minSeverity: "medium", categories: ["CI/CD file"] } })
+    ).toMatchObject({ failed: true, severityRiskCount: 1 });
+    expect(() =>
+      evaluateAnalysisPolicy(
+        { ...initial, coverage: { ...initial.coverage, source: "worktree" } },
+        files,
+        "new-secrets"
+      )
+    ).toThrow("requires --staged and --baseline");
+    expect(() =>
+      evaluateAnalysisPolicy({ ...initial, initialCommitAnalysis: undefined }, files, "new-secrets")
+    ).toThrow("requires --staged and --baseline");
+  });
+
   it("retains the exact built-in evaluation contract with configured profiles available", () => {
     const configured = { team: { minSeverity: "low" as const } };
     expect(evaluateAnalysisPolicy(base, staged, "new-secrets", configured)).toEqual({

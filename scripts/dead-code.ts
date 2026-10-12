@@ -105,7 +105,7 @@ function resolveSourceImport(importingFile: string, specifier: string): string |
 
 function packageNameFromSpecifier(specifier: string): string {
   const parts = specifier.split("/");
-  return specifier.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0];
+  return specifier.startsWith("@") ? parts.slice(0, 2).join("/") : (parts[0] ?? specifier);
 }
 
 function normalizeAbsolutePath(filePath: string): string {

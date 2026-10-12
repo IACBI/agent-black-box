@@ -26,7 +26,7 @@ Evidence separates pre-existing paths, observations, final changes and Git metad
 
 Tracked counts describe unstaged changes; staged-only changes may lack counts despite staged stat text. Small untracked text uses estimates; binary/large/missing/non-regular paths record skipped statistics.
 
-Scores are deterministic 0–100 review signals, not vulnerability proof. Supported command patterns and detected values are redacted; false positives/missed secrets remain possible. Recorded/watcherless heuristics differ. Review shared artifacts.
+Scores are deterministic 0–100 review signals, not vulnerability proof. A configured `secretAllowlist` hides matching possible-secret findings; the number hidden is kept as `riskSummary.allowlistedSecretCount` (present only when it is above zero) and shown in `summary.md` and `risks.md`. Supported command patterns and detected values are redacted; false positives/missed secrets remain possible. Recorded/watcherless heuristics differ. Review shared artifacts.
 
 Terminal output is not captured. Durations are monotonic; wall-clock timestamps can reorder after clock changes. Integrity preserves discarded-record counts, overflow, write failures and recovery warnings even when exact losses are unknown.
 
@@ -34,7 +34,7 @@ Terminal output is not captured. Durations are monotonic; wall-clock timestamps 
 
 Report/export selection uses `--session <id>`: `latest`, a full ID or unique prefix. New and legacy IDs work; incomplete/corrupt sessions cannot be selected. History uses metadata/search indices with validated-report fallback. Comparison covers relevant files, risks, commands and HEADs.
 
-`abb risks` and Markdown exports accept `--min-severity`/`--category`; these narrow risk findings only. JSON exports preserve the full report; Markdown bundles the six review reports. Ordinary exports use exclusive creation. `--force` atomically replaces the destination after writing succeeds; a destination link is replaced without changing its target.
+`abb risks` and Markdown exports accept `--min-severity`/`--category`; these narrow risk findings only. JSON exports preserve the full report; Markdown bundles the six review reports; SARIF exports (`--format sarif`) carry one result per risk and per possible-secret location, with the risk filters applied to risks only. `abb pr-comment` renders a size-capped Markdown summary for pull requests and never includes secret values. Ordinary exports use exclusive creation. `--force` atomically replaces the destination after writing succeeds; a destination link is replaced without changing its target.
 
 CLI rollback apply requires the latest completed session, eligible tracked modified/deleted files and typed confirmation. Restore targets HEAD; pre-existing changes are excluded. Snapshots are checked before confirmation and immediately before restore; missing/mismatched snapshots disable apply. Manual snippets use POSIX syntax. See [Security](../SECURITY.md) for library boundaries.
 
@@ -45,6 +45,8 @@ Inline JSON reads stop at 32 MiB. Larger reports retain full JSON and reconstruc
 Structural reads, session verification and pruning validate reconstructed record counts/digests and discarded-line counts. For replay-backed large reports, session verification streams canonical digests including every accepted record field without retaining event/command arrays. Large-report display streaming, completed-state recovery and archive preflight check the report digest/log sizes without replaying records. Streamed files must be regular and match their opened identity. Catalog metadata is not a full integrity scan.
 
 `sessions verify --memory-budget-mb <8–4096> --concurrency <1–16>` optionally bounds encoded inputs/stream working data; see [Usage](USAGE.md) for quota calculation and exclusions. A budget refusal is an operational policy failure, not proof of corruption, and leaves reports/logs intact. Unbudgeted defaults, replay digest semantics, accepted-record limits, and stored report formats are unchanged.
+
+History commands `sessions list`, `browse`, `show` and `compare` also support `--memory-budget-mb`. Budgeted full reads share a quota for stored report/replay JSON and verify the actual parsed report digest plus canonical record/log digests. Catalog and content search refusals remain distinct from corruption; unknown metadata is shown without fabricated counts or chronology. Parsed result objects and comparison reports retained in memory are outside the encoded-input quota.
 
 `status --capture-health`/`status --json` and doctor expose current persisted capture diagnostics without rewriting reports. Counters represent durable marker observations; overflow/write-failure markers do not reveal exact lost-event counts. `inspectionComplete` distinguishes complete inspection from partial evidence, and health excludes in-memory queues and unrecorded losses.
 

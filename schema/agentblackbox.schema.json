@@ -68,6 +68,37 @@
       },
       "description": "Optional named staged CI policies, explicitly selected with --policy. Secret and coverage gates are independent of severity/category filters. Built-in policies cannot be replaced."
     },
+    "secretPatterns": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "pattern"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "pattern": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "ignoreCase": { "type": "boolean", "default": false }
+        }
+      },
+      "description": "Additional JavaScript regular expressions that mark a single line as a possible secret. Patterns that match the empty string, use backreferences, or nest quantifiers such as (a+)+ are rejected. Only the first 4096 characters of a line are matched. Matches are also redacted from recorded commands."
+    },
+    "secretAllowlist": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["reason"],
+        "anyOf": [{ "required": ["path"] }, { "required": ["contains"] }],
+        "properties": {
+          "path": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "contains": { "type": "string", "minLength": 8, "maxLength": 256 },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 200 }
+        }
+      },
+      "description": "Documented exceptions for possible-secret findings. An entry hides a finding when the file matches path (same matching as exclude) and the line contains the text, if given. Suppressed findings are counted in reports. Never put a real secret in contains."
+    },
     "retention": {
       "type": "object",
       "additionalProperties": false,

@@ -14,7 +14,7 @@ export async function mapWithConcurrency<T, R>(
     while (nextIndex < values.length) {
       const index = nextIndex;
       nextIndex += 1;
-      results[index] = await mapper(values[index], index);
+      results[index] = await mapper(values[index] as T, index);
     }
   });
 

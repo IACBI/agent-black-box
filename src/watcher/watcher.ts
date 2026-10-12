@@ -1,11 +1,13 @@
 import chokidar from "chokidar";
 import type { ActiveSession, AgentBlackBoxConfig, FileEvent, FileEventType } from "../types.js";
-import { appendFileEvent, finalizeSession, markCaptureLoss, readStopRequest } from "../session/sessionManager.js";
+import { appendFileEvents, finalizeSession, markCaptureLoss, readStopRequest } from "../session/sessionManager.js";
 import { isPathExcluded, toRepoRelative } from "../utils/paths.js";
 import { formatTerminalValue } from "../utils/terminal.js";
 
 const WATCH_EVENTS = new Set<string>(["add", "change", "unlink"]);
 export const MAX_PENDING_FILE_EVENTS = 10_000;
+/** Events written per append. Events that arrive while a write is in flight are coalesced into the next one. */
+export const FILE_EVENT_BATCH_SIZE = 256;
 
 export async function runWatcher(session: ActiveSession, config: AgentBlackBoxConfig): Promise<void> {
   let finalized = false;
@@ -114,15 +116,14 @@ export async function runWatcher(session: ActiveSession, config: AgentBlackBoxCo
 
     eventFlushPromise = (async () => {
       while (pendingFileEvents.length > 0) {
-        const event = pendingFileEvents.shift();
-        if (!event) {
-          continue;
-        }
+        const batch = pendingFileEvents.splice(0, FILE_EVENT_BATCH_SIZE);
         try {
-          await appendFileEvent(session, event);
+          await appendFileEvents(session, batch);
         } catch (error) {
-          failedFileEventWriteCount += 1;
-          if (failedFileEventWriteCount === 1) {
+          // A failed append may have persisted part of the batch; counting all of it errs on the side of reporting loss.
+          const firstFailure = failedFileEventWriteCount === 0;
+          failedFileEventWriteCount += batch.length;
+          if (firstFailure) {
             lossMarkerWrites.push(recordCaptureLoss("writeFailure"));
           }
           console.error(`Failed to record file event: ${formatTerminalValue(String((error as Error).message))}`);

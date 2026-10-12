@@ -8,9 +8,10 @@ export async function createTempDir(prefix = "abb-"): Promise<string> {
 }
 
 export async function removeTempDir(dir: string): Promise<void> {
-  await rm(dir, { recursive: true, force: true });
+  // Windows can hold handles briefly after a child process or watcher exits.
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 }
 
 export function initGitRepo(dir: string): void {
-  execFileSync("git", ["init"], { cwd: dir, stdio: "ignore" });
+  execFileSync("git", ["init", "--quiet"], { cwd: dir, stdio: "ignore" });
 }

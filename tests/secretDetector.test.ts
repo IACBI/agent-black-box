@@ -27,6 +27,43 @@ describe("secret detector", () => {
     }
   });
 
+  it.each([
+    `OPENAI_API_KEY=${"a".repeat(12)}`,
+    `AWS_SECRET_ACCESS_KEY=${"a".repeat(12)}`,
+    `export DB_PASSWORD="${"a".repeat(12)}"`,
+    `{"apiKey": "${"a".repeat(12)}"}`,
+    `'password': '${"a".repeat(12)}'`,
+  ])("detects secret assignments whose keyword is part of a longer name or quoted key: %#", (line) => {
+    const findings = detectSecretsInLine("settings.txt", line, 1);
+
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.reason).toBe("Possible Secret assignment-like value detected.");
+    expect(JSON.stringify(findings)).not.toContain("a".repeat(12));
+  });
+
+  it.each([
+    `max_token_count=${"1".repeat(12)}`,
+    `tokenizer = "${"a".repeat(12)}"`,
+    `password_hint=${"a".repeat(12)}`,
+    "MyToken=short",
+  ])("does not flag keywords that only prefix or suffix a different name: %#", (line) => {
+    expect(detectSecretsInLine("settings.txt", line, 1)).toEqual([]);
+  });
+
+  it("detects private key block headers without echoing them", () => {
+    for (const header of [
+      "-----BEGIN PRIVATE KEY-----",
+      "-----BEGIN RSA PRIVATE KEY-----",
+      "-----BEGIN OPENSSH PRIVATE KEY-----",
+    ]) {
+      const findings = detectSecretsInLine("id_key", header, 1);
+
+      expect(findings.map((finding) => finding.reason)).toEqual(["Possible Private key block detected."]);
+      expect(JSON.stringify(findings)).not.toContain("BEGIN");
+    }
+    expect(detectSecretsInLine("id.pub", "-----BEGIN PUBLIC KEY-----", 1)).toEqual([]);
+  });
+
   it("enforces byte limits and path boundaries while preserving line numbers and deduplicating", async () => {
     const dir = await createTempDir();
     try {

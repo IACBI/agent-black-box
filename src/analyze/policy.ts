@@ -1,6 +1,7 @@
 import type { AnalysisInputFile, WatcherlessAnalysisResult } from "./analyzer.js";
-import type { ConfiguredAnalysisPolicies, ConfiguredAnalysisPolicy, RiskSeverity } from "../types.js";
+import type { ConfiguredAnalysisPolicies, ConfiguredAnalysisPolicy } from "../types.js";
 import { normalizeAnalysisPolicies } from "../config/analysisPolicies.js";
+import { severityRank } from "../utils/severity.js";
 
 export type AnalysisPolicyProfile = string;
 
@@ -36,7 +37,7 @@ export function evaluateAnalysisPolicy(
   profile: AnalysisPolicyProfile,
   configuredPolicies?: ConfiguredAnalysisPolicies
 ): AnalysisPolicyEvaluation {
-  if (result.coverage?.source !== "index" || !result.baselineComparison) {
+  if (result.coverage?.source !== "index" || (!result.baselineComparison && result.initialCommitAnalysis !== true)) {
     throw new Error("--policy requires --staged and --baseline.");
   }
 
@@ -44,7 +45,7 @@ export function evaluateAnalysisPolicy(
   const skippedStagedFiles = stagedFiles.filter(
     (file) => file.status !== "deleted" && (file.kind !== "text" || file.content === undefined)
   ).length;
-  const skippedBaselineFiles = result.baselineComparison.skipped.length;
+  const skippedBaselineFiles = result.baselineComparison?.skipped.length ?? 0;
   const policies = validateConfiguredPolicies(configuredPolicies);
   const builtInProfile = profile === "new-secrets" || profile === "complete-review";
   let configuredPolicy: ConfiguredAnalysisPolicy | undefined;
@@ -86,15 +87,4 @@ function validateConfiguredPolicies(value: ConfiguredAnalysisPolicies | undefine
     throw new Error(`Invalid analysisPolicies: ${errors.join(" ")}`);
   }
   return normalized.analysisPolicies ?? {};
-}
-
-function severityRank(severity: RiskSeverity): number {
-  switch (severity) {
-    case "low":
-      return 1;
-    case "medium":
-      return 2;
-    case "high":
-      return 3;
-  }
 }

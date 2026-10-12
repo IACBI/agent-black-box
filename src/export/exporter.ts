@@ -9,10 +9,12 @@ import {
   generateRollbackMarkdown,
   generateSummaryMarkdown,
   generateTimelineMarkdown,
+  filterRiskFindings,
   type RiskReportFilter,
 } from "../reports/markdown.js";
+import { toSessionSarif } from "../reports/sessionSarif.js";
 
-export type ExportFormat = "json" | "markdown";
+export type ExportFormat = "json" | "markdown" | "sarif";
 
 export interface SessionExportOptions {
   format: ExportFormat;
@@ -24,11 +26,11 @@ export interface WriteExportOptions {
 }
 
 export function parseExportFormat(format: string): ExportFormat {
-  if (format === "json" || format === "markdown") {
+  if (format === "json" || format === "markdown" || format === "sarif") {
     return format;
   }
 
-  throw new Error("Export format must be either `json` or `markdown`.");
+  throw new Error("Export format must be one of `markdown`, `json` or `sarif`.");
 }
 
 export function parseRiskSeverity(value: string | undefined): RiskSeverity | undefined {
@@ -46,6 +48,12 @@ export function parseRiskSeverity(value: string | undefined): RiskSeverity | und
 export function renderSessionExport(report: SessionReport, options: SessionExportOptions): string {
   if (options.format === "json") {
     return `${JSON.stringify(report, null, 2)}\n`;
+  }
+
+  if (options.format === "sarif") {
+    // The risk filter narrows risk findings only; possible secrets are always reported.
+    const filtered = { ...report, risks: filterRiskFindings(report.risks, options.riskFilter) };
+    return `${JSON.stringify(toSessionSarif(filtered), null, 2)}\n`;
   }
 
   return [
@@ -76,7 +84,7 @@ export async function writeSessionExport(
     if (options.force) {
       await writeTextFileAtomic(resolvedPath, content);
     } else {
-      await writeFile(resolvedPath, content, { encoding: "utf8", flag: "wx" });
+      await writeFile(resolvedPath, content, { encoding: "utf8", flag: "wx", mode: 0o600 });
     }
   } catch (error) {
     if (!options.force && isFileExistsError(error)) {
