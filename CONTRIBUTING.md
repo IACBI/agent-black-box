@@ -11,7 +11,7 @@ pnpm install --frozen-lockfile
 pnpm check
 ```
 
-`pnpm check` runs formatting, ESLint, TypeScript, dead-code checks, build, and coverage tests. Run `pnpm perf` when changing parsing, file inspection, analysis, or report generation. CI tests Node.js 22 and 24 on Linux, Windows, and macOS.
+`pnpm check` runs formatting, ESLint, TypeScript (`src` and `scripts` with `noUncheckedIndexedAccess`; `tests/tsconfig.json` relaxes only that flag), dead-code checks, build, and coverage tests. End-to-end tests run the compiled CLI that `tests/globalSetup.ts` builds once per run, and `tests/setup.ts` isolates Git from your global configuration. Run `pnpm perf` when changing parsing, file inspection, analysis, or report generation. CI tests Node.js 22 and 24 on Linux, Windows, and macOS.
 
 Before opening a pull request:
 

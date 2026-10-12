@@ -22,3 +22,8 @@ export * from "./utils/fileInspection.js";
 export * from "./utils/concurrency.js";
 export * from "./utils/files.js";
 export * from "./utils/paths.js";
+export * from "./hooks/preCommitHook.js";
+export * from "./reports/prComment.js";
+export * from "./reports/sarif.js";
+export * from "./reports/sessionSarif.js";
+export * from "./risks/secretRules.js";

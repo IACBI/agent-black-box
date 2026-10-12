@@ -3,6 +3,7 @@ import { createReadStream } from "node:fs";
 import { lstat } from "node:fs/promises";
 import path from "node:path";
 import type { SessionReport } from "../types.js";
+import { readFileLimited } from "../utils/files.js";
 
 export const INLINE_REPORT_BYTES = 32 * 1024 * 1024;
 export const MAX_REPORT_BYTES = 256 * 1024 * 1024;
@@ -32,6 +33,66 @@ export function assertMaterializationBudget(filePath: string, fileBytes: number,
   if (maxBytes !== undefined && fileBytes > maxBytes) {
     throw new MaterializationBudgetError(filePath, fileBytes, maxBytes);
   }
+}
+
+/** Preflight a JSON quota and also bound the actual read if the file grows after inspection. */
+export async function readJsonFileWithinBudget<T>(
+  filePath: string,
+  formatLimitBytes: number,
+  maxMaterializedBytes?: number
+): Promise<T> {
+  const bytes = await readBufferWithinBudget(filePath, formatLimitBytes, maxMaterializedBytes);
+  return JSON.parse(bytes.toString("utf8")) as T;
+}
+
+export async function readBufferWithinBudget(
+  filePath: string,
+  formatLimitBytes: number,
+  maxMaterializedBytes?: number
+): Promise<Buffer> {
+  validateMaterializationLimit(maxMaterializedBytes);
+  if (!Number.isSafeInteger(formatLimitBytes) || formatLimitBytes < 0) {
+    throw new Error("File size limit must be a non-negative safe integer.");
+  }
+  if (maxMaterializedBytes === undefined) {
+    return readFileLimited(filePath, formatLimitBytes);
+  }
+  const details = await lstat(filePath);
+  if (!details.isFile()) {
+    throw new Error(`${path.basename(filePath)} is not a regular file.`);
+  }
+  if (details.size > formatLimitBytes) {
+    throw jsonSizeLimitError(filePath, formatLimitBytes);
+  }
+  assertMaterializationBudget(filePath, details.size, maxMaterializedBytes);
+  const readLimit = Math.min(formatLimitBytes, maxMaterializedBytes);
+  try {
+    return await readFileLimited(filePath, readLimit);
+  } catch (error) {
+    const limitLabel = readLimit % (1024 * 1024) === 0 ? `${readLimit / 1024 / 1024} MiB` : `${readLimit} bytes`;
+    if (
+      maxMaterializedBytes < formatLimitBytes &&
+      error instanceof Error &&
+      error.message === `${path.basename(filePath)} exceeds the ${limitLabel} size limit.`
+    ) {
+      // Keep quota failures distinct from corruption when a regular file grew during the bounded read.
+      const current = await lstat(filePath).catch(() => undefined);
+      if (current?.isFile()) {
+        if (current.size > formatLimitBytes) {
+          throw jsonSizeLimitError(filePath, formatLimitBytes);
+        }
+        if (current.size > maxMaterializedBytes) {
+          throw new MaterializationBudgetError(filePath, current.size, maxMaterializedBytes);
+        }
+      }
+    }
+    throw error;
+  }
+}
+
+function jsonSizeLimitError(filePath: string, maxBytes: number): Error {
+  const label = maxBytes % (1024 * 1024) === 0 ? `${maxBytes / 1024 / 1024} MiB` : `${maxBytes} bytes`;
+  return new Error(`${path.basename(filePath)} exceeds the ${label} size limit.`);
 }
 
 export interface ReportReplay {
@@ -65,17 +126,33 @@ export function digestText(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-export async function digestRegularFile(filePath: string): Promise<{ bytes: number; digest: string }> {
+export function digestBuffer(value: Uint8Array): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+export async function digestRegularFile(
+  filePath: string,
+  maxBytes?: number
+): Promise<{ bytes: number; digest: string }> {
+  if (maxBytes !== undefined && (!Number.isSafeInteger(maxBytes) || maxBytes < 0)) {
+    throw new Error("Digest size limit must be a non-negative safe integer.");
+  }
   const details = await lstat(filePath);
   if (!details.isFile()) {
     throw new Error(`${path.basename(filePath)} is not a regular file.`);
+  }
+  if (maxBytes !== undefined && details.size > maxBytes) {
+    throw new Error(`${path.basename(filePath)} exceeds the ${maxBytes} byte digest size limit.`);
   }
 
   const hash = createHash("sha256");
   let bytes = 0;
   for await (const chunk of createReadStream(filePath, { highWaterMark: FILE_DIGEST_STREAM_BYTES })) {
-    hash.update(chunk);
     bytes += chunk.length;
+    if (maxBytes !== undefined && bytes > maxBytes) {
+      throw new Error(`${path.basename(filePath)} exceeds the ${maxBytes} byte digest size limit.`);
+    }
+    hash.update(chunk);
   }
   if (bytes !== details.size) {
     throw new Error(`${path.basename(filePath)} changed during verification.`);

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import type { CommandEvent, FileEvent } from "../types.js";
 import { pathExists } from "../utils/files.js";
+import { isRecord } from "../utils/records.js";
 
 const MAX_NDJSON_LINE_BYTES = 1024 * 1024;
 const NDJSON_READ_CHUNK_BYTES = 64 * 1024;
@@ -195,10 +196,6 @@ async function scanNdjsonRecords<T>(
   }
 
   return { recordCount, discardedLines, warnings };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isIsoDate(value: unknown): value is string {

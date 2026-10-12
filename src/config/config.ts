@@ -1,10 +1,12 @@
-import { access, realpath } from "node:fs/promises";
+import { realpath } from "node:fs/promises";
 import path from "node:path";
 import type { AgentBlackBoxConfig, ConfigLoadResult } from "../types.js";
 import { CONFIG_FILE_NAME, CONFIG_SCHEMA_URL, CURRENT_CONFIG_VERSION, DEFAULT_CONFIG } from "./defaults.js";
 import { normalizeAnalysisPolicies } from "./analysisPolicies.js";
+import { normalizeSecretRules } from "./secretRules.js";
 import { pathExists, readTextFileLimited, writeTextFileAtomic } from "../utils/files.js";
 import { isPathInside } from "../utils/paths.js";
+import { isRecord } from "../utils/records.js";
 
 const MAX_CONFIG_BYTES = 1024 * 1024;
 
@@ -17,12 +19,7 @@ export function getConfigPath(repoRoot: string): string {
 }
 
 export async function configExists(repoRoot: string): Promise<boolean> {
-  try {
-    await access(getConfigPath(repoRoot));
-    return true;
-  } catch {
-    return false;
-  }
+  return pathExists(getConfigPath(repoRoot));
 }
 
 export async function createDefaultConfig(repoRoot: string): Promise<string> {
@@ -176,6 +173,8 @@ function normalizeConfig(parsed: unknown): Omit<ConfigLoadResult, "configPath" |
     "maxFileSizeKb",
     "retention",
     "analysisPolicies",
+    "secretPatterns",
+    "secretAllowlist",
   ]);
   for (const key of Object.keys(parsed)) {
     if (!knownKeys.has(key)) {
@@ -202,6 +201,7 @@ function normalizeConfig(parsed: unknown): Omit<ConfigLoadResult, "configPath" |
     maxFileSizeKb: maxFileSizeOrDefault(parsed.maxFileSizeKb, warnings),
     ...normalizeRetention(parsed.retention, errors),
     ...normalizeAnalysisPolicies(parsed.analysisPolicies, errors),
+    ...normalizeSecretRules(parsed.secretPatterns, parsed.secretAllowlist, errors),
   };
 
   return {
@@ -253,10 +253,6 @@ function normalizeRetention(value: unknown, errors: string[]): Pick<AgentBlackBo
       ...(value.archiveDir === undefined ? {} : { archiveDir: String(value.archiveDir) }),
     },
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function stringOrDefault(value: unknown, fallback: string, name: string, warnings: string[]): string {

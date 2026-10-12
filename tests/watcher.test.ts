@@ -25,7 +25,7 @@ const mocks = vi.hoisted(() => {
   };
 
   return {
-    appendFileEvent: vi.fn(async () => undefined),
+    appendFileEvents: vi.fn(async (_session: unknown, _events: Array<{ path: string }>) => undefined),
     markCaptureLoss: vi.fn(async () => undefined),
     finalizeSession: vi.fn(async () => ({ id: "session-test", sessionDir: "C:/repo/.agent-black-box/session-test" })),
     readStopRequest: vi.fn(),
@@ -34,7 +34,7 @@ const mocks = vi.hoisted(() => {
     reset() {
       listeners.clear();
       watcher.close.mockClear();
-      this.appendFileEvent.mockClear();
+      this.appendFileEvents.mockClear();
       this.markCaptureLoss.mockClear();
       this.finalizeSession.mockClear();
       this.readStopRequest.mockReset();
@@ -45,13 +45,13 @@ const mocks = vi.hoisted(() => {
 
 vi.mock("chokidar", () => ({ default: { watch: mocks.watch } }));
 vi.mock("../src/session/sessionManager.js", () => ({
-  appendFileEvent: mocks.appendFileEvent,
+  appendFileEvents: mocks.appendFileEvents,
   markCaptureLoss: mocks.markCaptureLoss,
   finalizeSession: mocks.finalizeSession,
   readStopRequest: mocks.readStopRequest,
 }));
 
-import { MAX_PENDING_FILE_EVENTS, runWatcher } from "../src/watcher/watcher.js";
+import { FILE_EVENT_BATCH_SIZE, MAX_PENDING_FILE_EVENTS, runWatcher } from "../src/watcher/watcher.js";
 
 const session: ActiveSession = {
   id: "session-test",
@@ -86,11 +86,10 @@ describe("watcher", () => {
     await vi.advanceTimersByTimeAsync(500);
     await completion;
 
-    expect(mocks.appendFileEvent).toHaveBeenCalledTimes(1);
-    expect(mocks.appendFileEvent).toHaveBeenCalledWith(
-      session,
-      expect.objectContaining({ eventType: "change", path: "src/index.ts" })
-    );
+    expect(mocks.appendFileEvents).toHaveBeenCalledTimes(1);
+    expect(mocks.appendFileEvents).toHaveBeenCalledWith(session, [
+      expect.objectContaining({ eventType: "change", path: "src/index.ts" }),
+    ]);
     expect(mocks.finalizeSession).toHaveBeenCalledWith(session, DEFAULT_CONFIG, "stop-request", {
       droppedFileEvents: 0,
       failedFileEventWrites: 0,
@@ -102,7 +101,7 @@ describe("watcher", () => {
     const controlSession = { ...session, id: "session-test\u001b[2J\n", sessionDir: "/repo/session\u009b31m\n" };
     const fileError = new Error("write failed\u001b[2J\n");
     const captureError = new Error("capture failed\u009b31m\n");
-    mocks.appendFileEvent.mockRejectedValueOnce(fileError);
+    mocks.appendFileEvents.mockRejectedValueOnce(fileError);
     mocks.markCaptureLoss.mockRejectedValueOnce(captureError);
     mocks.finalizeSession.mockResolvedValueOnce({ id: controlSession.id, sessionDir: controlSession.sessionDir });
     mocks.readStopRequest.mockResolvedValue({ sessionId: controlSession.id, requestedAt: "2026-01-01T00:00:01.000Z" });
@@ -118,10 +117,9 @@ describe("watcher", () => {
     expect(console.log).toHaveBeenCalledWith('Reports written to "/repo/session\\u009b31m\\n"');
     expect(console.error).toHaveBeenCalledWith(`Failed to record file event: ${JSON.stringify(fileError.message)}`);
     expect(console.error).toHaveBeenCalledWith('Failed to record capture loss: "capture failed\\u009b31m\\n"');
-    expect(mocks.appendFileEvent).toHaveBeenCalledWith(
-      controlSession,
-      expect.objectContaining({ path: "src/a\u001b[2J\n.ts" })
-    );
+    expect(mocks.appendFileEvents).toHaveBeenCalledWith(controlSession, [
+      expect.objectContaining({ path: "src/a\u001b[2J\n.ts" }),
+    ]);
     expect(mocks.finalizeSession).toHaveBeenCalledWith(
       controlSession,
       DEFAULT_CONFIG,
@@ -209,19 +207,83 @@ describe("watcher", () => {
     await vi.advanceTimersByTimeAsync(500);
     await completion;
 
-    expect(mocks.appendFileEvent.mock.calls.length).toBeLessThanOrEqual(MAX_PENDING_FILE_EVENTS + 1);
+    // The first event is written immediately; the queue then holds at most MAX_PENDING_FILE_EVENTS more.
+    const written = mocks.appendFileEvents.mock.calls.flatMap(([, events]) => events);
+    expect(written).toHaveLength(MAX_PENDING_FILE_EVENTS + 1);
+    expect(written.map((event) => event.path)).toEqual(
+      Array.from({ length: MAX_PENDING_FILE_EVENTS + 1 }, (_, index) => `src/file-${index}.ts`)
+    );
     expect(mocks.markCaptureLoss).toHaveBeenCalledWith(session, "overflow");
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining("watcher queue reached its limit"));
     expect(mocks.finalizeSession).toHaveBeenCalledWith(
       session,
       DEFAULT_CONFIG,
       "stop-request",
-      expect.objectContaining({ droppedFileEvents: expect.any(Number) })
+      expect.objectContaining({ droppedFileEvents: 9, failedFileEventWrites: 0 })
     );
   });
 
+  it("writes a burst in ordered batches no larger than the batch size", async () => {
+    mocks.readStopRequest.mockResolvedValue({ sessionId: session.id, requestedAt: "2026-01-01T00:00:01.000Z" });
+    const completion = runWatcher(session, DEFAULT_CONFIG);
+    const total = FILE_EVENT_BATCH_SIZE * 2 + 50;
+
+    for (let index = 0; index < total; index += 1) {
+      mocks.watcher.emit("all", "change", `src/file-${index}.ts`);
+    }
+
+    await vi.advanceTimersByTimeAsync(500);
+    await completion;
+
+    const batches = mocks.appendFileEvents.mock.calls.map(([, events]) => events);
+    // The event that starts a flush goes out alone; everything that arrives meanwhile is coalesced.
+    expect(batches[0]).toHaveLength(1);
+    expect(batches.length).toBeLessThan(total);
+    expect(Math.max(...batches.map((batch) => batch.length))).toBe(FILE_EVENT_BATCH_SIZE);
+    expect(batches.flat().map((event) => event.path)).toEqual(
+      Array.from({ length: total }, (_, index) => `src/file-${index}.ts`)
+    );
+    expect(mocks.finalizeSession).toHaveBeenCalledWith(session, DEFAULT_CONFIG, "stop-request", {
+      droppedFileEvents: 0,
+      failedFileEventWrites: 0,
+    });
+  });
+
+  it("counts every event of a failed batch, records the loss once, and keeps writing later events", async () => {
+    mocks.readStopRequest.mockResolvedValue({ sessionId: session.id, requestedAt: "2026-01-01T00:00:01.000Z" });
+    let releaseFirstWrite: (() => void) | undefined;
+    mocks.appendFileEvents.mockImplementationOnce(
+      () => new Promise<undefined>((resolve) => (releaseFirstWrite = () => resolve(undefined)))
+    );
+    mocks.appendFileEvents.mockRejectedValueOnce(new Error("disk unavailable"));
+    const completion = runWatcher(session, DEFAULT_CONFIG);
+
+    mocks.watcher.emit("all", "change", "src/first.ts");
+    for (const name of ["a", "b", "c", "d"]) {
+      mocks.watcher.emit("all", "change", `src/${name}.ts`);
+    }
+    releaseFirstWrite?.();
+    await vi.advanceTimersByTimeAsync(10);
+    mocks.watcher.emit("all", "change", "src/later.ts");
+
+    await vi.advanceTimersByTimeAsync(500);
+    await completion;
+
+    expect(mocks.appendFileEvents.mock.calls.map(([, events]) => events.map((event) => event.path))).toEqual([
+      ["src/first.ts"],
+      ["src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts"],
+      ["src/later.ts"],
+    ]);
+    expect(mocks.markCaptureLoss).toHaveBeenCalledTimes(1);
+    expect(mocks.markCaptureLoss).toHaveBeenCalledWith(session, "writeFailure");
+    expect(mocks.finalizeSession).toHaveBeenCalledWith(session, DEFAULT_CONFIG, "stop-request", {
+      droppedFileEvents: 0,
+      failedFileEventWrites: 4,
+    });
+  });
+
   it("includes failed file-event writes in finalization diagnostics", async () => {
-    mocks.appendFileEvent.mockRejectedValueOnce(new Error("disk unavailable"));
+    mocks.appendFileEvents.mockRejectedValueOnce(new Error("disk unavailable"));
     mocks.readStopRequest.mockResolvedValue({ sessionId: session.id, requestedAt: "2026-01-01T00:00:01.000Z" });
     const completion = runWatcher(session, DEFAULT_CONFIG);
     mocks.watcher.emit("all", "change", "src/index.ts");

@@ -1,5 +1,6 @@
 import type { SessionCatalogEntry } from "./sessionCatalog.js";
 import { escapeTerminalControls, formatTerminalValue } from "../utils/terminal.js";
+import { MaterializationBudgetError } from "./reportStorage.js";
 
 export interface SessionBrowserIO {
   ask(prompt: string): Promise<string>;
@@ -45,7 +46,14 @@ export async function browseSessionCatalog(
             `Session ${formatTerminalValue(selected.id)} is ${selected.state}: ${formatTerminalValue(selected.warning ?? "no finalized report")}.\n`
           );
         } else {
-          io.write(`${escapeTerminalControls(await showReport(selected))}\n`);
+          try {
+            io.write(`${escapeTerminalControls(await showReport(selected))}\n`);
+          } catch (error) {
+            if (!(error instanceof MaterializationBudgetError)) {
+              throw error;
+            }
+            io.write(`${formatTerminalValue(error.message)}\n`);
+          }
         }
         continue;
       }
@@ -62,8 +70,9 @@ function renderSessionBrowserPage(
 ): string {
   const lines = [`Agent Black Box Sessions — page ${page + 1}/${pageCount} (${total} matches)`];
   entries.forEach((entry, index) => {
-    const summary =
-      entry.state === "complete"
+    const summary = entry.metadataUnavailable
+      ? formatTerminalValue(entry.warning ?? "Catalog metadata unavailable under the working-data policy.")
+      : entry.state === "complete"
         ? `${entry.startedAt ?? "unknown time"} | risk ${entry.riskScore ?? 0}/100 (${entry.maxRiskSeverity ?? "none"})`
         : formatTerminalValue(entry.warning ?? entry.startedAt ?? "no finalized report");
     lines.push(`${index + 1}. ${formatTerminalValue(entry.id)} [${entry.state}] | ${summary}`);

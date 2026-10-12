@@ -8,6 +8,7 @@ import type {
   RiskFinding,
   SecretFinding,
   SessionBaseline,
+  SessionChangeEvidence,
   SessionReport,
 } from "../types.js";
 import { summarizeRisks } from "../risks/riskDetector.js";
@@ -23,6 +24,7 @@ import {
   markdownInlineCode,
   markdownTableCode,
 } from "../utils/markdown.js";
+import { severityRank } from "../utils/severity.js";
 import { formatTerminalValue, renderPosixCommand } from "../utils/terminal.js";
 import { toLiteralGitPathspec } from "../rollback/rollback.js";
 
@@ -49,9 +51,15 @@ export function buildSessionReport(
     discardedCommandEventLines: 0,
   },
   baseline: SessionBaseline | null = null,
-  committedChanges: ChangedFile[] = []
+  committedChanges: ChangedFile[] = [],
+  options: {
+    /** Evidence the caller already derived from the same inputs; avoids computing it twice. */
+    changeEvidence?: SessionChangeEvidence;
+    /** Possible-secret findings hidden by the configured allowlist. */
+    allowlistedSecretCount?: number;
+  } = {}
 ): SessionReport {
-  const changeEvidence = buildChangeEvidence(baseline, events, git, committedChanges);
+  const changeEvidence = options.changeEvidence ?? buildChangeEvidence(baseline, events, git, committedChanges);
 
   return {
     id: active.id,
@@ -71,7 +79,7 @@ export function buildSessionReport(
     changeEvidence,
     git,
     risks,
-    riskSummary: summarizeRisks(risks, possibleSecrets),
+    riskSummary: summarizeRisks(risks, possibleSecrets, options.allowlistedSecretCount),
     possibleSecrets,
     integrity,
   };
@@ -208,7 +216,7 @@ export function generateSummaryMarkdown(report: SessionReport): string {
 - Command groups: ${commandGroupCount}
 - Command phases: ${commandPhaseCount}
 - File watcher events: ${report.events.length}
-- Possible secrets: ${report.possibleSecrets.length}
+- Possible secrets: ${report.possibleSecrets.length}${formatAllowlistLine(report)}
 - Risks: ${highRisks} high, ${mediumRisks} medium, ${lowRisks} low
 - Risk score: ${report.riskSummary.score}/100 (${report.riskSummary.maxSeverity})
 
@@ -339,7 +347,7 @@ ${filterText}
 - High: ${report.riskSummary.severityCounts.high}
 - Medium: ${report.riskSummary.severityCounts.medium}
 - Low: ${report.riskSummary.severityCounts.low}
-- Possible secrets: ${report.riskSummary.possibleSecretCount}
+- Possible secrets: ${report.riskSummary.possibleSecretCount}${formatAllowlistLine(report)}
 
 ## Risky files changed
 
@@ -583,16 +591,9 @@ function formatEvidenceValue(value: boolean | null | undefined): string {
   return "unknown";
 }
 
-function severityRank(severity: RiskFinding["severity"]): number {
-  if (severity === "high") {
-    return 3;
-  }
-
-  if (severity === "medium") {
-    return 2;
-  }
-
-  return 1;
+function formatAllowlistLine(report: SessionReport): string {
+  const hidden = report.riskSummary.allowlistedSecretCount;
+  return hidden ? `\n- Possible secrets hidden by the configured allowlist: ${hidden}` : "";
 }
 
 function describeRiskFilter(filter: RiskReportFilter): string {
