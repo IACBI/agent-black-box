@@ -1,4 +1,5 @@
 import path from "node:path";
+import { hasKnownCredentialMaterial } from "../risks/secretDetector.js";
 import type { ChangedFile, RiskSeverity } from "../types.js";
 import {
   isLineAllowlisted,
@@ -315,7 +316,12 @@ function detectPossibleSecrets(
 }
 
 function looksLikeSecret(line: string, rules: CompiledSecretRules): boolean {
-  if (PRIVATE_KEY_HEADER.test(line) || TOKEN_VALUE.test(line) || matchCustomSecretPatterns(rules, line).length > 0) {
+  if (
+    hasKnownCredentialMaterial(line) ||
+    PRIVATE_KEY_HEADER.test(line) ||
+    TOKEN_VALUE.test(line) ||
+    matchCustomSecretPatterns(rules, line).length > 0
+  ) {
     return true;
   }
 

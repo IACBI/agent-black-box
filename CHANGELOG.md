@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added optional Ed25519 evidence sealing with encrypted external signing keys and independently supplied trusted public keys; signature-required verification rejects unsigned replacements without changing existing evidence formats.
+- Expanded shared credential signals and command redaction, isolated custom regex execution behind time and memory limits, and documented authenticity boundaries and detection limitations.
 - Bound large-report replay data to streamed canonical JSON core and record digests, including coordinated replay/log inconsistencies, without changing stored report formats.
 - Added possible-secret location/count comparisons that omit credential values and stored excerpts.
 - Added explicit `sessions verify --check-indexes` and `--repair-indexes` for derived metadata/search consistency, with canonical evidence, ownership, link, and budget guards.

@@ -69,7 +69,7 @@ Both detectors (recorded sessions and `analyze`) and command redaction read two 
 }
 ```
 
-**Patterns** are JavaScript regular expressions matched against one line at a time (only the first 4,096 characters of a line). A match is reported as `Possible <name> detected.` without the matched text, and the same expression redacts matches from recorded commands, labels, groups, and phases. Up to 32 patterns of at most 256 characters are accepted. A pattern is refused when it is not a valid expression, matches the empty string, uses a backreference, or nests a quantifier inside a quantified group such as `(a+)+`. That last check is a best-effort screen against catastrophic backtracking, not a proof, so keep patterns simple and anchored by a literal prefix.
+**Patterns** are JavaScript regular expressions matched against one line at a time (only the first 4,096 characters of a line). A match is reported as `Possible <name> detected.` without the matched text, and the same expression redacts matches from recorded commands, labels, groups, and phases. Up to 32 patterns of at most 256 characters are accepted. A pattern is refused when it is not a valid expression, matches the empty string, uses a backreference, or nests a quantifier inside a quantified group such as `(a+)+`. That last check is a best-effort screen against catastrophic backtracking, not a proof, so keep patterns simple and anchored by a literal prefix. Execution also has an isolated worker deadline and memory limits; exhaustion fails scanning explicitly and redacts the whole input.
 
 **Allowlist** entries hide findings with a recorded reason. An entry needs `path`, `contains`, or both, and always a `reason`. `path` uses the same case-insensitive path and segment matching as `exclude`; `contains` is literal text the line must include (8 to 256 characters, so a short value cannot allow far too much). When both are present, both must match. Never put a real secret in `contains`: the file is normally committed. Up to 256 entries are accepted.
 
@@ -194,7 +194,7 @@ Worktree, staged, and baseline CLI reads are capped at the smaller of `maxFileSi
 
 Use `abb analyze --staged --baseline HEAD --policy complete-review --max-total-bytes 16777216` to limit retained content to 16 MiB across staged and needed baseline text. Admissions follow input order; binary, missing, and oversized files do not consume the retained-content quota. A refused file remains visible in coverage with a budget reason, so `complete-review` fails when required content cannot fit. Git blob sizes are checked before content requests, avoiding oversized blob-body reads. The option budgets encoded UTF-8 content, including replacement-character expansion; transient per-file buffers, parsed objects, decoded strings, and runtime overhead are additional memory. It is not a heap/RSS cap. Defaults remain unchanged without the option.
 
-Recorded-session detection and `analyze` use different heuristics. For example, recording can flag an environment-variable password assignment that analysis excludes, while analysis recognizes some token forms (such as `github_pat_`) that recording does not. Both recognise private-key headers, and both apply your `secretPatterns` and `secretAllowlist`. Neither is a comprehensive security scanner.
+Recorded-session detection and `analyze` use different heuristics. For example, recording can flag an environment-variable password assignment that analysis excludes, while analysis retains different assignment-value exclusions and token-length thresholds. Provider and structured credential signals are shared. Both recognise private-key headers, and both apply your `secretPatterns` and `secretAllowlist`. Neither is a comprehensive security scanner.
 
 ## Read and export reports
 
@@ -304,3 +304,7 @@ Archive requires `--to` or `retention.archiveDir`, outside the session root. A d
 | Skipped analysis content              | Read coverage reasons; use `complete-review` when a partial CI review must fail                   |
 | Refused rollback                      | Review changes since finalization and the eligible-file list; restore manually if appropriate     |
 | Windows command not found             | Put its `.cmd`/`.bat` directory on PATH, or pass an explicit repository-relative or absolute path |
+
+## Evidence signing and credential limits
+
+Use `abb sessions sign <id> --private-key <encrypted-pem>` with the passphrase in `ABB_SIGNING_PASSPHRASE` (or select an environment variable with `--passphrase-env <name>`). See [Evidence security](EVIDENCE-SECURITY.md) for optional `abb sessions sign`, signature-required `abb sessions verify --trusted-key`, key provisioning requirements, redaction resource bounds, and the precise trust guarantees and remaining limitations.

@@ -1,3 +1,4 @@
+import { evaluateSecretPatterns } from "./secretPatternEvaluator.js";
 import { normalizeSecretRules } from "../config/secretRules.js";
 import type { AgentBlackBoxConfig } from "../types.js";
 import { pathMatchesPattern } from "../utils/paths.js";
@@ -55,7 +56,7 @@ export function matchCustomSecretPatterns(rules: CompiledSecretRules, line: stri
     return [];
   }
   const bounded = line.length > MAX_CUSTOM_PATTERN_LINE_LENGTH ? line.slice(0, MAX_CUSTOM_PATTERN_LINE_LENGTH) : line;
-  return rules.patterns.filter((pattern) => pattern.test.test(bounded)).map((pattern) => pattern.name);
+  return evaluateSecretPatterns(rules, bounded, false);
 }
 
 /** True when an allowlist entry covers this file and line. An entry with both fields needs both to match. */
@@ -72,10 +73,6 @@ export function redactCustomSecretPatterns(rules: CompiledSecretRules, text: str
   if (rules.patterns.length === 0) {
     return text;
   }
-  let result = text.length > MAX_REDACTED_TEXT_LENGTH ? text.slice(0, MAX_REDACTED_TEXT_LENGTH) : text;
-  for (const pattern of rules.patterns) {
-    // A lookahead-only pattern can match zero-width positions; those must not inject text.
-    result = result.replace(pattern.redact, (match) => (match === "" ? match : "<redacted>"));
-  }
-  return result;
+  if (text.length > MAX_REDACTED_TEXT_LENGTH) return "<redacted>";
+  return evaluateSecretPatterns(rules, text, true);
 }

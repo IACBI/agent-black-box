@@ -163,6 +163,20 @@ describe("session verification", () => {
     expect(rendered.split("\n")).toHaveLength(7);
   });
 
+  it("escapes a supplied signing-key fingerprint in terminal output", () => {
+    const rendered = renderSessionVerification({
+      verified: 1,
+      failed: 0,
+      skipped: 0,
+      sessions: [
+        { id: "session-signed", status: "verified", signatureVerified: true, keyFingerprint: "key\n\u001b[2J" },
+      ],
+    });
+    expect(rendered).toContain('"key\\n\\u001b[2J"');
+    expect(rendered).not.toContain("\u001b");
+    expect(rendered.split("\n")).toHaveLength(7);
+  });
+
   it("verifies a finalized session without missing reports", async () => {
     const repo = await createTempDir("abb-verify-");
     try {

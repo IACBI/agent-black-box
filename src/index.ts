@@ -17,6 +17,7 @@ export * from "./session/changeEvidence.js";
 export * from "./session/sessionCatalog.js";
 export * from "./session/sessionComparison.js";
 export * from "./session/sessionVerification.js";
+export * from "./session/evidenceSigning.js";
 export * from "./session/sessionIndex.js";
 export * from "./session/sessionRetention.js";
 export {

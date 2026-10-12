@@ -71,6 +71,8 @@ pnpm dev risks
 | Retention             | `abb sessions archive`, `abb sessions prune`                                                                                    |
 | Reports               | `abb report`, `abb summary`, `abb commands`, `abb timeline`, `abb risks`, `abb export`, `abb pr-comment`, `abb rollback`        |
 
+Optional evidence sealing: `abb sessions sign`. See [Evidence security](docs/EVIDENCE-SECURITY.md) for independently trusted keys and verification limits.
+
 Completed sessions are stored in `.agent-black-box/sessions/<session-id>/` as `session.json`, `session-metadata.json`, `summary.md`, `commands.md`, `timeline.md`, `diff-summary.md`, `risks.md`, and `rollback.md`. Select one with `--session <id>` using a full ID, a unique prefix, or `latest`. Reports separate pre-existing changes, watcher observations, and final Git evidence, including commits made between the starting and ending HEAD.
 
 For a SARIF review of staged content against a fixed commit in CI:
@@ -181,6 +183,8 @@ pnpm dev risks
 | Geçmiş              | `abb sessions list`, `abb sessions browse`, `abb sessions show <id>`, `abb sessions compare <from> <to>`, `abb sessions verify` |
 | Saklama             | `abb sessions archive`, `abb sessions prune`                                                                                    |
 | Raporlar            | `abb report`, `abb summary`, `abb commands`, `abb timeline`, `abb risks`, `abb export`, `abb pr-comment`, `abb rollback`        |
+
+İsteğe bağlı kanıt imzalama: `abb sessions sign`. Bağımsız güvenilen anahtarlar ve doğrulama sınırları için [Kanıt güvenliği](docs/EVIDENCE-SECURITY.md) belgesine bakın.
 
 Tamamlanan oturumlar `.agent-black-box/sessions/<session-id>/` altında `session.json`, `session-metadata.json`, `summary.md`, `commands.md`, `timeline.md`, `diff-summary.md`, `risks.md` ve `rollback.md` dosyalarıyla saklanır. Birini seçmek için `--session <id>` ile tam kimlik, benzersiz ön ek veya `latest` kullanın. Raporlar önceden var olan değişiklikleri, izleyici gözlemlerini ve son Git verilerini ayırır; başlangıç ile bitiş HEAD arasında yapılan commit'leri de gösterir.
 
