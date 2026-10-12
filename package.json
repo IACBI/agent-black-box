@@ -71,14 +71,14 @@
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
-    "@types/node": "^22.20.4",
+    "@types/node": "^22.20.5",
     "@vitest/coverage-v8": "4.1.11",
-    "eslint": "10.11.0",
-    "knip": "6.38.0",
+    "eslint": "10.12.0",
+    "knip": "6.40.0",
     "prettier": "3.9.9",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3",
-    "typescript-eslint": "8.71.0",
+    "typescript-eslint": "8.71.1",
     "vitest": "^4.1.11"
   }
 }
