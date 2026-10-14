@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  renameSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -28,6 +29,7 @@ import {
   type HookInstallOptions,
 } from "../src/hooks/preCommitHook.js";
 import { createTempDir, initGitRepo, removeTempDir } from "./testUtils.js";
+import { runCli } from "./cliRunner.js";
 
 const execFileAsync = promisify(execFile);
 const isWindows = process.platform === "win32";
@@ -92,6 +94,84 @@ describe("managed pre-commit hook", () => {
   function defaultHookPath(): string {
     return path.join(realpathSync.native(repo), ".git", "hooks", "pre-commit");
   }
+
+  it("rejects concurrent hook uninstall while a managed update is paused and allows a later retry", async () => {
+    await installPreCommitHook(repo);
+    const write = fileUtilities.writeTextFileAtomic;
+    let release: (() => void) | undefined;
+    let entered: (() => void) | undefined;
+    const paused = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const writer = vi
+      .spyOn(fileUtilities, "writeTextFileAtomic")
+      .mockImplementation(async (target, content, options) => {
+        if (target === defaultHookPath()) {
+          entered?.();
+          await gate;
+        }
+        return write(target, content, options);
+      });
+    const updating = installPreCommitHook(repo, { policy: "complete-review" });
+    try {
+      await paused;
+      await expect(uninstallPreCommitHook(repo)).rejects.toThrow("hook mutation");
+      const competingProcess = await runCli(repo, ["hook", "uninstall"]);
+      expect(competingProcess.exitCode).toBe(1);
+      expect(competingProcess.stderr).toContain("hook mutation");
+    } finally {
+      release?.();
+      try {
+        await updating;
+      } finally {
+        writer.mockRestore();
+      }
+    }
+    expect(await getPreCommitHookStatus(repo)).toMatchObject({ state: "managed", policy: "complete-review" });
+    await expect(uninstallPreCommitHook(repo)).resolves.toMatchObject({ action: "removed" });
+  });
+
+  it("preserves an uncertain existing mutation lock instead of taking it over", async () => {
+    const lock = path.join(path.dirname(defaultHookPath()), ".pre-commit.abb-lock");
+    const bytes = "uncertain owner; inspect before removal\n";
+    await writeFile(lock, bytes);
+    await expect(installPreCommitHook(repo)).rejects.toThrow("hook mutation");
+    await expect(uninstallPreCommitHook(repo)).rejects.toThrow("hook mutation");
+    expect(await readFile(lock, "utf8")).toBe(bytes);
+    expect(existsSync(defaultHookPath())).toBe(false);
+  });
+
+  it("does not unlink a replaced mutation lock when cleaning up a managed update", async () => {
+    await installPreCommitHook(repo);
+    const lock = path.join(path.dirname(defaultHookPath()), ".pre-commit.abb-lock");
+    const write = fileUtilities.writeTextFileAtomic;
+    const writer = vi
+      .spyOn(fileUtilities, "writeTextFileAtomic")
+      .mockImplementation(async (target, content, options) => {
+        if (target === defaultHookPath()) {
+          renameSync(lock, `${lock}.original`);
+          writeFileSync(lock, "replacement owner\n");
+        }
+        return write(target, content, options);
+      });
+    try {
+      await expect(installPreCommitHook(repo, { policy: "complete-review" })).rejects.toThrow("lock changed");
+      expect(await readFile(lock, "utf8")).toBe("replacement owner\n");
+      expect(JSON.parse(await readFile(`${lock}.original`, "utf8")).pid).toBe(process.pid);
+    } finally {
+      writer.mockRestore();
+    }
+  });
+
+  it("does not create an absent custom hooks directory during uninstall", async () => {
+    const hooks = path.join(repo, "absent-hooks");
+    runGit(repo, ["config", "core.hooksPath", gitConfigPath(hooks)]);
+    await expect(uninstallPreCommitHook(repo)).resolves.toMatchObject({ action: "absent" });
+    expect(existsSync(hooks)).toBe(false);
+  });
 
   it("builds a POSIX sh script with markers, the policy and LF endings only", () => {
     const script = buildPreCommitHookScript("new-secrets");
