@@ -119,10 +119,10 @@ Health is scoped to persisted markers: `healthy` means a complete inspection fou
 
 For a dead watcher, use `abb recover` or `abb doctor --repair`. Repair requires verified stale ownership or valid completed reports backing the state. Corrupt/inconsistent state remains available for diagnosis; do not delete evidence merely to silence an error.
 
-Recovery can optionally bound how long it waits for live recorded commands and how many event/command record bytes it retains:
+Recovery can optionally bound how long it waits for live recorded commands and how many event/command records and bytes it retains:
 
 ```sh
-abb recover --command-wait-timeout-ms 10000 --max-record-bytes 67108864
+abb recover --command-wait-timeout-ms 10000 --max-record-bytes 67108864 --max-records 100000
 ```
 
 `--command-wait-timeout-ms` accepts a positive safe integer in milliseconds; omitted, the existing wait remains unlimited. A timeout stops recovery without deleting live command markers, changing active/lock ownership, or publishing a partial report. Finish the wrappers, inspect capture health, and retry. This bounds the live-command wait, not the total recovery duration or operating-system scheduling.
@@ -132,6 +132,12 @@ abb recover --command-wait-timeout-ms 10000 --max-record-bytes 67108864
 If storage is displaced during finalization, the location is rechecked before publication and the uncertain claim is retained. Restore the original trusted storage and let the failed finalizer exit before retrying; do not remove another process's claim to force recovery. Ordinary quota and command-wait refusals still release their own claim while retaining active ownership, so they support the documented retry.
 
 If a completed session stopped between active-state and lock cleanup, these commands can resume cleanup using its saved ownership receipt and verified report. A missing receipt, linked storage, mismatched ownership, damaged evidence, or a live owner prevents automatic cleanup. Existing completed evidence is not rewritten. Finalization flushes existing event/command logs before publishing completion metadata. On POSIX, publication and cleanup also synchronize directory entries in ownership order; failures stop the operation and preserve retryable proof. Windows retains file-content synchronization and process-interruption recovery, with no portable Node directory-entry flush. These barriers improve durability without guaranteeing every filesystem/device's power-loss behavior.
+
+`--max-records` accepts a positive safe integer and limits the combined accepted record count across event and command logs before array retention. It complements the byte quota when many small records would create many objects. Malformed lines do not consume the count. The exact count is allowed; exceeding it refuses the entire finalization, preserves evidence/ownership, and permits retry with a sufficient count. Omitted, existing per-log reader limits remain unchanged. Programmatic callers can set `FinalizeSessionOptions.maxRecords` on recovery or finalization. This bounds retained record count, not object size, parsing allocations, or RSS.
+
+For resource-constrained recovery, start with both a byte quota and a record-count quota, inspect a refusal, and increase only what the evidence requires. Keep a backup before retention/rollback work. Use trusted local repository/storage directories; avoid concurrent moves, link changes, and hook install/uninstall operations. Path checks cannot make hostile same-user filesystem mutation atomic. For untrusted repositories, use an isolated OS account/container and process memory limits appropriate to that environment; never treat these CLI quotas as a process sandbox.
+
+Before sharing a report, inspect it locally, use synthetic reproductions in public issues, and keep independently trusted verification keys outside the repository. Keep GitHub secret scanning and push protection enabled as additional layers; they and ABB's heuristics cannot guarantee detection of encoded, split, or unknown credentials. Run staged `complete-review` when incomplete scan coverage must block a change.
 
 ## Analyze without recording
 

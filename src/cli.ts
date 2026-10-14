@@ -103,7 +103,7 @@ const program = new Command();
 program
   .name("abb")
   .description("Record and explain observable repository changes during AI coding sessions.")
-  .version("0.8.4")
+  .version("0.9.0")
   .option(
     "--allow-external-session-dir",
     "allow a trusted local sessionDir outside the repository; network and UNC paths remain blocked"
@@ -189,10 +189,12 @@ program
   .description("Safely finalize a stale session or clean its completed state files.")
   .option("--command-wait-timeout-ms <milliseconds>", "stop recovery if recorded commands remain live beyond this wait")
   .option("--max-record-bytes <bytes>", "limit retained event and command record bytes during recovery (up to 256 MiB)")
-  .action(async (options: { commandWaitTimeoutMs?: string; maxRecordBytes?: string }) => {
+  .option("--max-records <count>", "limit the combined number of retained event and command records during recovery")
+  .action(async (options: { commandWaitTimeoutMs?: string; maxRecordBytes?: string; maxRecords?: string }) => {
     const recoveryOptions = {
       commandWaitTimeoutMs: parseSessionListLimit(options.commandWaitTimeoutMs, "--command-wait-timeout-ms"),
       maxRecordBytes: parseSessionListLimit(options.maxRecordBytes, "--max-record-bytes"),
+      maxRecords: parseSessionListLimit(options.maxRecords, "--max-records"),
     };
     const repoRoot = await requireRepositoryRoot(process.cwd());
     const config = await loadRuntimeConfig(repoRoot);

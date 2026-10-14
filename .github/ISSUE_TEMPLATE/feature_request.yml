@@ -1,0 +1,21 @@
+name: Feature request
+description: Describe a concrete workflow and a compatible improvement.
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem and current workflow
+      description: Explain the user need and any current workaround using synthetic examples.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe expected results, compatibility needs, and how success could be verified.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and trade-offs

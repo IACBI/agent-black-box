@@ -26,6 +26,14 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Require the current protected main commit
+        run: |
+          git fetch --no-tags --depth=1 origin main
+          if [ "$(git rev-parse HEAD)" != "$(git rev-parse FETCH_HEAD)" ]; then
+            echo "Release tags must point to the current protected main commit." >&2
+            exit 1
+          fi
+
       - name: Enable Corepack
         run: corepack enable
 

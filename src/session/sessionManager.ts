@@ -70,6 +70,8 @@ export type SessionRecoveryStatus =
 export interface FinalizeSessionOptions {
   /** Shared UTF-8 canonical bytes of retained accepted records; excludes parsed-object and report-core overhead. */
   maxRecordBytes?: number;
+  /** Shared accepted-record count across both logs, checked before array retention; not a heap/RSS cap. */
+  maxRecords?: number;
   /** Reject without finalizing when live wrappers outlast this optional wait; the default waits indefinitely. */
   commandWaitTimeoutMs?: number;
 }
@@ -453,6 +455,9 @@ export async function finalizeSession(
 }
 
 function validateFinalizeSessionOptions(options: FinalizeSessionOptions): void {
+  if (options.maxRecords !== undefined && (!Number.isSafeInteger(options.maxRecords) || options.maxRecords < 1)) {
+    throw new Error("maxRecords must be a positive safe integer.");
+  }
   if (
     options.maxRecordBytes !== undefined &&
     (!Number.isSafeInteger(options.maxRecordBytes) ||
@@ -484,13 +489,20 @@ async function finalizeOwnedSession(
   const endedAt = new Date().toISOString();
   const maxRecordBytes = options.maxRecordBytes ?? MAX_REPORT_BYTES;
   let retainedRecordBytes = 0;
+  let retainedRecordCount = 0;
   const reserveRecordBytes = (bytes: number): void => {
+    if (options.maxRecords !== undefined && retainedRecordCount >= options.maxRecords) {
+      throw new Error(
+        `Session capture exceeds the ${options.maxRecords} record count allowance; evidence and ownership were preserved.`
+      );
+    }
     if (bytes > maxRecordBytes - retainedRecordBytes) {
       throw new Error(
         `Session capture exceeds the ${maxRecordBytes} byte canonical record allowance; evidence and ownership were preserved.`
       );
     }
     retainedRecordBytes += bytes;
+    retainedRecordCount += 1;
   };
   // The log parses are CPU-bound and the Git snapshot is process-spawn latency, so they overlap.
   const inputReads = [

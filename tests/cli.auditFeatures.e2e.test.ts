@@ -42,6 +42,9 @@ describe("audit feature CLI contracts", () => {
     ["--max-record-bytes", "0", "positive integer"],
     ["--max-record-bytes", "1.5", "positive integer"],
     ["--max-record-bytes", "268435457", "maxRecordBytes must be an integer"],
+    ["--max-records", "0", "positive integer"],
+    ["--max-records", "1.5", "positive integer"],
+    ["--max-records", "9007199254740992", "positive integer"],
   ])("rejects invalid recovery option %s=%s without creating session state", async (option, value, message) => {
     const repo = await createTempDir("abb-cli-recovery-options-");
     try {
@@ -55,53 +58,57 @@ describe("audit feature CLI contracts", () => {
     }
   });
 
-  it("preserves evidence when the shared recovery record budget is exceeded and permits a larger-budget retry", async () => {
-    const repo = await createTempDir("abb-cli-recovery-budget-");
-    try {
-      initGitRepo(repo);
-      const session = await createSession(repo, DEFAULT_CONFIG);
-      await appendFileEvent(session, { timestamp: session.startedAt, path: "src/界.ts", eventType: "change" });
-      await appendCommandEvent(session, {
-        startedAt: session.startedAt,
-        endedAt: session.startedAt,
-        command: "echo safe",
-        cwd: ".",
-        durationMs: 0,
-        exitCode: 0,
-      });
-      const activePath = getActiveSessionPath(repo, DEFAULT_CONFIG);
-      const lockPath = getSessionLockPath(repo, DEFAULT_CONFIG);
-      const lock = JSON.parse(await readFile(lockPath, "utf8"));
-      await writeFile(activePath, JSON.stringify({ ...session, pid: 999_999 }));
-      await writeFile(lockPath, JSON.stringify({ ...lock, pid: 999_999 }));
-      const activeBytes = await readFile(activePath);
-      const lockBytes = await readFile(lockPath);
-      const eventsPath = path.join(session.sessionDir, "events.ndjson");
-      const commandsPath = path.join(session.sessionDir, "commands.ndjson");
-      const events = await readFile(eventsPath, "utf8");
-      const commands = await readFile(commandsPath, "utf8");
-      const recordBytes = Buffer.byteLength(events.trimEnd()) + Buffer.byteLength(commands.trimEnd());
+  it.each(["bytes", "records"])(
+    "preserves recovery evidence at the %s allowance and completes an exact-boundary retry",
+    async (limit) => {
+      const repo = await createTempDir("abb-cli-recovery-budget-");
+      try {
+        initGitRepo(repo);
+        const session = await createSession(repo, DEFAULT_CONFIG);
+        await appendFileEvent(session, { timestamp: session.startedAt, path: "src/界.ts", eventType: "change" });
+        await appendCommandEvent(session, {
+          startedAt: session.startedAt,
+          endedAt: session.startedAt,
+          command: "echo safe",
+          cwd: ".",
+          durationMs: 0,
+          exitCode: 0,
+        });
+        const activePath = getActiveSessionPath(repo, DEFAULT_CONFIG);
+        const lockPath = getSessionLockPath(repo, DEFAULT_CONFIG);
+        const lock = JSON.parse(await readFile(lockPath, "utf8"));
+        await writeFile(activePath, JSON.stringify({ ...session, pid: 999_999 }));
+        await writeFile(lockPath, JSON.stringify({ ...lock, pid: 999_999 }));
+        const activeBytes = await readFile(activePath);
+        const lockBytes = await readFile(lockPath);
+        const eventsPath = path.join(session.sessionDir, "events.ndjson");
+        const commandsPath = path.join(session.sessionDir, "commands.ndjson");
+        const events = await readFile(eventsPath, "utf8");
+        const commands = await readFile(commandsPath, "utf8");
+        const recordBytes = Buffer.byteLength(events.trimEnd()) + Buffer.byteLength(commands.trimEnd());
 
-      const refused = await runCli(repo, ["recover", "--max-record-bytes", String(recordBytes - 1)]);
-      expect(refused.exitCode).toBe(1);
-      expect(refused.stderr).toContain("canonical record allowance");
-      expect(await readFile(activePath)).toEqual(activeBytes);
-      expect(await readFile(lockPath)).toEqual(lockBytes);
-      expect(await readFile(eventsPath, "utf8")).toBe(events);
-      expect(await readFile(commandsPath, "utf8")).toBe(commands);
-      expect(await pathExists(path.join(session.sessionDir, "session.json"))).toBe(false);
+        const option = limit === "bytes" ? "--max-record-bytes" : "--max-records";
+        const refused = await runCli(repo, ["recover", option, String(limit === "bytes" ? recordBytes - 1 : 1)]);
+        expect(refused.exitCode).toBe(1);
+        expect(refused.stderr).toContain(limit === "bytes" ? "canonical record allowance" : "record count allowance");
+        expect(await readFile(activePath)).toEqual(activeBytes);
+        expect(await readFile(lockPath)).toEqual(lockBytes);
+        expect(await readFile(eventsPath, "utf8")).toBe(events);
+        expect(await readFile(commandsPath, "utf8")).toBe(commands);
+        expect(await pathExists(path.join(session.sessionDir, "session.json"))).toBe(false);
 
-      const recovered = await runCli(repo, ["recover", "--max-record-bytes", String(recordBytes)]);
-      expect(recovered.exitCode, recovered.stderr).toBe(0);
-      const report = JSON.parse(await readFile(path.join(session.sessionDir, "session.json"), "utf8"));
-      expect(report.events).toHaveLength(1);
-      expect(report.commands).toHaveLength(1);
-      expect(await pathExists(activePath)).toBe(false);
-      expect(await pathExists(lockPath)).toBe(false);
-    } finally {
-      await removeTempDir(repo);
+        const recovered = await runCli(repo, ["recover", option, String(limit === "bytes" ? recordBytes : 2)]);
+        expect(recovered.exitCode, recovered.stderr).toBe(0);
+        const report = JSON.parse(await readFile(path.join(session.sessionDir, "session.json"), "utf8"));
+        expect(report.events).toHaveLength(1);
+        expect(report.commands).toHaveLength(1);
+        expect(await pathExists(activePath)).toBe(false);
+        expect(await pathExists(lockPath)).toBe(false);
+      } finally {
+        await removeTempDir(repo);
+      }
     }
-  });
+  );
 
   it("bounds recovery waiting without deleting a live wrapper marker or session ownership", async () => {
     const repo = await createTempDir("abb-cli-recovery-timeout-");

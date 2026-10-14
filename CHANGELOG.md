@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.9.0
+
+- Add opt-in `recover --max-records` and `FinalizeSessionOptions.maxRecords` to bound combined event/command record retention alongside byte limits, preserving evidence and allowing exact-boundary retries.
+- Add structured public issue forms, a private vulnerability-reporting route, a PR review checklist, CODEOWNERS, and documented single-maintainer PR protections and future independent-review requirements. Verify the protected main source before release; protect existing version tags against updates and deletion.
+- Document resource-constrained recovery, trusted storage, process isolation, and layered credential-detection precautions without claiming hard RSS bounds or atomic filesystem safety.
 - Combine built-in, embedded-script, and custom command credential matches on original input, preventing overlapping rules from exposing credential fragments. Ambiguous structural rewrites redact the whole argument; execution receives unchanged arguments.
 - Preserve POSIX backslash filenames as distinct paths during analysis and baseline comparison, while retaining Windows separator handling and strict unsafe-path validation.
 - Reject oversized retained capture records before finalization exceeds the existing 256 MiB report policy. Add optional recovery record budgets and live-command wait limits, preserving evidence and ownership on refusal and allowing safe retries.
