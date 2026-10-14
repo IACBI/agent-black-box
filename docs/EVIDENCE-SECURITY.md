@@ -23,6 +23,10 @@ A valid seal proves only that the signed bytes match what the holder of the inde
 
 ## Credential detection and resource limits
 
+`abb run --private` / `RecordCommandOptions.private` removes the command text and user labels from recorded metadata entirely, storing only `<redacted>` for the command. This protects those fields regardless of token format, encoding or split arguments; execution keeps its original argv. Cwd, timestamps, exit/error metadata, observed file paths/content and child side effects retain their documented behavior. It is a command-metadata minimization mode, not a process sandbox or full-report privacy guarantee.
+
+Built-in rules also recognize Context7's `ctx7sk-` tokens and explicitly labelled `X-Goog-Api-Key` / `X-Api-Key` values, including dotted opaque credentials. Shared JSON-escape decoding and original-input custom masks apply. Unlabelled arbitrary opaque values are not classified solely from a speculative prefix.
+
 Known provider tokens, authorization credentials, URL credentials, JWTs and private-key headers are also recognized after decoding one JSON string-escape layer. A linear string-literal scanner decodes only valid, escaped, double-quoted JSON literals of at most 65,536 UTF-16 code units including quotes. It never evaluates code or recursively expands encoded payloads. Recording and watcherless analysis share these signals; findings omit both raw and decoded values, while command redaction hides the entire affected argument and execution retains its original arguments. Custom masks still compose on original input. Malformed literals and unrelated benign escapes retain ordinary behavior.
 
 This targets known credential shapes concealed by JSON escapes. Arbitrary Base64, encryption, split strings, nested encoding, unknown credential formats and oversized encoded literals are not comprehensively recognized. Command arguments beyond the existing 65,536-character input bound remain fully redacted. Continue to use explicit custom patterns, reviewed allowlists, complete-coverage gates, independent secret scanning and manual review; no heuristic can establish whether every arbitrary value is a credential.
