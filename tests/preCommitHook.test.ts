@@ -13,7 +13,8 @@ import os from "node:os";
 import { lstat, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as fileUtilities from "../src/utils/files.js";
 import { gitExecutable } from "../src/git/executable.js";
 import {
   HOOK_MARKER,
@@ -191,6 +192,24 @@ describe("managed pre-commit hook", () => {
       hookPath: result.hookPath,
       policy: "new-secrets",
     });
+  });
+
+  it("preserves a foreign hook created after the initial absence check", async () => {
+    const originalWrite = fileUtilities.writeTextFileAtomic;
+    const foreignScript = "#!/bin/sh\necho concurrent foreign hook\n";
+    const writeSpy = vi
+      .spyOn(fileUtilities, "writeTextFileAtomic")
+      .mockImplementationOnce(async (hookPath, script, options) => {
+        await writeFile(hookPath, foreignScript, { flag: "wx" });
+        await originalWrite(hookPath, script, options);
+      });
+    try {
+      await expect(installPreCommitHook(repo)).rejects.toThrow(/appeared during installation/);
+      await expect(readFile(defaultHookPath(), "utf8")).resolves.toBe(foreignScript);
+      await expect(getPreCommitHookStatus(repo)).resolves.toMatchObject({ state: "foreign" });
+    } finally {
+      writeSpy.mockRestore();
+    }
   });
 
   it("is idempotent and reports unchanged on a second install", async () => {
