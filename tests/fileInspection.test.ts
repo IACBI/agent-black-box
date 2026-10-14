@@ -71,6 +71,55 @@ describe("file inspection", () => {
       await removeTempDir(dir);
     }
   });
+  it.each(["pathname replacement", "in-place truncation"])(
+    "refuses an oversized-file sample after %s during the read",
+    async (change) => {
+      const dir = await createTempDir("abb-inspect-sample-race-");
+      const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+      try {
+        const file = path.join(dir, "large.txt");
+        await writeFile(file, "a".repeat(128));
+        vi.mocked(fs.open).mockImplementationOnce(async (...args) => {
+          const handle = await actual.open(...args);
+          const read = handle.read.bind(handle);
+          vi.spyOn(handle, "read").mockImplementationOnce(async (...readArgs) => {
+            const result = await read(...readArgs);
+            if (change === "pathname replacement") renameSync(file, file + ".original");
+            writeFileSync(file, "small");
+            return result;
+          });
+          return handle;
+        });
+        await expect(inspectTextFile(file, 16, 8)).resolves.toMatchObject({
+          kind: "unknown",
+          reason: "File changed during inspection.",
+        });
+        expect(await actual.readFile(file, "utf8")).toBe("small");
+      } finally {
+        vi.restoreAllMocks();
+        await removeTempDir(dir);
+      }
+    }
+  );
+
+  it.each([
+    ["text", "a".repeat(128), "large"],
+    ["binary", "\0".repeat(128), "binary"],
+  ])("preserves stable oversized %s classification from a bounded sample", async (_label, content, kind) => {
+    const dir = await createTempDir("abb-inspect-stable-sample-");
+    try {
+      const file = path.join(dir, "large.bin");
+      await writeFile(file, content);
+      await expect(inspectTextFile(file, 16, 8)).resolves.toEqual({
+        kind,
+        sizeBytes: 128,
+        reason: "File is larger than 16 bytes.",
+      });
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
   it("detects text and binary buffers", () => {
     expect(isLikelyBinary(Buffer.from("hello\nworld\n", "utf8"))).toBe(false);
     expect(isLikelyBinary(Buffer.from([0, 1, 2, 3, 255, 0]))).toBe(true);

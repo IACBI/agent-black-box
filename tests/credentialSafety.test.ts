@@ -5,6 +5,7 @@ import { analyzeChangedFiles } from "../src/analyze/analyzer.js";
 import { redactCommandParts } from "../src/commands/commandRecorder.js";
 import {
   detectSecretsInLine,
+  hasKnownCredentialMaterial,
   redactKnownSecretTokens,
   redactKnownSecretTokensWithRules,
 } from "../src/risks/secretDetector.js";
@@ -54,6 +55,78 @@ describe("credential recognition and bounded redaction", () => {
     expect(detectSecretsInLine("settings.json", encoded, 1).length).toBeGreaterThan(0);
     expect(redactKnownSecretTokens(encoded)).toBe("<redacted>");
     expect(redactKnownSecretTokens(encoded + " ")).toBe("<redacted>");
+  });
+
+  it.each([
+    ["ctx7sk-" + "c7".repeat(10), "ctx7sk-" + "c7".repeat(10), "ctx7sk-"],
+    ["X-Goog-Api-Key: AQ." + "g1".repeat(12), "AQ." + "g1".repeat(12), "X-Goog-Api-Key"],
+    ["x-api-key: AQ12.345", "AQ12.345", "x-api-key"],
+  ])(
+    "recognises explicitly labelled credential %# across plain, encoded and custom-mask paths",
+    (input, value, prefix) => {
+      expect(hasKnownCredentialMaterial(input)).toBe(true);
+      const findings = detectSecretsInLine("settings.txt", input, 3);
+      expect(findings.length).toBeGreaterThan(0);
+      expect(JSON.stringify(findings)).not.toContain(value);
+      const analysis = analyzeChangedFiles([{ path: "settings.txt", status: "modified", content: input }]);
+      expect(analysis.findings.some((finding) => finding.kind === "possible-secret")).toBe(true);
+      expect(JSON.stringify(analysis)).not.toContain(value);
+      expect(redactKnownSecretTokens(input)).not.toContain(value);
+      const parts = ["echo", input];
+      expect(redactCommandParts(parts).join(" ")).not.toContain(value);
+      expect(parts).toEqual(["echo", input]);
+      const encoded = JSON.stringify(input).replace(
+        input[0]!,
+        () => "\\u" + input.charCodeAt(0).toString(16).padStart(4, "0")
+      );
+      expect(hasKnownCredentialMaterial(encoded)).toBe(true);
+      expect(redactKnownSecretTokens(encoded)).toBe("<redacted>");
+      const recordedEncoded = redactCommandParts(["echo", encoded]).join(" ");
+      expect(recordedEncoded).toContain("<redacted>");
+      expect(recordedEncoded).not.toContain(value);
+      const rules = compileSecretRules({ secretPatterns: [{ name: "Partial label", pattern: prefix }] });
+      expect(redactKnownSecretTokensWithRules(input, rules, new Uint32Array(input.length)).text).not.toContain(value);
+      expect(redactCommandParts(parts, rules).join(" ")).not.toContain(value);
+      expect(redactKnownSecretTokensWithRules(encoded, rules, new Uint32Array(encoded.length)).text).toBe("<redacted>");
+      expect(redactCommandParts(["echo", encoded], rules).join(" ")).not.toContain(value);
+    }
+  );
+
+  it.each(["X-Goog-Api-Key", "X-Api-Key"])(
+    "recognises explicit JSON header %s and hides its complete value",
+    (header) => {
+      const value = "AQ12.345";
+      const input = JSON.stringify({ [header]: value });
+      expect(hasKnownCredentialMaterial(input)).toBe(true);
+      expect(detectSecretsInLine("settings.json", input, 1).length).toBeGreaterThan(0);
+      expect(redactKnownSecretTokens(input)).toBe(JSON.stringify({ [header]: "<redacted>" }));
+      expect(redactCommandParts(["echo", input])).toEqual(["echo", "<redacted>"]);
+    }
+  );
+
+  it("masks a complete API-key header before a narrower provider prefix can hide its remaining value", () => {
+    const header = "X-Goog-Api-Key: ctx7sk-" + "c7".repeat(10) + ".private-tail";
+    expect(redactKnownSecretTokens(header)).toBe("X-Goog-Api-Key: <redacted>");
+    const rules = compileSecretRules({ secretPatterns: [{ name: "Partial provider", pattern: "ctx7sk-" }] });
+    expect(redactKnownSecretTokensWithRules(header, rules, new Uint32Array(header.length)).text).toBe(
+      "X-Goog-Api-Key: <redacted>"
+    );
+  });
+
+  it("keeps opaque unlabelled values, unrelated headers and short Context7-like identifiers unchanged", () => {
+    for (const input of [
+      "AQ." + "a1".repeat(16),
+      "X-Request-Id: AQ12.345",
+      "Not-X-Api-Key: AQ12.345",
+      "ctx7sk-" + "x".repeat(19),
+      "X-Api-Key: short77",
+    ]) {
+      expect(hasKnownCredentialMaterial(input)).toBe(false);
+      expect(detectSecretsInLine("settings.txt", input, 1)).toEqual([]);
+      expect(redactKnownSecretTokens(input)).toBe(input);
+    }
+    const unrelated = ["echo", "AQ." + "a1".repeat(16), "X-Request-Id: AQ12.345"];
+    expect(redactCommandParts(unrelated)).toEqual(unrelated);
   });
 
   const credentials = [

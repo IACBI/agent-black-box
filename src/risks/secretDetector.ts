@@ -27,6 +27,7 @@ const SLACK_TOKEN = /xox[baprs]-[A-Za-z0-9-]{20,}/;
 const LLM_API_KEY = /\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{32,}/;
 const STRIPE_LIVE_KEY = /\b[sr]k_live_[A-Za-z0-9]{16,}/;
 const GOOGLE_API_KEY = /\bAIza[0-9A-Za-z_-]{35}/;
+const CONTEXT7_TOKEN = /\bctx7sk-[A-Za-z0-9_-]{20,}/;
 
 const PRIVATE_KEY_HEADER = /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----/;
 
@@ -35,6 +36,7 @@ const GITLAB_TOKEN = /glpat-[A-Za-z0-9_-]{20,}/;
 const NPM_TOKEN = /npm_[A-Za-z0-9]{36,}/;
 const PYPI_TOKEN = /pypi-[A-Za-z0-9_-]{50,}/;
 const AUTHORIZATION_VALUE = /\b(?:Authorization|Proxy-Authorization)\s*:\s*(?:Basic|Bearer)\s+[A-Za-z0-9_./+=-]{8,}/i;
+const API_KEY_HEADER_VALUE = /(?<![A-Za-z0-9_-])X-(?:Goog-)?Api-Key["']?\s*:\s*["']?([A-Za-z0-9_./+=-]{8,})/i;
 const URL_CREDENTIAL = /([a-z][a-z0-9+.-]{0,31}:\/\/)(?:[^\s/@:]{1,128}:[^\s/@]{1,512}@)/i;
 const HTTP_USER_CREDENTIAL = /(https?:\/\/)[^\s/@]{1,512}@/i;
 const MAX_BUILTIN_REDACTION_LENGTH = 65_536;
@@ -49,6 +51,8 @@ const KNOWN_CREDENTIAL_PATTERNS: Array<{ name: string; matches: (line: string) =
   },
   { name: "Stripe live key-like value", matches: (line) => STRIPE_LIVE_KEY.test(line) },
   { name: "Google API key-like value", matches: (line) => GOOGLE_API_KEY.test(line) },
+  { name: "Context7 token-like value", matches: (line) => CONTEXT7_TOKEN.test(line) },
+  { name: "API key header credential", matches: (line) => API_KEY_HEADER_VALUE.test(line) },
   { name: "GitHub fine-grained token-like value", matches: (line) => GITHUB_FINE_GRAINED_TOKEN.test(line) },
   { name: "GitLab token-like value", matches: (line) => GITLAB_TOKEN.test(line) },
   { name: "npm token-like value", matches: (line) => NPM_TOKEN.test(line) },
@@ -78,6 +82,7 @@ const REDACTABLE_TOKENS = [
   SLACK_TOKEN,
   STRIPE_LIVE_KEY,
   GOOGLE_API_KEY,
+  CONTEXT7_TOKEN,
   GITHUB_FINE_GRAINED_TOKEN,
   GITLAB_TOKEN,
   NPM_TOKEN,
@@ -105,7 +110,11 @@ export interface SecretScanResult {
  */
 export function redactKnownSecretTokens(text: string): string {
   if (text.length > MAX_BUILTIN_REDACTION_LENGTH || hasJsonEscapedCredential(text)) return "<redacted>";
-  let result = text;
+  // Mask the complete labelled value before narrower provider patterns can remove its prefix.
+  let result = text.replace(
+    new RegExp(API_KEY_HEADER_VALUE.source, "gi"),
+    (match, value: string) => match.slice(0, match.length - value.length) + "<redacted>"
+  );
   // Component scanning avoids the quadratic JWT regex retry at each repeated "eyJ" prefix.
   const spans = findJwtSpans(result);
   const pieces: string[] = [];
@@ -153,6 +162,9 @@ export function redactKnownSecretTokensWithRules(
     const valueOffset = match[0].indexOf(":") + 1;
     const whitespaceLength = /^\s*/.exec(match[0].slice(valueOffset))?.[0].length ?? 0;
     mark(match.index + valueOffset + whitespaceLength, match.index + match[0].length);
+  }
+  for (const match of text.matchAll(new RegExp(API_KEY_HEADER_VALUE.source, "gi"))) {
+    mark(match.index + match[0].length - match[1]!.length, match.index + match[0].length);
   }
   for (const expression of [URL_CREDENTIAL, HTTP_USER_CREDENTIAL]) {
     for (const match of text.matchAll(new RegExp(expression.source, "gi"))) {
