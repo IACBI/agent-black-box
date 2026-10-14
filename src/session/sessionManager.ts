@@ -340,6 +340,7 @@ export async function recoverActiveSession(
     throw new Error("Recovery state did not include an active session.");
   }
   if (recovery.status === "already-complete") {
+    assertRssWithinLimit(options.maxRssBytes);
     await withFinalizationOwnership(active, config, () => clearSessionState(active, config, true), true);
     return { state: recovery.status };
   }

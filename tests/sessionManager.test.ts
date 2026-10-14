@@ -233,6 +233,39 @@ describe("session manager", () => {
     }
   });
 
+  it("rechecks RSS after completed-report inspection before cleaning ownership", async () => {
+    const dir = await createTempDir();
+    const limit = 64 * 1024 * 1024;
+    const rss = vi.spyOn(process.memoryUsage, "rss").mockReturnValue(limit);
+    try {
+      initGitRepo(dir);
+      const session = await createSession(dir, DEFAULT_CONFIG);
+      const lock = await readSessionLock(dir, DEFAULT_CONFIG);
+      await finalizeSession(session, DEFAULT_CONFIG, "test");
+      await writeFile(getActiveSessionPath(dir, DEFAULT_CONFIG), JSON.stringify({ ...session, pid: 999_999 }));
+      await writeFile(getSessionLockPath(dir, DEFAULT_CONFIG), JSON.stringify({ ...lock, pid: 999_999 }));
+      const evidence = [
+        getActiveSessionPath(dir, DEFAULT_CONFIG),
+        getSessionLockPath(dir, DEFAULT_CONFIG),
+        path.join(session.sessionDir, "session.json"),
+      ];
+      const before = await Promise.all(evidence.map((file) => readFile(file)));
+      rss.mockReturnValue(limit + 1).mockReturnValueOnce(limit);
+      await expect(recoverActiveSession(dir, DEFAULT_CONFIG, { maxRssBytes: limit })).rejects.toThrow("RSS");
+      expect(await Promise.all(evidence.map((file) => readFile(file)))).toEqual(before);
+      expect((await readdir(session.sessionDir)).filter((name) => name.startsWith("finalization-claim-"))).toEqual([]);
+      rss.mockReturnValue(limit);
+      await expect(recoverActiveSession(dir, DEFAULT_CONFIG, { maxRssBytes: limit })).resolves.toEqual({
+        state: "already-complete",
+      });
+      expect(await pathExists(getActiveSessionPath(dir, DEFAULT_CONFIG))).toBe(false);
+      expect(await pathExists(getSessionLockPath(dir, DEFAULT_CONFIG))).toBe(false);
+    } finally {
+      rss.mockRestore();
+      await removeTempDir(dir);
+    }
+  });
+
   it("preserves ownership when stop-request cleanup fails so completed recovery can be retried", async () => {
     const dir = await createTempDir();
     try {

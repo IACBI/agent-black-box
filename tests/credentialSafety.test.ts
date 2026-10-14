@@ -16,6 +16,16 @@ import {
 } from "../src/risks/secretRules.js";
 
 describe("credential recognition and bounded redaction", () => {
+  it.each(["'\"' + ", '"unfinished\\q '])(
+    "recognises an escaped credential after unrelated quote prefix %#",
+    (prefix) => {
+      const content = prefix + '"\\u0041SIA' + "Q".repeat(16) + '"';
+      expect(detectSecretsInLine("settings.ts", content, 1).length).toBeGreaterThan(0);
+      expect(redactKnownSecretTokens(content)).toBe("<redacted>");
+      expect(redactCommandParts(["echo", content])).toEqual(["echo", "<redacted>"]);
+    }
+  );
+
   it.each([
     '"\\u0067hp_' + "a1".repeat(15) + '"',
     '"\\u0041uthorization: Bearer synthetic-private-value"',

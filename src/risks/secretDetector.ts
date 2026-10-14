@@ -335,7 +335,9 @@ function hasJsonEscapedCredential(text: string): boolean {
       }
       if (typeof decoded === "string" && KNOWN_CREDENTIAL_PATTERNS.some(({ matches }) => matches(decoded))) return true;
     }
-    start = -1;
+    // A closing quote may also open the next candidate after unrelated/malformed source text.
+    start = index;
+    escaped = false;
   }
   return false;
 }

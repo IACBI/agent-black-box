@@ -209,7 +209,7 @@ abb hook status
 abb hook uninstall
 ```
 
-ABB hook mutations reserve `.pre-commit.abb-lock` in the effective physical hooks directory with exclusive creation. A concurrent install/update/forced replacement/uninstall refuses visibly and can be retried after the owner finishes. The lock contains the owner's PID and creation time; cleanup verifies exact file identity and physical directory before unlinking its own lock. A replaced lock is left untouched. Read-only status does not acquire it, and uninstall does not create an absent hooks directory.
+ABB hook mutations reserve `.pre-commit.abb-lock` in the effective physical hooks directory with exclusive creation. A concurrent install/update/forced replacement/uninstall refuses visibly and can be retried after the owner finishes. The lock contains the owner's PID and creation time; cleanup verifies exact file identity and physical directory before unlinking its own lock. A detected replacement lock is left untouched. Read-only status does not acquire it, and uninstall does not create an absent hooks directory.
 
 A crash may leave a stale lock. No automatic takeover or force-lock bypass is provided. Stop concurrent hook maintenance, verify the recorded process has exited and the physical directory/lock still belong to this operation, then inspect/remove only that stale lock before retrying. Never remove a live, uncertain, or replacement lock merely to silence an error. This coordination covers ABB participants; external tools can still race filesystem mutations.
 
