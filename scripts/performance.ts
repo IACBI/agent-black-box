@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { analyzeChangedFiles } from "../src/analyze/analyzer.js";
+import { redactCommandParts } from "../src/commands/commandRecorder.js";
 import {
   compileSecretRules,
   matchCustomSecretPatterns,
@@ -13,10 +14,15 @@ import { DEFAULT_CONFIG } from "../src/config/defaults.js";
 import { buildSessionReport, generateTimelineMarkdown } from "../src/reports/markdown.js";
 import { writeReports } from "../src/reports/reportWriter.js";
 import { listSessionCatalog, readCatalogSessionReport } from "../src/session/sessionCatalog.js";
-import { digestNdjsonRecords, isCapturedFileEvent } from "../src/session/ndjson.js";
+import { digestNdjsonRecords, isCapturedFileEvent, readNdjsonRecords } from "../src/session/ndjson.js";
 import { getEventsPath, readFileEventsWithDiagnostics } from "../src/session/sessionManager.js";
 import { getSessionVerificationLimits, verifySessions } from "../src/session/sessionVerification.js";
-import { digestRecords, INLINE_REPORT_BYTES, readCanonicalReportCore } from "../src/session/reportStorage.js";
+import {
+  digestRecords,
+  INLINE_REPORT_BYTES,
+  MAX_REPORT_BYTES,
+  readCanonicalReportCore,
+} from "../src/session/reportStorage.js";
 
 const EVENT_COUNT = 100_000;
 const MAX_DURATION_MS = 5_000;
@@ -67,6 +73,36 @@ try {
   if (heapDeltaBytes > MAX_HEAP_DELTA_BYTES) {
     throw new Error("NDJSON memory budget exceeded.");
   }
+
+  let retainedRecordBytes = 0;
+  const budgetedReadStarted = performance.now();
+  const budgetedRecords = await readNdjsonRecords(
+    getEventsPath(temporaryDirectory),
+    isCapturedFileEvent,
+    "file event",
+    (bytes) => {
+      if (bytes > MAX_REPORT_BYTES - retainedRecordBytes) throw new Error("Capture record allowance exceeded.");
+      retainedRecordBytes += bytes;
+    }
+  );
+  const budgetedReadDuration = performance.now() - budgetedReadStarted;
+  if (
+    budgetedRecords.records.length !== EVENT_COUNT ||
+    budgetedRecords.discardedLines !== 0 ||
+    retainedRecordBytes !== lines.reduce((total, line) => total + Buffer.byteLength(line), 0)
+  ) {
+    throw new Error("Budgeted record retention changed accepted capture evidence or its encoded byte count.");
+  }
+  if (budgetedReadDuration > MAX_DURATION_MS) throw new Error("Budgeted record retention performance budget exceeded.");
+  console.log(
+    JSON.stringify({
+      scenario: "budgeted-record-retention",
+      records: EVENT_COUNT,
+      retainedRecordBytes,
+      durationMs: Math.round(budgetedReadDuration),
+      maxDurationMs: MAX_DURATION_MS,
+    })
+  );
 
   const digestStarted = performance.now();
   const digest = await digestNdjsonRecords(getEventsPath(temporaryDirectory), isCapturedFileEvent, "file event");
@@ -241,6 +277,30 @@ try {
       singleLineMatchingDurationMs: Math.round(singleLineDuration),
       batchedMatchingDurationMs: Math.round(batchDuration),
       analysisDurationMs: Math.round(customAnalysisDuration),
+      maxDurationMs: MAX_DURATION_MS,
+    })
+  );
+
+  const providerToken = "ghp_" + "a1".repeat(12);
+  const redactionRules = compileSecretRules({
+    secretPatterns: [{ name: "Complete credential", pattern: "corp_ghp_[a-z0-9]{24}!suffix" }],
+  });
+  const redactionStarted = performance.now();
+  const commandCount = 1000;
+  for (let index = 0; index < commandCount; index += 1) {
+    const parts = ["echo", `corp_${providerToken}!suffix`, `echo PASSWORD=${providerToken} keep`];
+    const redacted = redactCommandParts(parts, redactionRules);
+    if (redacted[1] !== "<redacted>" || redacted[2] !== "echo PASSWORD=<redacted> keep") {
+      throw new Error("Composed command redaction exposed credential fragments or lost safe script context.");
+    }
+  }
+  const redactionDuration = performance.now() - redactionStarted;
+  if (redactionDuration > MAX_DURATION_MS) throw new Error("Composed command redaction performance budget exceeded.");
+  console.log(
+    JSON.stringify({
+      scenario: "composed-command-redaction",
+      commands: commandCount,
+      durationMs: Math.round(redactionDuration),
       maxDurationMs: MAX_DURATION_MS,
     })
   );

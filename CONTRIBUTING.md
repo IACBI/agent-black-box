@@ -13,6 +13,10 @@ pnpm check
 
 `pnpm check` runs formatting, ESLint, TypeScript (`src` and `scripts` with `noUncheckedIndexedAccess`; `tests/tsconfig.json` relaxes only that flag), dead-code checks, build, and coverage tests. End-to-end tests run the compiled CLI that `tests/globalSetup.ts` builds once per run, and `tests/setup.ts` isolates Git from your global configuration. Run `pnpm perf` when changing parsing, file inspection, analysis, or report generation. CI tests Node.js 22 and 24 on Linux, Windows, and macOS.
 
+The performance suite includes accepted-record byte accounting and original-input command redaction in addition to streaming verification and analysis. Real POSIX filename regressions run on Linux/macOS; Windows also exercises both path conventions through isolated semantic tests. Preserve platform-specific skips rather than treating mocked path semantics as a real filesystem test.
+
+Ignored `.cache/` contents are regenerable test/lint/audit artifacts. Remove stale temporary audit repositories and old logs only after their processes have exited and any needed findings have been recorded. Keep dependencies and the current build/coverage outputs while using them for development or verification.
+
 Before opening a pull request:
 
 - Add focused regressions for behavior changes and update affected documentation.

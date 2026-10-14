@@ -28,7 +28,7 @@ Agent Black Box records file events, Git evidence, and the commands you run thro
 - CI policies (`new-secrets`, `complete-review`) that compare staged content against a fixed commit.
 - A managed Git pre-commit hook (`abb hook install`) with explicit first-commit policy and external-storage options.
 - Your own secret patterns and a documented allowlist in `.agentblackbox.json`, applied to both detectors and to command redaction.
-- Session history, comparison, integrity verification, verified archives, and guarded pruning and rollback.
+- Session history, comparison, integrity verification, verified archives, guarded pruning and rollback, and recovery with optional record/wait limits.
 - Possible-secret location comparisons, explicit derived-index repair, verified archive resume, and optional aggregate analysis budgets.
 - Pull request comments (`abb pr-comment`) and SARIF export for recorded sessions.
 
@@ -141,7 +141,7 @@ Agent Black Box; dosya olaylarını, Git verilerini ve kendi üzerinden çalış
 - Staged içeriği sabit bir commit ile karşılaştıran CI politikaları (`new-secrets`, `complete-review`).
 - İlk commit politikası ve harici depolama için açık seçenekleri olan yönetilen bir Git pre-commit hook'u (`abb hook install`).
 - `.agentblackbox.json` içinde kendi gizli değer desenleriniz ve gerekçeli bir izin listesi; iki dedektöre ve komut maskelemeye de uygulanır.
-- Oturum geçmişi, karşılaştırma, bütünlük doğrulaması, doğrulanmış arşiv ile onaylı silme ve geri alma.
+- Oturum geçmişi, karşılaştırma, bütünlük doğrulaması, doğrulanmış arşiv, onaylı silme ve geri alma; isteğe bağlı kayıt/bekleme sınırlarıyla kurtarma.
 - Olası gizli değer konumlarını karşılaştırma, açık seçimle türetilmiş indeks onarımı, doğrulanmış arşive devam etme ve isteğe bağlı toplam analiz bütçesi.
 - Pull request yorumları (`abb pr-comment`) ve kayıtlı oturumlar için SARIF dışa aktarımı.
 
