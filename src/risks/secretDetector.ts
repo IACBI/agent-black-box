@@ -39,7 +39,7 @@ const URL_CREDENTIAL = /([a-z][a-z0-9+.-]{0,31}:\/\/)(?:[^\s/@:]{1,128}:[^\s/@]{
 const HTTP_USER_CREDENTIAL = /(https?:\/\/)[^\s/@]{1,512}@/i;
 const MAX_BUILTIN_REDACTION_LENGTH = 65_536;
 
-const SECRET_PATTERNS: Array<{ name: string; matches: (line: string) => boolean }> = [
+const KNOWN_CREDENTIAL_PATTERNS: Array<{ name: string; matches: (line: string) => boolean }> = [
   { name: "AWS access key-like value", matches: (line) => AWS_ACCESS_KEY.test(line) },
   { name: "GitHub token-like value", matches: (line) => GITHUB_TOKEN.test(line) },
   { name: "Slack token-like value", matches: (line) => SLACK_TOKEN.test(line) },
@@ -57,6 +57,11 @@ const SECRET_PATTERNS: Array<{ name: string; matches: (line: string) => boolean 
   { name: "URL credential", matches: (line) => URL_CREDENTIAL.test(line) || HTTP_USER_CREDENTIAL.test(line) },
   { name: "JWT-like value", matches: hasJwtLikeValue },
   { name: "Private key block", matches: (line) => PRIVATE_KEY_HEADER.test(line) },
+];
+
+const SECRET_PATTERNS: typeof KNOWN_CREDENTIAL_PATTERNS = [
+  ...KNOWN_CREDENTIAL_PATTERNS,
+  { name: "JSON-escaped credential", matches: hasJsonEscapedCredential },
   {
     name: "Secret assignment-like value",
     matches: (line) =>
@@ -99,7 +104,7 @@ export interface SecretScanResult {
  * recorded command text, where a bare token has no variable name or flag to give it away.
  */
 export function redactKnownSecretTokens(text: string): string {
-  if (text.length > MAX_BUILTIN_REDACTION_LENGTH) return "<redacted>";
+  if (text.length > MAX_BUILTIN_REDACTION_LENGTH || hasJsonEscapedCredential(text)) return "<redacted>";
   let result = text;
   // Component scanning avoids the quadratic JWT regex retry at each repeated "eyJ" prefix.
   const spans = findJwtSpans(result);
@@ -154,7 +159,8 @@ export function redactKnownSecretTokensWithRules(
       mark(match.index + match[1]!.length, match.index + match[0].length - 1);
     }
   }
-  if (PRIVATE_KEY_HEADER.test(text) || hasEscapedSecretAssignment(text)) mark(0, text.length);
+  if (PRIVATE_KEY_HEADER.test(text) || hasEscapedSecretAssignment(text) || hasJsonEscapedCredential(text))
+    mark(0, text.length);
   return redactCustomSecretPatternsWithMask(rules, text, matchEnds);
 }
 
@@ -295,9 +301,43 @@ function scanSecretsInLineWithMatches(
 /** Provider and structured credential signals shared by recording and watcherless analysis. */
 export function hasKnownCredentialMaterial(line: string): boolean {
   return (
-    SECRET_PATTERNS.some(({ name, matches }) => name !== "Secret assignment-like value" && matches(line)) ||
+    KNOWN_CREDENTIAL_PATTERNS.some(({ matches }) => matches(line)) ||
+    hasJsonEscapedCredential(line) ||
     hasEscapedSecretAssignment(line)
   );
+}
+
+/** Decode one bounded JSON string layer, never evaluate code or recursively expand encoded input. */
+function hasJsonEscapedCredential(text: string): boolean {
+  let start = -1;
+  let escaped = false;
+  for (let index = 0; index < text.length; index += 1) {
+    if (start < 0) {
+      if (text[index] === '"') {
+        start = index;
+        escaped = false;
+      }
+      continue;
+    }
+    if (text[index] === "\\") {
+      escaped = true;
+      index += 1;
+      continue;
+    }
+    if (text[index] !== '"') continue;
+    if (escaped && index - start + 1 <= MAX_BUILTIN_REDACTION_LENGTH) {
+      const literal = text.slice(start, index + 1);
+      let decoded: unknown;
+      try {
+        decoded = JSON.parse(literal);
+      } catch {
+        // A malformed literal must not abort analysis or command execution.
+      }
+      if (typeof decoded === "string" && KNOWN_CREDENTIAL_PATTERNS.some(({ matches }) => matches(decoded))) return true;
+    }
+    start = -1;
+  }
+  return false;
 }
 
 function hasLlmApiKey(line: string): boolean {

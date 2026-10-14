@@ -72,6 +72,8 @@ export interface FinalizeSessionOptions {
   maxRecordBytes?: number;
   /** Shared accepted-record count across both logs, checked before array retention; not a heap/RSS cap. */
   maxRecords?: number;
+  /** Refuse at allocation/phase checkpoints when observed whole-process RSS exceeds this byte threshold. Not an OS hard cap. */
+  maxRssBytes?: number;
   /** Reject without finalizing when live wrappers outlast this optional wait; the default waits indefinitely. */
   commandWaitTimeoutMs?: number;
 }
@@ -323,6 +325,7 @@ export async function recoverActiveSession(
   options: FinalizeSessionOptions = {}
 ): Promise<{ state: SessionRecoveryStatus; report?: SessionReport }> {
   validateFinalizeSessionOptions(options);
+  assertRssWithinLimit(options.maxRssBytes);
   const recovery = await inspectSessionRecoveryState(repoRoot, config);
 
   if (recovery.status === "no-active-session") {
@@ -449,12 +452,16 @@ export async function finalizeSession(
   options: FinalizeSessionOptions = {}
 ): Promise<SessionReport> {
   validateFinalizeSessionOptions(options);
+  assertRssWithinLimit(options.maxRssBytes);
   return withFinalizationOwnership(active, config, () =>
     finalizeOwnedSession(active, config, finalizedBy, captureLoss, options)
   );
 }
 
 function validateFinalizeSessionOptions(options: FinalizeSessionOptions): void {
+  if (options.maxRssBytes !== undefined && (!Number.isSafeInteger(options.maxRssBytes) || options.maxRssBytes < 1)) {
+    throw new Error("maxRssBytes must be a positive safe integer.");
+  }
   if (options.maxRecords !== undefined && (!Number.isSafeInteger(options.maxRecords) || options.maxRecords < 1)) {
     throw new Error("maxRecords must be a positive safe integer.");
   }
@@ -474,6 +481,14 @@ function validateFinalizeSessionOptions(options: FinalizeSessionOptions): void {
   }
 }
 
+function assertRssWithinLimit(maxRssBytes: number | undefined): void {
+  if (maxRssBytes !== undefined && process.memoryUsage.rss() > maxRssBytes) {
+    throw new Error(
+      `Observed process RSS exceeds the ${maxRssBytes} byte recovery threshold; evidence and ownership were preserved. Use a larger threshold or an isolated process with OS memory limits.`
+    );
+  }
+}
+
 async function finalizeOwnedSession(
   active: ActiveSession,
   config: AgentBlackBoxConfig,
@@ -481,8 +496,11 @@ async function finalizeOwnedSession(
   captureLoss: { droppedFileEvents: number; failedFileEventWrites: number },
   options: FinalizeSessionOptions
 ): Promise<SessionReport> {
+  const checkpoint = options.maxRssBytes === undefined ? undefined : () => assertRssWithinLimit(options.maxRssBytes);
+  checkpoint?.();
   await markCommandsClosing(active.sessionDir);
-  const commandWarnings = await waitForInFlightCommands(active.sessionDir, options.commandWaitTimeoutMs);
+  const commandWarnings = await waitForInFlightCommands(active.sessionDir, options.commandWaitTimeoutMs, checkpoint);
+  checkpoint?.();
   const captureLossMarkers = await Promise.all(
     Object.values(CAPTURE_LOSS_MARKERS).map((name) => fileExistsStrict(path.join(active.sessionDir, name)))
   );
@@ -491,6 +509,7 @@ async function finalizeOwnedSession(
   let retainedRecordBytes = 0;
   let retainedRecordCount = 0;
   const reserveRecordBytes = (bytes: number): void => {
+    checkpoint?.();
     if (options.maxRecords !== undefined && retainedRecordCount >= options.maxRecords) {
       throw new Error(
         `Session capture exceeds the ${options.maxRecords} record count allowance; evidence and ownership were preserved.`
@@ -506,21 +525,37 @@ async function finalizeOwnedSession(
   };
   // The log parses are CPU-bound and the Git snapshot is process-spawn latency, so they overlap.
   const inputReads = [
-    readNdjsonRecords(getEventsPath(active.sessionDir), isCapturedFileEvent, "file event", reserveRecordBytes),
-    readNdjsonRecords(getCommandsPath(active.sessionDir), isCapturedCommandEvent, "command event", reserveRecordBytes),
+    readNdjsonRecords(
+      getEventsPath(active.sessionDir),
+      isCapturedFileEvent,
+      "file event",
+      reserveRecordBytes,
+      checkpoint
+    ),
+    readNdjsonRecords(
+      getCommandsPath(active.sessionDir),
+      isCapturedCommandEvent,
+      "command event",
+      reserveRecordBytes,
+      checkpoint
+    ),
     readStateFile<SessionBaseline>(getGitBaselinePath(active.sessionDir), isSessionBaseline, MAX_GIT_BASELINE_BYTES),
     collectGitSnapshot(active.repoRoot, config.exclude),
   ] as const;
   // Keep finalization ownership until all readers settle, even if another reader exceeds the shared allowance.
   await Promise.allSettled(inputReads);
   const [fileEvents, commandEvents, baselineState, git] = await Promise.all(inputReads);
+  checkpoint?.();
   const committedChanges = baselineState.value
     ? await collectGitChangesBetween(active.repoRoot, baselineState.value.git.head, git.head, config.exclude)
     : [];
+  checkpoint?.();
   const changeEvidence = buildChangeEvidence(baselineState.value, fileEvents.records, git, committedChanges);
   const sessionRelevantChanges = selectSessionRelevantChanges(git, changeEvidence);
   const risks = detectRisks(sessionRelevantChanges, config);
+  checkpoint?.();
   const secretScan = await scanChangedFilesForSecrets(active.repoRoot, sessionRelevantChanges, config);
+  checkpoint?.();
   const { findings: possibleSecrets, allowlisted: allowlistedSecretCount } = secretScan;
   const baselineWarnings = baselineState.value
     ? []
@@ -570,6 +605,7 @@ async function finalizeOwnedSession(
   );
 
   await assertSessionOwnership(active, config);
+  checkpoint?.();
   try {
     await writeRollbackSafetyState(report);
   } catch {
@@ -579,6 +615,7 @@ async function finalizeOwnedSession(
     // Existing missing-log semantics remain an empty log; inaccessible or disappearing logs still fail.
     if (await pathExists(logPath)) await syncRegularFile(logPath);
   }
+  checkpoint?.();
   await writeReports(report);
   await clearSessionState(active, config);
 
@@ -608,9 +645,14 @@ async function fileExistsStrict(filePath: string): Promise<boolean> {
   }
 }
 
-async function waitForInFlightCommands(sessionDir: string, timeoutMs?: number): Promise<string[]> {
+async function waitForInFlightCommands(
+  sessionDir: string,
+  timeoutMs?: number,
+  checkpoint?: () => void
+): Promise<string[]> {
   const startedAt = performance.now();
   while (true) {
+    checkpoint?.();
     const names = await readdir(sessionDir);
     const markerNames = names.filter((name) => INFLIGHT_COMMAND_PATTERN.test(name));
     const liveMarkers = markerNames.filter((name) => {

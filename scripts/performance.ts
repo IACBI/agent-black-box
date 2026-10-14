@@ -104,6 +104,52 @@ try {
     })
   );
 
+  let rssSamples = 0;
+  const rssStarted = performance.now();
+  const rssRecords = await readNdjsonRecords(
+    getEventsPath(temporaryDirectory),
+    isCapturedFileEvent,
+    "file event",
+    () => {
+      if (process.memoryUsage.rss() < 1) throw new Error("Invalid observed process RSS.");
+      rssSamples += 1;
+    },
+    () => {
+      if (process.memoryUsage.rss() < 1) throw new Error("Invalid observed process RSS.");
+      rssSamples += 1;
+    }
+  );
+  const rssDurationMs = performance.now() - rssStarted;
+  if (rssRecords.records.length !== EVENT_COUNT || rssSamples < EVENT_COUNT * 2 || rssDurationMs > MAX_DURATION_MS)
+    throw new Error("RSS checkpoint capture performance budget exceeded.");
+  console.log(
+    JSON.stringify({
+      scenario: "rss-checkpoint-capture",
+      records: EVENT_COUNT,
+      rssSamples,
+      durationMs: Math.round(rssDurationMs),
+      maxDurationMs: MAX_DURATION_MS,
+    })
+  );
+
+  const escapedContent = String.raw`"\u0061" `.repeat(10_000) + "\n" + String.raw`"\u0067hp_` + "a1".repeat(15) + '"';
+  const escapedStarted = performance.now();
+  const escapedAnalysis = analyzeChangedFiles([{ path: "encoded.json", status: "modified", content: escapedContent }]);
+  const escapedDurationMs = performance.now() - escapedStarted;
+  if (
+    escapedAnalysis.findings.filter((finding) => finding.kind === "possible-secret").length !== 1 ||
+    escapedDurationMs > MAX_DURATION_MS
+  )
+    throw new Error("JSON-escaped credential scan performance budget exceeded.");
+  console.log(
+    JSON.stringify({
+      scenario: "json-escaped-credential-scan",
+      benignLiterals: 10_000,
+      durationMs: Math.round(escapedDurationMs),
+      maxDurationMs: MAX_DURATION_MS,
+    })
+  );
+
   const digestStarted = performance.now();
   const digest = await digestNdjsonRecords(getEventsPath(temporaryDirectory), isCapturedFileEvent, "file event");
   const digestDuration = performance.now() - digestStarted;

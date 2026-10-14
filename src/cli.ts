@@ -103,7 +103,7 @@ const program = new Command();
 program
   .name("abb")
   .description("Record and explain observable repository changes during AI coding sessions.")
-  .version("0.9.0")
+  .version("0.10.0")
   .option(
     "--allow-external-session-dir",
     "allow a trusted local sessionDir outside the repository; network and UNC paths remain blocked"
@@ -190,24 +190,37 @@ program
   .option("--command-wait-timeout-ms <milliseconds>", "stop recovery if recorded commands remain live beyond this wait")
   .option("--max-record-bytes <bytes>", "limit retained event and command record bytes during recovery (up to 256 MiB)")
   .option("--max-records <count>", "limit the combined number of retained event and command records during recovery")
-  .action(async (options: { commandWaitTimeoutMs?: string; maxRecordBytes?: string; maxRecords?: string }) => {
-    const recoveryOptions = {
-      commandWaitTimeoutMs: parseSessionListLimit(options.commandWaitTimeoutMs, "--command-wait-timeout-ms"),
-      maxRecordBytes: parseSessionListLimit(options.maxRecordBytes, "--max-record-bytes"),
-      maxRecords: parseSessionListLimit(options.maxRecords, "--max-records"),
-    };
-    const repoRoot = await requireRepositoryRoot(process.cwd());
-    const config = await loadRuntimeConfig(repoRoot);
-    const recovery = await recoverActiveSession(repoRoot, config, recoveryOptions);
+  .option(
+    "--max-rss-mb <mb>",
+    "refuse recovery when observed process RSS exceeds this MiB threshold; not an OS hard cap"
+  )
+  .action(
+    async (options: {
+      commandWaitTimeoutMs?: string;
+      maxRecordBytes?: string;
+      maxRecords?: string;
+      maxRssMb?: string;
+    }) => {
+      const maxRssMb = parseSessionListLimit(options.maxRssMb, "--max-rss-mb");
+      const recoveryOptions = {
+        commandWaitTimeoutMs: parseSessionListLimit(options.commandWaitTimeoutMs, "--command-wait-timeout-ms"),
+        maxRecordBytes: parseSessionListLimit(options.maxRecordBytes, "--max-record-bytes"),
+        maxRecords: parseSessionListLimit(options.maxRecords, "--max-records"),
+        maxRssBytes: maxRssMb === undefined ? undefined : maxRssMb * 1024 * 1024,
+      };
+      const repoRoot = await requireRepositoryRoot(process.cwd());
+      const config = await loadRuntimeConfig(repoRoot);
+      const recovery = await recoverActiveSession(repoRoot, config, recoveryOptions);
 
-    if (recovery.state === "no-active-session") {
-      console.log("No session recovery is needed.");
-    } else if (recovery.report) {
-      console.log(`Recovered session. Reports written to ${formatTerminalValue(recovery.report.sessionDir)}`);
-    } else {
-      console.log("Completed session state cleanup.");
+      if (recovery.state === "no-active-session") {
+        console.log("No session recovery is needed.");
+      } else if (recovery.report) {
+        console.log(`Recovered session. Reports written to ${formatTerminalValue(recovery.report.sessionDir)}`);
+      } else {
+        console.log("Completed session state cleanup.");
+      }
     }
-  });
+  );
 
 program
   .command("status")

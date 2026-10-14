@@ -348,10 +348,91 @@ describe("session manager", () => {
         );
         await expect(recoverActiveSession(dir, DEFAULT_CONFIG, { maxRecords })).rejects.toThrow("maxRecords");
       }
+      for (const maxRssBytes of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, NaN, Infinity]) {
+        await expect(finalizeSession(session, DEFAULT_CONFIG, "test", undefined, { maxRssBytes })).rejects.toThrow(
+          "maxRssBytes"
+        );
+        await expect(recoverActiveSession(dir, DEFAULT_CONFIG, { maxRssBytes })).rejects.toThrow("maxRssBytes");
+      }
       expect(await Promise.all(evidencePaths.map((filePath) => readFile(filePath)))).toEqual(evidenceBefore);
       expect(await pathExists(path.join(session.sessionDir, "commands-closing"))).toBe(false);
       expect((await readdir(session.sessionDir)).filter((name) => name.startsWith("finalization-claim-"))).toEqual([]);
     } finally {
+      await removeTempDir(dir);
+    }
+  });
+
+  it("checks observed RSS while waiting for a live wrapper without removing its marker", async () => {
+    const dir = await createTempDir();
+    const limit = 64 * 1024 * 1024;
+    let samples = 0;
+    const rss = vi.spyOn(process.memoryUsage, "rss").mockImplementation(() => (++samples > 4 ? limit + 1 : limit));
+    try {
+      initGitRepo(dir);
+      const session = await createSession(dir, DEFAULT_CONFIG);
+      const marker = await registerInFlightCommand(session);
+      const active = await readFile(getActiveSessionPath(dir, DEFAULT_CONFIG));
+      await expect(
+        finalizeSession(session, DEFAULT_CONFIG, "test", undefined, { maxRssBytes: limit, commandWaitTimeoutMs: 1000 })
+      ).rejects.toThrow("RSS");
+      expect(await pathExists(marker)).toBe(true);
+      expect(await readFile(getActiveSessionPath(dir, DEFAULT_CONFIG))).toEqual(active);
+      expect(await pathExists(path.join(session.sessionDir, "session.json"))).toBe(false);
+    } finally {
+      rss.mockRestore();
+      await removeTempDir(dir);
+    }
+  });
+
+  it("refuses observed RSS growth while reading logs, preserves evidence, and allows an exact-limit retry", async () => {
+    const dir = await createTempDir();
+    const limit = 64 * 1024 * 1024;
+    const rss = vi.spyOn(process.memoryUsage, "rss").mockReturnValue(limit);
+    const originalRead = ndjson.readNdjsonRecords;
+    const reader = vi.spyOn(ndjson, "readNdjsonRecords");
+    try {
+      initGitRepo(dir);
+      const session = await createSession(dir, DEFAULT_CONFIG);
+      await appendFileEvent(session, { timestamp: session.startedAt, eventType: "change", path: "src/index.ts" });
+      const evidencePaths = [
+        getEventsPath(session.sessionDir),
+        getCommandsPath(session.sessionDir),
+        getActiveSessionPath(dir, DEFAULT_CONFIG),
+        getSessionLockPath(dir, DEFAULT_CONFIG),
+      ];
+      const before = await Promise.all(evidencePaths.map((file) => readFile(file)));
+      rss.mockReturnValue(limit + 1);
+      await expect(finalizeSession(session, DEFAULT_CONFIG, "test", undefined, { maxRssBytes: limit })).rejects.toThrow(
+        "RSS"
+      );
+      expect(await pathExists(path.join(session.sessionDir, "commands-closing"))).toBe(false);
+      expect(await Promise.all(evidencePaths.map((file) => readFile(file)))).toEqual(before);
+      rss.mockReturnValue(limit);
+      reader.mockImplementation((file, guard, label, reserve, checkpoint) =>
+        originalRead(
+          file,
+          (value): value is unknown => {
+            rss.mockReturnValue(limit + 1);
+            return guard(value);
+          },
+          label,
+          reserve,
+          checkpoint
+        )
+      );
+      await expect(finalizeSession(session, DEFAULT_CONFIG, "test", undefined, { maxRssBytes: limit })).rejects.toThrow(
+        "RSS"
+      );
+      expect(await Promise.all(evidencePaths.map((file) => readFile(file)))).toEqual(before);
+      expect(await pathExists(path.join(session.sessionDir, "session.json"))).toBe(false);
+      expect((await readdir(session.sessionDir)).filter((name) => name.startsWith("finalization-claim-"))).toEqual([]);
+      reader.mockRestore();
+      rss.mockReturnValue(limit);
+      const report = await finalizeSession(session, DEFAULT_CONFIG, "test", undefined, { maxRssBytes: limit });
+      expect(report.events).toHaveLength(1);
+    } finally {
+      reader.mockRestore();
+      rss.mockRestore();
       await removeTempDir(dir);
     }
   });
