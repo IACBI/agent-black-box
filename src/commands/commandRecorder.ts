@@ -18,6 +18,8 @@ const MAX_RECORDED_COMMAND_LENGTH = 32_768;
 
 export interface RecordCommandOptions extends ConfigLoadOptions {
   cwd?: string;
+  /** Withhold command text and user labels from recorded metadata; execution remains unchanged. */
+  private?: boolean;
   label?: string;
   group?: string;
   phase?: string;
@@ -52,7 +54,9 @@ export async function recordAndRunCommand(
   const startedAtDate = new Date();
   const startedAt = startedAtDate.toISOString();
   const secretRules = compileSecretRules(config);
-  const redactedCommand = formatCommand(redactCommandParts(normalizedCommandParts, secretRules));
+  const redactedCommand = options.private
+    ? "<redacted>"
+    : formatCommand(redactCommandParts(normalizedCommandParts, secretRules));
 
   const inFlightMarker = await registerInFlightCommand(active);
   let recorded = false;
@@ -65,9 +69,13 @@ export async function recordAndRunCommand(
       endedAt: endedAtDate.toISOString(),
       command: redactedCommand,
       cwd: toRepoRelative(repoRoot, runCwd) || ".",
-      ...optionalMetadata("label", options.label, secretRules),
-      ...optionalMetadata("group", options.group, secretRules),
-      ...optionalMetadata("phase", options.phase, secretRules),
+      ...(!options.private
+        ? {
+            ...optionalMetadata("label", options.label, secretRules),
+            ...optionalMetadata("group", options.group, secretRules),
+            ...optionalMetadata("phase", options.phase, secretRules),
+          }
+        : {}),
       exitCode: result.exitCode,
       durationMs: Math.round(performance.now() - startedAtMonotonic),
       ...(result.error ? { error: result.error } : {}),

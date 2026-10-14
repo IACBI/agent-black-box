@@ -1,6 +1,6 @@
 {
   "name": "agent-black-box",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "Local-first CLI for reviewing repository changes and risk signals during AI-assisted coding.",
   "type": "module",
   "packageManager": "pnpm@10.30.3",
@@ -38,6 +38,7 @@
     "node": ">=22"
   },
   "scripts": {
+    "audit:isolated": "tsx scripts/isolated-audit.ts",
     "build": "pnpm clean && tsc -p tsconfig.build.json",
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm deadcode && pnpm build && pnpm test:coverage",
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
@@ -53,7 +54,8 @@
     "release:validate": "tsx scripts/release-check.ts",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tests/tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tests/tsconfig.json --noEmit",
+    "verify:isolation": "tsx scripts/verify-isolation.ts"
   },
   "keywords": [
     "ai",

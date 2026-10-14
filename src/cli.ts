@@ -103,7 +103,7 @@ const program = new Command();
 program
   .name("abb")
   .description("Record and explain observable repository changes during AI coding sessions.")
-  .version("0.10.0")
+  .version("0.11.0")
   .option(
     "--allow-external-session-dir",
     "allow a trusted local sessionDir outside the repository; network and UNC paths remain blocked"
@@ -398,16 +398,25 @@ program
   .command("run")
   .description("Run a command during an active session and record redacted command metadata.")
   .option("--cwd <path>", "run command from a repository-relative directory")
+  .option("--private", "withhold command text and user labels from recorded metadata")
   .option("--label <label>", "attach a short label to the recorded command")
   .option("--group <group>", "group related recorded commands in reports")
   .option("--phase <phase>", "mark a command phase such as setup, test, build, or release")
   .allowUnknownOption(true)
   .allowExcessArguments(true)
   .argument("<command...>", "command and arguments to run")
-  .action(async (commandParts: string[], options: { cwd?: string; label?: string; group?: string; phase?: string }) => {
-    const exitCode = await recordAndRunCommand(commandParts, process.cwd(), { ...options, ...getConfigLoadOptions() });
-    process.exitCode = exitCode;
-  });
+  .action(
+    async (
+      commandParts: string[],
+      options: { cwd?: string; private?: boolean; label?: string; group?: string; phase?: string }
+    ) => {
+      const exitCode = await recordAndRunCommand(commandParts, process.cwd(), {
+        ...options,
+        ...getConfigLoadOptions(),
+      });
+      process.exitCode = exitCode;
+    }
+  );
 
 program
   .command("report")
