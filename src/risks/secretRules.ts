@@ -1,6 +1,8 @@
 import {
   evaluateSecretPatternLines,
   evaluateSecretPatterns,
+  evaluateSecretPatternRedaction,
+  type PatternRedactionResult,
   MAX_CUSTOM_PATTERN_BATCH_CHARACTERS,
   MAX_CUSTOM_PATTERN_BATCH_LINES,
   MAX_CUSTOM_PATTERN_LINE_LENGTH,
@@ -130,4 +132,13 @@ export function redactCustomSecretPatterns(rules: CompiledSecretRules, text: str
   }
   if (text.length > MAX_REDACTED_TEXT_LENGTH) return "<redacted>";
   return evaluateSecretPatterns(rules, text, true);
+}
+
+/** @internal All masks refer to the original bounded text. */
+export function redactCustomSecretPatternsWithMask(
+  rules: CompiledSecretRules,
+  text: string,
+  matchEnds: Uint32Array
+): PatternRedactionResult {
+  return evaluateSecretPatternRedaction(rules, text, matchEnds);
 }

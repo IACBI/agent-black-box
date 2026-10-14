@@ -7,7 +7,43 @@ const state = new Int32Array(workerData.state);
 const output = new Uint8Array(workerData.output);
 Atomics.store(state, 0, 1);
 Atomics.notify(state, 0);
-parentPort.on("message", ({ patterns, text, lines, redact }) => {
+function redactOriginalMatches(compiled, text, initialMatchEnds, withMetadata) {
+  // Index original match endpoints by code unit, so masking one pattern cannot invalidate another.
+  const matchEnds = initialMatchEnds ? new Uint32Array(initialMatchEnds) : new Uint32Array(text.length);
+  let customMatched = false;
+  for (const { regex } of compiled) {
+    text.replace(regex, (match, ...args) => {
+      if (match !== "") {
+        customMatched = true;
+        const offset = typeof args.at(-1) === "object" ? args.at(-3) : args.at(-2);
+        matchEnds[offset] = Math.max(matchEnds[offset], offset + match.length);
+      }
+      return match;
+    });
+  }
+  const pieces = [];
+  let copiedThrough = 0;
+  let outputLength = 0;
+  for (let start = 0; start < text.length; start += 1) {
+    let end = matchEnds[start];
+    if (end === 0) continue;
+    for (let inner = start + 1; inner < end; inner += 1) {
+      end = Math.max(end, matchEnds[inner]);
+    }
+    outputLength += start - copiedThrough + "<redacted>".length;
+    if (outputLength > 131072) throw new Error("output limit");
+    pieces.push(text.slice(copiedThrough, start), "<redacted>");
+    copiedThrough = end;
+    // Adjacent matches remain separate replacements; only overlapping spans are merged.
+    start = end - 1;
+  }
+  outputLength += text.length - copiedThrough;
+  if (outputLength > 131072) throw new Error("output limit");
+  pieces.push(text.slice(copiedThrough));
+  const redacted = pieces.join("");
+  return withMetadata ? { text: redacted, customMatched } : redacted;
+}
+parentPort.on("message", ({ patterns, text, lines, redact, initialMatchEnds, withMetadata }) => {
   try {
     const compiled = patterns.map(pattern => ({ name: pattern.name, regex: new RegExp(pattern.source, pattern.flags) }));
     let result;
@@ -20,13 +56,12 @@ parentPort.on("message", ({ patterns, text, lines, redact }) => {
         }
         return names;
       });
+    } else if (redact) {
+      result = redactOriginalMatches(compiled, text, initialMatchEnds, withMetadata);
     } else {
-      result = redact ? text : [];
+      result = [];
       for (const { name, regex } of compiled) {
-        if (redact) {
-          result = result.replace(regex, match => match === "" ? match : "<redacted>");
-          if (result.length > 131072) throw new Error("output limit");
-        } else if (regex.test(text)) result.push(name);
+        if (regex.test(text)) result.push(name);
       }
     }
     const bytes = Buffer.from(JSON.stringify(result));
@@ -49,7 +84,14 @@ export const MAX_CUSTOM_PATTERN_BATCH_CHARACTERS = 65_536;
 const failedRules = new WeakSet<CompiledSecretRules>();
 let evaluator: { worker: Worker; state: Int32Array; output: Uint8Array } | undefined;
 
-type EvaluationInput = { text: string; redact: boolean } | { lines: readonly string[]; redact: false };
+export interface PatternRedactionResult {
+  text: string;
+  customMatched: boolean;
+}
+
+type EvaluationInput =
+  | { text: string; redact: boolean; initialMatchEnds?: Uint32Array; withMetadata?: true }
+  | { lines: readonly string[]; redact: false };
 
 /** Preserve synchronous APIs while keeping repository regexes off the calling thread. */
 export function evaluateSecretPatterns(rules: CompiledSecretRules, text: string, redact: false): string[];
@@ -63,7 +105,20 @@ export function evaluateSecretPatternLines(rules: CompiledSecretRules, lines: re
   return runEvaluation(rules, { lines, redact: false }) as string[][];
 }
 
-function runEvaluation(rules: CompiledSecretRules, input: EvaluationInput): string | string[] | string[][] {
+/** @internal Combines trusted original-text masks with custom matches in one bounded worker call. */
+export function evaluateSecretPatternRedaction(
+  rules: CompiledSecretRules,
+  text: string,
+  initialMatchEnds: Uint32Array
+): PatternRedactionResult {
+  const result = runEvaluation(rules, { text, redact: true, initialMatchEnds, withMetadata: true });
+  return typeof result === "string" ? { text: result, customMatched: true } : (result as PatternRedactionResult);
+}
+
+function runEvaluation(
+  rules: CompiledSecretRules,
+  input: EvaluationInput
+): string | string[] | string[][] | PatternRedactionResult {
   const { redact } = input;
   if (failedRules.has(rules)) return failEvaluation(redact, false);
   const patterns = rules.patterns.map((pattern) => ({
@@ -77,7 +132,13 @@ function runEvaluation(rules: CompiledSecretRules, input: EvaluationInput): stri
         input.lines.some((line) => line.length > MAX_CUSTOM_PATTERN_LINE_LENGTH) ||
         input.lines.reduce((total, line) => total + line.length, 0) > MAX_CUSTOM_PATTERN_BATCH_CHARACTERS
       : input.text.length > MAX_CUSTOM_PATTERN_BATCH_CHARACTERS;
-  if (patterns.length > 32 || patterns.some((pattern) => pattern.source.length > 256) || inputTooLarge) {
+  const invalidMask =
+    "initialMatchEnds" in input &&
+    input.initialMatchEnds !== undefined &&
+    (!(input.initialMatchEnds instanceof Uint32Array) ||
+      input.initialMatchEnds.length !== input.text.length ||
+      input.initialMatchEnds.some((end, start) => end !== 0 && (end <= start || end > input.text.length)));
+  if (patterns.length > 32 || patterns.some((pattern) => pattern.source.length > 256) || inputTooLarge || invalidMask) {
     failedRules.add(rules);
     return failEvaluation(redact);
   }
@@ -108,7 +169,7 @@ function runEvaluation(rules: CompiledSecretRules, input: EvaluationInput): stri
     return failEvaluation(redact);
   }
   return JSON.parse(Buffer.from(output.subarray(0, Atomics.load(state, 1))).toString("utf8")) as
-    string | string[] | string[][];
+    string | string[] | string[][] | PatternRedactionResult;
 }
 
 function failEvaluation(redact: boolean, terminateWorker = true): string {

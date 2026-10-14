@@ -396,6 +396,86 @@ describe("provider token shapes and configured patterns", () => {
     expect(redactCommandParts(["deploy", value])).toEqual(["deploy", value]);
   });
 
+  it("does not retain credential suffixes when configured command patterns overlap", () => {
+    const rules = compileSecretRules({
+      secretPatterns: [
+        { name: "Prefix", pattern: "corp_" },
+        { name: "Complete token", pattern: "corp_[a-z0-9]{16}" },
+      ],
+    });
+    const parts = ["deploy", "corp_0123456789abcdef", "--mode=safe"];
+    expect(redactCommandParts(parts, rules)).toEqual(["deploy", "<redacted>", "--mode=safe"]);
+    expect(parts).toEqual(["deploy", "corp_0123456789abcdef", "--mode=safe"]);
+  });
+
+  it("composes built-in and custom matches on the original argument without changing argv", () => {
+    const providerToken = "ghp_" + "a1".repeat(12);
+    const value = "corp_" + providerToken + "!private-suffix";
+    const rules = compileSecretRules({
+      secretPatterns: [{ name: "Whole internal token", pattern: "corp_ghp_[a-z0-9]{24}!private-suffix" }],
+    });
+    const parts = ["echo", value, "safe"];
+    expect(redactCommandParts(parts, rules)).toEqual(["echo", "<redacted>", "safe"]);
+    expect(parts).toEqual(["echo", value, "safe"]);
+    const prefixRules = compileSecretRules({ secretPatterns: [{ name: "Provider prefix", pattern: "ghp_" }] });
+    expect(redactCommandParts(["echo", providerToken], prefixRules)).toEqual(["echo", "<redacted>"]);
+  });
+
+  it("preserves custom script context while composing embedded credential masking", () => {
+    const providerToken = "ghp_" + "a1".repeat(12);
+    const providerRules = compileSecretRules({
+      secretPatterns: [{ name: "Whole token", pattern: "corp_ghp_[a-z0-9]{24}!private-suffix" }],
+    });
+    expect(
+      redactCommandParts(["sh", "-c", "echo corp_" + providerToken + "!private-suffix; run"], providerRules)
+    ).toEqual(["sh", "-c", "echo <redacted>; run"]);
+    const contextRules = compileSecretRules({
+      secretPatterns: [{ name: "Credential context", pattern: "session PASSWORD=[a-z-]+; followup [a-z-]+" }],
+    });
+    expect(
+      redactCommandParts(["sh", "-c", "echo session PASSWORD=synthetic-value; followup private-tail"], contextRules)
+    ).toEqual(["sh", "-c", "echo <redacted>"]);
+  });
+
+  it("redacts the original custom match when structural URL or assignment rewriting would invalidate it", () => {
+    const rules = compileSecretRules({
+      secretPatterns: [
+        { name: "URL context", pattern: "https://user:synthetic-value@example[.]test/path" },
+        { name: "Assignment context", pattern: "PASSWORD=synthetic-value; followup private-tail" },
+        { name: "JSON context", pattern: '"note":"private-tail"' },
+      ],
+    });
+    expect(
+      redactCommandParts(
+        [
+          "echo",
+          "https://user:synthetic-value@example.test/path",
+          "PASSWORD=synthetic-value; followup private-tail",
+          '--data={"password":"synthetic-value","note":"private-tail"}',
+        ],
+        rules
+      )
+    ).toEqual(["echo", "<redacted>", "<redacted>", "<redacted>"]);
+  });
+
+  it("preserves built-in formatting and tool credential boundaries when custom rules do not match", () => {
+    const unmatched = compileSecretRules({ secretPatterns: [{ name: "Internal", pattern: "corp_[a-z0-9]{12}" }] });
+    const parts = [
+      "curl",
+      "-u",
+      "synthetic-private-value",
+      "Authorization:   Bearer synthetic-private-value",
+      "https://user:synthetic-private-value@example.test/path?token=synthetic-private-value&mode=safe",
+    ];
+    expect(redactCommandParts(parts, unmatched)).toEqual(redactCommandParts(parts));
+    const flagRules = compileSecretRules({ secretPatterns: [{ name: "Credential flag", pattern: "^-u$" }] });
+    expect(redactCommandParts(["curl", "-u", "synthetic-private-value"], flagRules)).toEqual([
+      "curl",
+      "<redacted>",
+      "<redacted>",
+    ]);
+  });
+
   it("keeps redacting URL credentials in any scheme while leaving harmless URLs intact", () => {
     const redacted = redactCommandParts([
       `postgres://app:${secret}@db.example.test/main`,

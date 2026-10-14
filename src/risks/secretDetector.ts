@@ -11,6 +11,7 @@ import {
   matchCustomSecretPatternsInLines,
   MAX_CUSTOM_PATTERN_LINE_LENGTH,
   NO_SECRET_RULES,
+  redactCustomSecretPatternsWithMask,
   type CompiledSecretRules,
 } from "./secretRules.js";
 
@@ -124,6 +125,37 @@ export function redactKnownSecretTokens(text: string): string {
   // Key material can span lines; dropping the whole argument avoids retaining its body.
   if (PRIVATE_KEY_HEADER.test(result) || hasEscapedSecretAssignment(result)) return "<redacted>";
   return result;
+}
+
+/** @internal Provider and custom command matches share original-text positions. */
+export function redactKnownSecretTokensWithRules(
+  text: string,
+  rules: CompiledSecretRules,
+  matchEnds: Uint32Array
+): { text: string; customMatched: boolean } {
+  if (text.length > MAX_BUILTIN_REDACTION_LENGTH) return { text: "<redacted>", customMatched: true };
+  const mark = (start: number, end: number): void => {
+    matchEnds[start] = Math.max(matchEnds[start] ?? 0, end);
+  };
+  for (const span of findJwtSpans(text)) mark(span.start, span.end);
+  for (const match of text.matchAll(new RegExp(LLM_API_KEY.source, "g"))) {
+    if (/\d/.test(match[0])) mark(match.index, match.index + match[0].length);
+  }
+  for (const expression of REDACTABLE_TOKENS) {
+    for (const match of text.matchAll(expression)) mark(match.index, match.index + match[0].length);
+  }
+  for (const match of text.matchAll(new RegExp(AUTHORIZATION_VALUE.source, "gi"))) {
+    const valueOffset = match[0].indexOf(":") + 1;
+    const whitespaceLength = /^\s*/.exec(match[0].slice(valueOffset))?.[0].length ?? 0;
+    mark(match.index + valueOffset + whitespaceLength, match.index + match[0].length);
+  }
+  for (const expression of [URL_CREDENTIAL, HTTP_USER_CREDENTIAL]) {
+    for (const match of text.matchAll(new RegExp(expression.source, "gi"))) {
+      mark(match.index + match[1]!.length, match.index + match[0].length - 1);
+    }
+  }
+  if (PRIVATE_KEY_HEADER.test(text) || hasEscapedSecretAssignment(text)) mark(0, text.length);
+  return redactCustomSecretPatternsWithMask(rules, text, matchEnds);
 }
 
 export async function detectPossibleSecrets(

@@ -227,6 +227,36 @@ describe("compiled secret rules", () => {
     expect(isLineAllowlisted(rules, "src/fixtures/a.env", "x")).toBe(false);
   });
 
+  it.each([false, true])(
+    "redacts overlapping patterns on the original text regardless of order (reversed: %s)",
+    (reverse) => {
+      const patterns = [
+        { name: "Token prefix", pattern: "corp_" },
+        { name: "Complete token", pattern: "corp_[a-z0-9]{16}" },
+      ];
+      const rules = compileSecretRules({ secretPatterns: reverse ? [...patterns].reverse() : patterns });
+      expect(redactCustomSecretPatterns(rules, "before corp_0123456789abcdef after")).toBe("before <redacted> after");
+    }
+  );
+
+  it("merges overlapping match chains while preserving adjacent matches and original lookbehind context", () => {
+    const overlapRules = compileSecretRules({
+      secretPatterns: [
+        { name: "First", pattern: "abc" },
+        { name: "Middle", pattern: "cde" },
+        { name: "Last", pattern: "efg" },
+      ],
+    });
+    expect(redactCustomSecretPatterns(overlapRules, "xabcdefgy")).toBe("x<redacted>y");
+    const adjacentRules = compileSecretRules({
+      secretPatterns: [
+        { name: "Named prefix", pattern: "(?<prefix>corp_)" },
+        { name: "Contextual suffix", pattern: "(?<=corp_)[a-z0-9]{16}" },
+      ],
+    });
+    expect(redactCustomSecretPatterns(adjacentRules, "😀corp_0123456789abcdef😀")).toBe("😀<redacted><redacted>😀");
+  });
+
   it("redacts every match of every configured pattern and never injects text for zero-width matches", () => {
     const rules = compileSecretRules({
       secretPatterns: [

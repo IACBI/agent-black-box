@@ -1,8 +1,13 @@
+import { evaluateSecretPatternRedaction } from "../src/risks/secretPatternEvaluator.js";
 import { performance } from "node:perf_hooks";
 import { describe, expect, it } from "vitest";
 import { analyzeChangedFiles } from "../src/analyze/analyzer.js";
 import { redactCommandParts } from "../src/commands/commandRecorder.js";
-import { detectSecretsInLine, redactKnownSecretTokens } from "../src/risks/secretDetector.js";
+import {
+  detectSecretsInLine,
+  redactKnownSecretTokens,
+  redactKnownSecretTokensWithRules,
+} from "../src/risks/secretDetector.js";
 import {
   compileSecretRules,
   matchCustomSecretPatterns,
@@ -35,6 +40,63 @@ describe("credential recognition and bounded redaction", () => {
     expect(redacted).toContain("<redacted>");
     expect(redacted).not.toContain(credential);
     expect(redactCommandParts(["echo", credential]).join(" ")).not.toContain(credential);
+  });
+
+  it.each(credentials)("composes custom context around every built-in credential family %#", (credential) => {
+    const escaped = credential.replace(/[.*+?^${}()|[\]\\]/g, (match) => "\\" + match);
+    const value = "begin " + credential + " !private-tail";
+    const rules = compileSecretRules({
+      secretPatterns: [{ name: "Wrapped credential", pattern: "begin " + escaped + " !private-tail" }],
+    });
+    expect(redactKnownSecretTokensWithRules(value, rules, new Uint32Array(value.length))).toEqual({
+      text: "<redacted>",
+      customMatched: true,
+    });
+    expect(redactCommandParts(["echo", value], rules)).toEqual(["echo", "<redacted>"]);
+  });
+
+  it.each([
+    ["Authorization", "Authorization: Bearer synthetic-private-value", "<redacted>: <redacted>"],
+    ["https://", "https://synthetic-private-value@example.test/path", "<redacted><redacted>@example.test/path"],
+    ["BEGIN", "-----BEGIN PRIVATE KEY-----\nsynthetic-private-value\n-----END PRIVATE KEY-----", "<redacted>"],
+    ["eyJ", "eyJ" + "a".repeat(12) + "." + "b".repeat(12) + "." + "c".repeat(12), "<redacted>"],
+  ])(
+    "keeps complete built-in masking when custom pattern %s matches only part of its context",
+    (pattern, value, expected) => {
+      const rules = compileSecretRules({ secretPatterns: [{ name: "Partial context", pattern }] });
+      expect(redactKnownSecretTokensWithRules(value!, rules, new Uint32Array(value!.length))).toEqual({
+        text: expected,
+        customMatched: true,
+      });
+    }
+  );
+
+  it("retains precise masking at the composition input limit", () => {
+    const value = "corp_abcdef012345";
+    const padding = "x".repeat(65_536 - value.length);
+    const text = padding + value;
+    const rules = compileSecretRules({ secretPatterns: [{ name: "Internal", pattern: "corp_[a-z0-9]{12}" }] });
+    expect(redactKnownSecretTokensWithRules(text, rules, new Uint32Array(text.length))).toEqual({
+      text: padding + "<redacted>",
+      customMatched: true,
+    });
+  });
+
+  it("fails closed for oversized composition inputs or invalid original-text masks", () => {
+    const rules = compileSecretRules({ secretPatterns: [{ name: "Internal", pattern: "corp_[a-z0-9]{12}" }] });
+    const oversized = "x".repeat(65_537);
+    expect(redactKnownSecretTokensWithRules(oversized, rules, new Uint32Array(0))).toEqual({
+      text: "<redacted>",
+      customMatched: true,
+    });
+    for (const mask of [new Uint32Array(1), new Uint32Array([0, 1]), new Uint32Array([3, 0])]) {
+      const invalidRules = compileSecretRules({ secretPatterns: [{ name: "Internal", pattern: "corp_[a-z0-9]{12}" }] });
+      expect(evaluateSecretPatternRedaction(invalidRules, "xx", mask)).toEqual({
+        text: "<redacted>",
+        customMatched: true,
+      });
+      expect(() => matchCustomSecretPatterns(invalidRules, "ordinary")).toThrow("resource limit");
+    }
   });
 
   it("finds escaped JSON assignment names and credentials inside script URLs without exposing them", () => {
