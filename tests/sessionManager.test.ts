@@ -342,6 +342,12 @@ describe("session manager", () => {
           "commandWaitTimeoutMs"
         );
       }
+      for (const maxRecords of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, NaN, Infinity]) {
+        await expect(finalizeSession(session, DEFAULT_CONFIG, "test", undefined, { maxRecords })).rejects.toThrow(
+          "maxRecords"
+        );
+        await expect(recoverActiveSession(dir, DEFAULT_CONFIG, { maxRecords })).rejects.toThrow("maxRecords");
+      }
       expect(await Promise.all(evidencePaths.map((filePath) => readFile(filePath)))).toEqual(evidenceBefore);
       expect(await pathExists(path.join(session.sessionDir, "commands-closing"))).toBe(false);
       expect((await readdir(session.sessionDir)).filter((name) => name.startsWith("finalization-claim-"))).toEqual([]);
@@ -402,53 +408,65 @@ describe("session manager", () => {
     }
   });
 
-  it("shares the canonical record allowance across both logs and preserves recovery after refusal", async () => {
-    const dir = await createTempDir();
-    try {
-      initGitRepo(dir);
-      const session = await createSession(dir, DEFAULT_CONFIG);
-      const event = {
-        timestamp: "2026-01-01T00:00:00.000Z",
-        eventType: "change" as const,
-        path: "src/変更.ts",
-        extra: "retained",
-      };
-      const command = {
-        startedAt: event.timestamp,
-        endedAt: event.timestamp,
-        command: "node --version",
-        cwd: ".",
-        exitCode: 0,
-        durationMs: 0,
-        extra: { label: "保持" },
-      };
-      await writeFile(getEventsPath(session.sessionDir), `invalid\n${JSON.stringify(event)}\n`);
-      await writeFile(getCommandsPath(session.sessionDir), `${JSON.stringify(command)}\n`);
-      const evidencePaths = [
-        getEventsPath(session.sessionDir),
-        getCommandsPath(session.sessionDir),
-        getActiveSessionPath(dir, DEFAULT_CONFIG),
-        getSessionLockPath(dir, DEFAULT_CONFIG),
-      ];
-      const evidenceBefore = await Promise.all(evidencePaths.map((filePath) => readFile(filePath)));
-      const combinedBytes = Buffer.byteLength(JSON.stringify(event)) + Buffer.byteLength(JSON.stringify(command));
+  it.each(["bytes", "records"])(
+    "shares the %s allowance across both logs and preserves recovery after refusal",
+    async (limit) => {
+      const dir = await createTempDir();
+      try {
+        initGitRepo(dir);
+        const session = await createSession(dir, DEFAULT_CONFIG);
+        const event = {
+          timestamp: "2026-01-01T00:00:00.000Z",
+          eventType: "change" as const,
+          path: "src/変更.ts",
+          extra: "retained",
+        };
+        const command = {
+          startedAt: event.timestamp,
+          endedAt: event.timestamp,
+          command: "node --version",
+          cwd: ".",
+          exitCode: 0,
+          durationMs: 0,
+          extra: { label: "保持" },
+        };
+        await writeFile(getEventsPath(session.sessionDir), `invalid\n${JSON.stringify(event)}\n`);
+        await writeFile(getCommandsPath(session.sessionDir), `${JSON.stringify(command)}\n`);
+        const evidencePaths = [
+          getEventsPath(session.sessionDir),
+          getCommandsPath(session.sessionDir),
+          getActiveSessionPath(dir, DEFAULT_CONFIG),
+          getSessionLockPath(dir, DEFAULT_CONFIG),
+        ];
+        const evidenceBefore = await Promise.all(evidencePaths.map((filePath) => readFile(filePath)));
+        const combinedBytes = Buffer.byteLength(JSON.stringify(event)) + Buffer.byteLength(JSON.stringify(command));
 
-      await expect(
-        finalizeSession(session, DEFAULT_CONFIG, "test", undefined, { maxRecordBytes: combinedBytes - 1 })
-      ).rejects.toThrow("canonical record allowance");
-      expect(await Promise.all(evidencePaths.map((filePath) => readFile(filePath)))).toEqual(evidenceBefore);
-      expect(await pathExists(path.join(session.sessionDir, "session.json"))).toBe(false);
-      expect((await readdir(session.sessionDir)).filter((name) => name.startsWith("finalization-claim-"))).toEqual([]);
-      const report = await finalizeSession(session, DEFAULT_CONFIG, "test", undefined, {
-        maxRecordBytes: combinedBytes,
-      });
-      expect(report.events).toEqual([event]);
-      expect(report.commands).toEqual([command]);
-      expect(report.integrity.discardedFileEventLines).toBe(1);
-    } finally {
-      await removeTempDir(dir);
+        await expect(
+          finalizeSession(
+            session,
+            DEFAULT_CONFIG,
+            "test",
+            undefined,
+            limit === "bytes" ? { maxRecordBytes: combinedBytes - 1 } : { maxRecords: 1 }
+          )
+        ).rejects.toThrow(limit === "bytes" ? "canonical record allowance" : "record count allowance");
+        expect(await Promise.all(evidencePaths.map((filePath) => readFile(filePath)))).toEqual(evidenceBefore);
+        expect(await pathExists(path.join(session.sessionDir, "session.json"))).toBe(false);
+        expect((await readdir(session.sessionDir)).filter((name) => name.startsWith("finalization-claim-"))).toEqual(
+          []
+        );
+        const report = await finalizeSession(session, DEFAULT_CONFIG, "test", undefined, {
+          maxRecordBytes: combinedBytes,
+          maxRecords: 2,
+        });
+        expect(report.events).toEqual([event]);
+        expect(report.commands).toEqual([command]);
+        expect(report.integrity.discardedFileEventLines).toBe(1);
+      } finally {
+        await removeTempDir(dir);
+      }
     }
-  });
+  );
 
   it("bounds recovery waiting without discarding live command evidence and allows a complete retry", async () => {
     const dir = await createTempDir();
