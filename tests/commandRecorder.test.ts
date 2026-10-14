@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { copyFile, mkdir, readFile, readdir, symlink, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, realpath, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONFIG } from "../src/config/defaults.js";
@@ -43,10 +43,12 @@ describe("command recorder", () => {
         const options = { private: true, cwd: "work", label: values[0], group: values[1], phase: values[3] };
         const script = `require('node:fs').writeFileSync('received.json', JSON.stringify({args:process.argv.slice(1),cwd:process.cwd()}));process.exit(${exitCode})`;
         expect(await recordAndRunCommand([process.execPath, "-e", script, ...values], dir, options)).toBe(exitCode);
-        expect(JSON.parse(await readFile(path.join(dir, "work", "received.json"), "utf8"))).toEqual({
-          args: values,
-          cwd: path.join(dir, "work"),
-        });
+        const received = JSON.parse(await readFile(path.join(dir, "work", "received.json"), "utf8")) as {
+          args: string[];
+          cwd: string;
+        };
+        expect(received.args).toEqual(values);
+        expect(await realpath(received.cwd)).toBe(await realpath(path.join(dir, "work")));
         const [event] = await readCommandEvents(session.sessionDir);
         expect(event).toMatchObject({ command: "<redacted>", cwd: "work", exitCode });
         for (const field of ["label", "group", "phase"]) expect(event).not.toHaveProperty(field);
