@@ -1,8 +1,10 @@
-import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONFIG } from "../src/config/defaults.js";
 import * as reportWriter from "../src/reports/reportWriter.js";
+import * as ndjson from "../src/session/ndjson.js";
+import { MAX_REPORT_BYTES } from "../src/session/reportStorage.js";
 import {
   createSession,
   getActiveSessionPath,
@@ -319,6 +321,195 @@ describe("session manager", () => {
     }
   });
 
+  it("validates finalization limits before mutating session state", async () => {
+    const dir = await createTempDir();
+    try {
+      initGitRepo(dir);
+      const session = await createSession(dir, DEFAULT_CONFIG);
+      const evidencePaths = [getActiveSessionPath(dir, DEFAULT_CONFIG), getSessionLockPath(dir, DEFAULT_CONFIG)];
+      const evidenceBefore = await Promise.all(evidencePaths.map((filePath) => readFile(filePath)));
+      for (const maxRecordBytes of [0, -1, 1.5, MAX_REPORT_BYTES + 1, NaN, Infinity]) {
+        await expect(finalizeSession(session, DEFAULT_CONFIG, "test", undefined, { maxRecordBytes })).rejects.toThrow(
+          "maxRecordBytes"
+        );
+        await expect(recoverActiveSession(dir, DEFAULT_CONFIG, { maxRecordBytes })).rejects.toThrow("maxRecordBytes");
+      }
+      for (const commandWaitTimeoutMs of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, NaN, Infinity]) {
+        await expect(
+          finalizeSession(session, DEFAULT_CONFIG, "test", undefined, { commandWaitTimeoutMs })
+        ).rejects.toThrow("commandWaitTimeoutMs");
+        await expect(recoverActiveSession(dir, DEFAULT_CONFIG, { commandWaitTimeoutMs })).rejects.toThrow(
+          "commandWaitTimeoutMs"
+        );
+      }
+      expect(await Promise.all(evidencePaths.map((filePath) => readFile(filePath)))).toEqual(evidenceBefore);
+      expect(await pathExists(path.join(session.sessionDir, "commands-closing"))).toBe(false);
+      expect((await readdir(session.sessionDir)).filter((name) => name.startsWith("finalization-claim-"))).toEqual([]);
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
+  it("keeps finalization ownership until all input readers settle after a quota refusal", async () => {
+    const dir = await createTempDir();
+    const originalRead = ndjson.readNdjsonRecords;
+    const reader = vi.spyOn(ndjson, "readNdjsonRecords");
+    let releaseCommands: (() => void) | undefined;
+    let finalizing: ReturnType<typeof finalizeSession> | undefined;
+    try {
+      initGitRepo(dir);
+      const session = await createSession(dir, DEFAULT_CONFIG);
+      await appendFileEvent(session, { timestamp: session.startedAt, eventType: "change", path: "src/index.ts" });
+      let quotaRefused = false;
+      reader.mockImplementation(async (filePath, guard, label, reserve) => {
+        if (filePath === getCommandsPath(session.sessionDir)) {
+          await new Promise<void>((resolve) => {
+            releaseCommands = resolve;
+          });
+          return originalRead(filePath, guard, label, reserve);
+        }
+        return originalRead(filePath, guard, label, (bytes) => {
+          try {
+            reserve?.(bytes);
+          } catch (error) {
+            quotaRefused = true;
+            throw error;
+          }
+        });
+      });
+      let settled = false;
+      finalizing = finalizeSession(session, DEFAULT_CONFIG, "test", undefined, { maxRecordBytes: 1 }).finally(() => {
+        settled = true;
+      });
+      const refusal = expect(finalizing).rejects.toThrow("canonical record allowance");
+      await vi.waitFor(() => {
+        expect(quotaRefused).toBe(true);
+        expect(releaseCommands).toBeDefined();
+      });
+      expect(settled).toBe(false);
+      expect((await readdir(session.sessionDir)).filter((name) => name.startsWith("finalization-claim-"))).toHaveLength(
+        1
+      );
+      releaseCommands?.();
+      await refusal;
+      expect((await readdir(session.sessionDir)).filter((name) => name.startsWith("finalization-claim-"))).toEqual([]);
+      expect((await readActiveSession(dir, DEFAULT_CONFIG))?.id).toBe(session.id);
+    } finally {
+      releaseCommands?.();
+      await finalizing?.catch(() => undefined);
+      reader.mockRestore();
+      await removeTempDir(dir);
+    }
+  });
+
+  it("shares the canonical record allowance across both logs and preserves recovery after refusal", async () => {
+    const dir = await createTempDir();
+    try {
+      initGitRepo(dir);
+      const session = await createSession(dir, DEFAULT_CONFIG);
+      const event = {
+        timestamp: "2026-01-01T00:00:00.000Z",
+        eventType: "change" as const,
+        path: "src/変更.ts",
+        extra: "retained",
+      };
+      const command = {
+        startedAt: event.timestamp,
+        endedAt: event.timestamp,
+        command: "node --version",
+        cwd: ".",
+        exitCode: 0,
+        durationMs: 0,
+        extra: { label: "保持" },
+      };
+      await writeFile(getEventsPath(session.sessionDir), `invalid\n${JSON.stringify(event)}\n`);
+      await writeFile(getCommandsPath(session.sessionDir), `${JSON.stringify(command)}\n`);
+      const evidencePaths = [
+        getEventsPath(session.sessionDir),
+        getCommandsPath(session.sessionDir),
+        getActiveSessionPath(dir, DEFAULT_CONFIG),
+        getSessionLockPath(dir, DEFAULT_CONFIG),
+      ];
+      const evidenceBefore = await Promise.all(evidencePaths.map((filePath) => readFile(filePath)));
+      const combinedBytes = Buffer.byteLength(JSON.stringify(event)) + Buffer.byteLength(JSON.stringify(command));
+
+      await expect(
+        finalizeSession(session, DEFAULT_CONFIG, "test", undefined, { maxRecordBytes: combinedBytes - 1 })
+      ).rejects.toThrow("canonical record allowance");
+      expect(await Promise.all(evidencePaths.map((filePath) => readFile(filePath)))).toEqual(evidenceBefore);
+      expect(await pathExists(path.join(session.sessionDir, "session.json"))).toBe(false);
+      expect((await readdir(session.sessionDir)).filter((name) => name.startsWith("finalization-claim-"))).toEqual([]);
+      const report = await finalizeSession(session, DEFAULT_CONFIG, "test", undefined, {
+        maxRecordBytes: combinedBytes,
+      });
+      expect(report.events).toEqual([event]);
+      expect(report.commands).toEqual([command]);
+      expect(report.integrity.discardedFileEventLines).toBe(1);
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
+  it("bounds recovery waiting without discarding live command evidence and allows a complete retry", async () => {
+    const dir = await createTempDir();
+    let marker: string | undefined;
+    let recovering: ReturnType<typeof recoverActiveSession> | undefined;
+    try {
+      initGitRepo(dir);
+      const session = await createSession(dir, DEFAULT_CONFIG);
+      marker = await registerInFlightCommand(session);
+      const lock = await readSessionLock(dir, DEFAULT_CONFIG);
+      await writeFile(getActiveSessionPath(dir, DEFAULT_CONFIG), JSON.stringify({ ...session, pid: 999_999 }));
+      await writeFile(getSessionLockPath(dir, DEFAULT_CONFIG), JSON.stringify({ ...lock, pid: 999_999 }));
+      const evidencePaths = [
+        getEventsPath(session.sessionDir),
+        getCommandsPath(session.sessionDir),
+        getActiveSessionPath(dir, DEFAULT_CONFIG),
+        getSessionLockPath(dir, DEFAULT_CONFIG),
+      ];
+      const evidenceBefore = await Promise.all(evidencePaths.map((filePath) => readFile(filePath)));
+      recovering = recoverActiveSession(dir, DEFAULT_CONFIG, { commandWaitTimeoutMs: 1 });
+      let deadline: ReturnType<typeof setTimeout> | undefined;
+      const outcome = await Promise.race([
+        recovering.then(
+          () => ({ status: "resolved" }),
+          (error: unknown) => ({ status: "rejected", error })
+        ),
+        new Promise<{ status: string }>((resolve) => {
+          deadline = setTimeout(() => resolve({ status: "pending" }), 2000);
+        }),
+      ]).finally(() => clearTimeout(deadline));
+      expect(outcome).toMatchObject({
+        status: "rejected",
+        error: expect.objectContaining({ message: expect.stringContaining("still running") }),
+      });
+      expect(await Promise.all(evidencePaths.map((filePath) => readFile(filePath)))).toEqual(evidenceBefore);
+      expect(await pathExists(marker)).toBe(true);
+      expect(await pathExists(path.join(session.sessionDir, "commands-closing"))).toBe(true);
+      expect(await pathExists(path.join(session.sessionDir, "session.json"))).toBe(false);
+      expect((await readdir(session.sessionDir)).filter((name) => name.startsWith("finalization-claim-"))).toEqual([]);
+      await expect(registerInFlightCommand(session)).rejects.toThrow("closing");
+      await appendCommandEvent(session, {
+        startedAt: session.startedAt,
+        endedAt: new Date().toISOString(),
+        command: "node --version",
+        cwd: ".",
+        exitCode: 0,
+        durationMs: 1,
+      });
+      await rm(marker);
+      marker = undefined;
+      const retried = await recoverActiveSession(dir, DEFAULT_CONFIG, { commandWaitTimeoutMs: 1 });
+      expect(retried.report?.commands).toHaveLength(1);
+      expect(await readActiveSession(dir, DEFAULT_CONFIG)).toBeNull();
+      expect(await readSessionLock(dir, DEFAULT_CONFIG)).toBeNull();
+    } finally {
+      if (marker) await rm(marker, { force: true });
+      await recovering?.catch(() => undefined);
+      await removeTempDir(dir);
+    }
+  }, 15_000);
+
   it("waits for a registered command before reading the finalized report", async () => {
     const dir = await createTempDir();
     try {
@@ -549,6 +740,128 @@ describe("session manager", () => {
       await expect(readActiveSession(dir, DEFAULT_CONFIG)).resolves.toMatchObject({ id: session.id });
     } finally {
       await removeTempDir(dir);
+    }
+  });
+
+  it("refuses publication and preserves unrelated claims after storage moves during log reads", async () => {
+    const dir = await createTempDir();
+    const outside = await createTempDir();
+    const originalRead = ndjson.readNdjsonRecords;
+    const reader = vi.spyOn(ndjson, "readNdjsonRecords");
+    let releaseRecords: (() => void) | undefined;
+    let finalizing: ReturnType<typeof finalizeSession> | undefined;
+    try {
+      initGitRepo(dir);
+      const session = await createSession(dir, DEFAULT_CONFIG);
+      await appendFileEvent(session, { timestamp: session.startedAt, eventType: "change", path: "src/index.ts" });
+      const ownershipPaths = [getActiveSessionPath(dir, DEFAULT_CONFIG), getSessionLockPath(dir, DEFAULT_CONFIG)];
+      const ownershipBefore = await Promise.all(ownershipPaths.map((filePath) => readFile(filePath)));
+      reader.mockImplementation(async (filePath, guard, label, reserve) => {
+        const result = await originalRead(filePath, guard, label, reserve);
+        if (filePath === getEventsPath(session.sessionDir)) {
+          await new Promise<void>((resolve) => {
+            releaseRecords = resolve;
+          });
+        }
+        return result;
+      });
+      finalizing = finalizeSession(session, DEFAULT_CONFIG, "test");
+      const refusal = expect(finalizing).rejects.toThrow("storage location");
+      await vi.waitFor(() => expect(releaseRecords).toBeDefined());
+      const evidenceNames = (await readdir(session.sessionDir)).sort();
+      const evidenceBefore = await Promise.all(
+        evidenceNames.map((name) => readFile(path.join(session.sessionDir, name)))
+      );
+      const claimNames = evidenceNames.filter((name) => name.startsWith("finalization-claim-"));
+      expect(claimNames).toHaveLength(1);
+      const target = path.join(outside, "unrelated");
+      await mkdir(target);
+      const unrelatedClaim = path.join(target, claimNames[0]!);
+      await writeFile(unrelatedClaim, "preserve unrelated claim");
+      const moved = path.join(outside, "moved-evidence");
+      await rename(session.sessionDir, moved);
+      await symlink(target, session.sessionDir, process.platform === "win32" ? "junction" : "dir");
+      releaseRecords?.();
+      await refusal;
+
+      expect((await readdir(target)).sort()).toEqual(claimNames);
+      expect(await readFile(unrelatedClaim, "utf8")).toBe("preserve unrelated claim");
+      expect(await pathExists(path.join(target, "rollback-state.json"))).toBe(false);
+      expect(await pathExists(path.join(target, "session.json"))).toBe(false);
+      expect((await readdir(moved)).sort()).toEqual(evidenceNames);
+      expect(await Promise.all(evidenceNames.map((name) => readFile(path.join(moved, name))))).toEqual(evidenceBefore);
+      expect(await Promise.all(ownershipPaths.map((filePath) => readFile(filePath)))).toEqual(ownershipBefore);
+    } finally {
+      releaseRecords?.();
+      await finalizing?.catch(() => undefined);
+      reader.mockRestore();
+      await removeTempDir(dir);
+      await removeTempDir(outside);
+    }
+  });
+
+  it.each(["recovery", "finalization"])(
+    "refuses %s through a displaced session directory without mutating its target",
+    async (operation) => {
+      const dir = await createTempDir();
+      const outside = await createTempDir();
+      try {
+        initGitRepo(dir);
+        const session = await createSession(dir, DEFAULT_CONFIG);
+        if (operation === "recovery") {
+          const lock = await readSessionLock(dir, DEFAULT_CONFIG);
+          await writeFile(getActiveSessionPath(dir, DEFAULT_CONFIG), JSON.stringify({ ...session, pid: 999_999 }));
+          await writeFile(getSessionLockPath(dir, DEFAULT_CONFIG), JSON.stringify({ ...lock, pid: 999_999 }));
+        }
+        const activeBytes = await readFile(getActiveSessionPath(dir, DEFAULT_CONFIG), "utf8");
+        const lockBytes = await readFile(getSessionLockPath(dir, DEFAULT_CONFIG), "utf8");
+        const target = path.join(outside, "evidence");
+        await rename(session.sessionDir, target);
+        await symlink(target, session.sessionDir, process.platform === "win32" ? "junction" : "dir");
+        const names = (await readdir(target)).sort();
+        const contents = await Promise.all(names.map((name) => readFile(path.join(target, name))));
+
+        if (operation === "recovery") {
+          await expect(inspectSessionRecoveryState(dir, DEFAULT_CONFIG)).resolves.toMatchObject({
+            status: "inconsistent",
+          });
+          await expect(recoverActiveSession(dir, DEFAULT_CONFIG)).rejects.toThrow("does not belong to this repository");
+        } else {
+          await expect(finalizeSession(session, DEFAULT_CONFIG, "test")).rejects.toThrow("storage location");
+        }
+        expect((await readdir(target)).sort()).toEqual(names);
+        expect(await Promise.all(names.map((name) => readFile(path.join(target, name))))).toEqual(contents);
+        expect(await readFile(getActiveSessionPath(dir, DEFAULT_CONFIG), "utf8")).toBe(activeBytes);
+        expect(await readFile(getSessionLockPath(dir, DEFAULT_CONFIG), "utf8")).toBe(lockBytes);
+      } finally {
+        await removeTempDir(dir);
+        await removeTempDir(outside);
+      }
+    }
+  );
+
+  it.each([false, true])("finalizes explicitly configured external storage (aliases=%s)", async (aliases) => {
+    const dir = await createTempDir();
+    const outside = await createTempDir();
+    try {
+      initGitRepo(dir);
+      const storage = path.join(outside, "sessions");
+      await mkdir(storage);
+      const repoRoot = aliases ? path.join(outside, "repository-alias") : dir;
+      const sessionRoot = aliases ? path.join(outside, "storage-alias") : storage;
+      if (aliases) {
+        await symlink(dir, repoRoot, process.platform === "win32" ? "junction" : "dir");
+        await symlink(storage, sessionRoot, process.platform === "win32" ? "junction" : "dir");
+      }
+      const config = { ...DEFAULT_CONFIG, sessionDir: sessionRoot };
+      const session = await createSession(repoRoot, config);
+      await expect(finalizeSession(session, config, "test")).resolves.toMatchObject({ id: session.id });
+      expect(await pathExists(path.join(session.sessionDir, "session.json"))).toBe(true);
+      expect(await readActiveSession(repoRoot, config)).toBeNull();
+      expect(await readSessionLock(repoRoot, config)).toBeNull();
+    } finally {
+      await removeTempDir(dir);
+      await removeTempDir(outside);
     }
   });
 

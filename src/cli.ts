@@ -187,10 +187,16 @@ program
 program
   .command("recover")
   .description("Safely finalize a stale session or clean its completed state files.")
-  .action(async () => {
+  .option("--command-wait-timeout-ms <milliseconds>", "stop recovery if recorded commands remain live beyond this wait")
+  .option("--max-record-bytes <bytes>", "limit retained event and command record bytes during recovery (up to 256 MiB)")
+  .action(async (options: { commandWaitTimeoutMs?: string; maxRecordBytes?: string }) => {
+    const recoveryOptions = {
+      commandWaitTimeoutMs: parseSessionListLimit(options.commandWaitTimeoutMs, "--command-wait-timeout-ms"),
+      maxRecordBytes: parseSessionListLimit(options.maxRecordBytes, "--max-record-bytes"),
+    };
     const repoRoot = await requireRepositoryRoot(process.cwd());
     const config = await loadRuntimeConfig(repoRoot);
-    const recovery = await recoverActiveSession(repoRoot, config);
+    const recovery = await recoverActiveSession(repoRoot, config, recoveryOptions);
 
     if (recovery.state === "no-active-session") {
       console.log("No session recovery is needed.");

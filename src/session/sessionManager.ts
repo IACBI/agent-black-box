@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { appendFile, lstat, mkdir, open, readdir, realpath, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import type {
   ActiveSession,
   AgentBlackBoxConfig,
@@ -29,7 +30,7 @@ import {
 } from "../utils/files.js";
 import { buildChangeEvidence, selectSessionRelevantChanges } from "./changeEvidence.js";
 import { parseSessionReport, verifyCatalogSessionReportFile } from "./sessionCatalog.js";
-import { readCanonicalReportCore } from "./reportStorage.js";
+import { MAX_REPORT_BYTES, readCanonicalReportCore } from "./reportStorage.js";
 import { isCapturedCommandEvent, isCapturedFileEvent, readNdjsonRecords, type NdjsonReadResult } from "./ndjson.js";
 import { isRecord } from "../utils/records.js";
 import { sleep } from "../utils/timing.js";
@@ -65,6 +66,13 @@ export interface SessionLock {
 
 export type SessionRecoveryStatus =
   "no-active-session" | "active" | "recoverable" | "already-complete" | "corrupt" | "inconsistent";
+
+export interface FinalizeSessionOptions {
+  /** Shared UTF-8 canonical bytes of retained accepted records; excludes parsed-object and report-core overhead. */
+  maxRecordBytes?: number;
+  /** Reject without finalizing when live wrappers outlast this optional wait; the default waits indefinitely. */
+  commandWaitTimeoutMs?: number;
+}
 
 export interface SessionRecoveryState {
   status: SessionRecoveryStatus;
@@ -309,8 +317,10 @@ export async function inspectSessionRecoveryState(
 
 export async function recoverActiveSession(
   repoRoot: string,
-  config: AgentBlackBoxConfig
+  config: AgentBlackBoxConfig,
+  options: FinalizeSessionOptions = {}
 ): Promise<{ state: SessionRecoveryStatus; report?: SessionReport }> {
+  validateFinalizeSessionOptions(options);
   const recovery = await inspectSessionRecoveryState(repoRoot, config);
 
   if (recovery.status === "no-active-session") {
@@ -329,7 +339,7 @@ export async function recoverActiveSession(
     return { state: recovery.status };
   }
 
-  return { state: recovery.status, report: await finalizeSession(active, config, "recovery") };
+  return { state: recovery.status, report: await finalizeSession(active, config, "recovery", undefined, options) };
 }
 
 export async function writeStopRequest(
@@ -433,32 +443,65 @@ export async function finalizeSession(
   captureLoss: { droppedFileEvents: number; failedFileEventWrites: number } = {
     droppedFileEvents: 0,
     failedFileEventWrites: 0,
-  }
+  },
+  options: FinalizeSessionOptions = {}
 ): Promise<SessionReport> {
+  validateFinalizeSessionOptions(options);
   return withFinalizationOwnership(active, config, () =>
-    finalizeOwnedSession(active, config, finalizedBy, captureLoss)
+    finalizeOwnedSession(active, config, finalizedBy, captureLoss, options)
   );
+}
+
+function validateFinalizeSessionOptions(options: FinalizeSessionOptions): void {
+  if (
+    options.maxRecordBytes !== undefined &&
+    (!Number.isSafeInteger(options.maxRecordBytes) ||
+      options.maxRecordBytes < 1 ||
+      options.maxRecordBytes > MAX_REPORT_BYTES)
+  ) {
+    throw new Error(`maxRecordBytes must be an integer between 1 and ${MAX_REPORT_BYTES} bytes.`);
+  }
+  if (
+    options.commandWaitTimeoutMs !== undefined &&
+    (!Number.isSafeInteger(options.commandWaitTimeoutMs) || options.commandWaitTimeoutMs < 1)
+  ) {
+    throw new Error("commandWaitTimeoutMs must be a positive safe integer in milliseconds.");
+  }
 }
 
 async function finalizeOwnedSession(
   active: ActiveSession,
   config: AgentBlackBoxConfig,
   finalizedBy: string,
-  captureLoss: { droppedFileEvents: number; failedFileEventWrites: number }
+  captureLoss: { droppedFileEvents: number; failedFileEventWrites: number },
+  options: FinalizeSessionOptions
 ): Promise<SessionReport> {
   await markCommandsClosing(active.sessionDir);
-  const commandWarnings = await waitForInFlightCommands(active.sessionDir);
+  const commandWarnings = await waitForInFlightCommands(active.sessionDir, options.commandWaitTimeoutMs);
   const captureLossMarkers = await Promise.all(
     Object.values(CAPTURE_LOSS_MARKERS).map((name) => fileExistsStrict(path.join(active.sessionDir, name)))
   );
   const endedAt = new Date().toISOString();
+  const maxRecordBytes = options.maxRecordBytes ?? MAX_REPORT_BYTES;
+  let retainedRecordBytes = 0;
+  const reserveRecordBytes = (bytes: number): void => {
+    if (bytes > maxRecordBytes - retainedRecordBytes) {
+      throw new Error(
+        `Session capture exceeds the ${maxRecordBytes} byte canonical record allowance; evidence and ownership were preserved.`
+      );
+    }
+    retainedRecordBytes += bytes;
+  };
   // The log parses are CPU-bound and the Git snapshot is process-spawn latency, so they overlap.
-  const [fileEvents, commandEvents, baselineState, git] = await Promise.all([
-    readFileEventsWithDiagnostics(active.sessionDir),
-    readCommandEventsWithDiagnostics(active.sessionDir),
+  const inputReads = [
+    readNdjsonRecords(getEventsPath(active.sessionDir), isCapturedFileEvent, "file event", reserveRecordBytes),
+    readNdjsonRecords(getCommandsPath(active.sessionDir), isCapturedCommandEvent, "command event", reserveRecordBytes),
     readStateFile<SessionBaseline>(getGitBaselinePath(active.sessionDir), isSessionBaseline, MAX_GIT_BASELINE_BYTES),
     collectGitSnapshot(active.repoRoot, config.exclude),
-  ]);
+  ] as const;
+  // Keep finalization ownership until all readers settle, even if another reader exceeds the shared allowance.
+  await Promise.allSettled(inputReads);
+  const [fileEvents, commandEvents, baselineState, git] = await Promise.all(inputReads);
   const committedChanges = baselineState.value
     ? await collectGitChangesBetween(active.repoRoot, baselineState.value.git.head, git.head, config.exclude)
     : [];
@@ -514,6 +557,7 @@ async function finalizeOwnedSession(
     { changeEvidence, allowlistedSecretCount }
   );
 
+  await assertSessionOwnership(active, config);
   try {
     await writeRollbackSafetyState(report);
   } catch {
@@ -552,7 +596,8 @@ async function fileExistsStrict(filePath: string): Promise<boolean> {
   }
 }
 
-async function waitForInFlightCommands(sessionDir: string): Promise<string[]> {
+async function waitForInFlightCommands(sessionDir: string, timeoutMs?: number): Promise<string[]> {
+  const startedAt = performance.now();
   while (true) {
     const names = await readdir(sessionDir);
     const markerNames = names.filter((name) => INFLIGHT_COMMAND_PATTERN.test(name));
@@ -569,7 +614,13 @@ async function waitForInFlightCommands(sessionDir: string): Promise<string[]> {
         ...(failedCount > 0 ? [`Failed to persist ${failedCount} wrapped command completion(s).`] : []),
       ];
     }
-    await sleep(100);
+    const remainingMs = timeoutMs === undefined ? undefined : timeoutMs - (performance.now() - startedAt);
+    if (remainingMs !== undefined && remainingMs <= 0) {
+      throw new Error(
+        `Wrapped commands are still running after ${timeoutMs} ms; session evidence and ownership were preserved. Finish the wrappers and retry recovery.`
+      );
+    }
+    await sleep(remainingMs === undefined ? 100 : Math.min(100, remainingMs));
   }
 }
 
@@ -657,6 +708,9 @@ async function assertSessionOwnership(
   config: AgentBlackBoxConfig,
   allowCompletedCleanup = false
 ): Promise<void> {
+  if (!(await isSessionLocationTrusted(active, active.repoRoot, config))) {
+    throw new Error("Session storage location changed during finalization; state was left untouched.");
+  }
   const [current, lock] = await Promise.all([
     readActiveSessionState(active.repoRoot, config),
     readSessionLockState(active.repoRoot, config),
@@ -683,7 +737,8 @@ async function withFinalizationOwnership<T>(
     await assertSessionOwnership(active, config, allowCompletedCleanup);
     return await operation();
   } finally {
-    await removeFileIfExists(claimPath);
+    // A displaced directory can point at an unrelated same-named claim; preserve uncertain cleanup targets.
+    if (await isSessionLocationTrusted(active, active.repoRoot, config)) await removeFileIfExists(claimPath);
   }
 }
 
@@ -965,10 +1020,17 @@ async function isSessionLocationTrusted(
   repoRoot: string,
   config: AgentBlackBoxConfig
 ): Promise<boolean> {
-  const expectedSessionDir = path.join(getSessionRoot(repoRoot, config), active.id);
-  const [trustedRepoRoot, activeRepoRoot, expectedDirectory, activeDirectory] = await Promise.all([
+  const sessionRoot = getSessionRoot(repoRoot, config);
+  const expectedSessionDir = path.join(sessionRoot, active.id);
+  try {
+    if (!(await lstat(expectedSessionDir)).isDirectory()) return false;
+  } catch {
+    return false;
+  }
+  const [trustedRepoRoot, activeRepoRoot, physicalRoot, expectedDirectory, activeDirectory] = await Promise.all([
     tryRealpath(repoRoot),
     tryRealpath(active.repoRoot),
+    tryRealpath(sessionRoot),
     tryRealpath(expectedSessionDir),
     tryRealpath(active.sessionDir),
   ]);
@@ -976,7 +1038,8 @@ async function isSessionLocationTrusted(
   return (
     trustedRepoRoot !== null &&
     trustedRepoRoot === activeRepoRoot &&
-    expectedDirectory !== null &&
+    physicalRoot !== null &&
+    expectedDirectory === path.join(physicalRoot, active.id) &&
     expectedDirectory === activeDirectory
   );
 }

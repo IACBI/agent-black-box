@@ -14,6 +14,29 @@ import { createTempDir, removeTempDir } from "./testUtils.js";
 const event = { timestamp: "2026-01-05T00:00:00.000Z", eventType: "change", path: "src/index.ts" };
 
 describe("streaming NDJSON digests", () => {
+  it("reserves canonical accepted-record bytes including UTF-8 and unknown fields", async () => {
+    const dir = await createTempDir("abb-ndjson-budget-");
+    try {
+      const filePath = path.join(dir, "events.ndjson");
+      const extra = { ...event, extra: { label: "変更" } };
+      await writeFile(filePath, `invalid\n{}\n  ${JSON.stringify(extra)}  \r\n${JSON.stringify(event)}`);
+      const reserved: number[] = [];
+      const result = await readNdjsonRecords(filePath, isCapturedFileEvent, "file event", (bytes) => {
+        reserved.push(bytes);
+      });
+      expect(reserved).toEqual([Buffer.byteLength(JSON.stringify(extra)), Buffer.byteLength(JSON.stringify(event))]);
+      expect(result.records).toEqual([extra, event]);
+      expect(result.discardedLines).toBe(2);
+      await expect(
+        readNdjsonRecords(filePath, isCapturedFileEvent, "file event", () => {
+          throw new Error("record allowance exhausted");
+        })
+      ).rejects.toThrow("record allowance exhausted");
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
   it("propagates record serialization failures rather than discarding accepted records", async () => {
     const dir = await createTempDir("abb-ndjson-errors-");
     try {

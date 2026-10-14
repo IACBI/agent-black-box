@@ -64,10 +64,15 @@ export function isCapturedCommandEvent(value: unknown): value is CommandEvent {
 export async function readNdjsonRecords<T>(
   filePath: string,
   guard: (value: unknown) => value is T,
-  label: string
+  label: string,
+  reserveRecordBytes?: (bytes: number) => void
 ): Promise<NdjsonReadResult<T>> {
   const records: T[] = [];
-  const result = await scanNdjsonRecords(filePath, guard, label, (record) => records.push(record));
+  const result = await scanNdjsonRecords(filePath, guard, label, (record) => {
+    // Reserve accepted canonical bytes before retention; policy failures are not malformed-record warnings.
+    reserveRecordBytes?.(Buffer.byteLength(JSON.stringify(record), "utf8"));
+    records.push(record);
+  });
   return { records, discardedLines: result.discardedLines, warnings: result.warnings };
 }
 
