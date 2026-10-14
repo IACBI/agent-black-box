@@ -8,13 +8,8 @@ import { appendCommandEvent, inspectSessionRecoveryState, registerInFlightComman
 import { removeFileIfExists } from "../utils/files.js";
 import { resolveWindowsExecutable } from "../utils/executables.js";
 import { isPathInside, toRepoRelative } from "../utils/paths.js";
-import { redactKnownSecretTokens } from "../risks/secretDetector.js";
-import {
-  compileSecretRules,
-  NO_SECRET_RULES,
-  redactCustomSecretPatterns,
-  type CompiledSecretRules,
-} from "../risks/secretRules.js";
+import { redactKnownSecretTokens, redactKnownSecretTokensWithRules } from "../risks/secretDetector.js";
+import { compileSecretRules, NO_SECRET_RULES, type CompiledSecretRules } from "../risks/secretRules.js";
 
 const SENSITIVE_PATTERN =
   /(api[_-]?key|secret|token|password|passwd|passphrase|pwd|credential|private[_-]?key|client[_-]?secret|access[_-]?key|authorization|cookie)/i;
@@ -174,55 +169,61 @@ export function redactCommandParts(parts: string[], secretRules: CompiledSecretR
       continue;
     }
 
+    const originalRedaction =
+      secretRules.patterns.length > 0 ? redactOriginalCommandPart(part, secretRules) : undefined;
+    const hasOriginalCustomMatch = originalRedaction?.customMatched === true;
+
     if (toolFlags && index > toolFlags.commandIndex && toolRule) {
       if (toolRule.valueFollows.has(part)) {
-        redacted.push(part);
+        redacted.push(hasOriginalCustomMatch ? "<redacted>" : part);
         redactNext = true;
         continue;
       }
       const attached = toolRule.attachedValue.exec(part);
       if (attached) {
-        redacted.push(`${attached[1]}<redacted>`);
+        redacted.push(hasOriginalCustomMatch ? "<redacted>" : `${attached[1]}<redacted>`);
         continue;
       }
     }
 
     if (isSensitiveAssignment(part)) {
-      redacted.push(`${part.slice(0, part.search(/[=:]/) + 1)}<redacted>`);
+      redacted.push(hasOriginalCustomMatch ? "<redacted>" : `${part.slice(0, part.search(/[=:]/) + 1)}<redacted>`);
       continue;
     }
 
     const nestedAssignment = redactNestedSensitiveAssignment(part);
     if (nestedAssignment) {
-      redacted.push(nestedAssignment);
+      redacted.push(hasOriginalCustomMatch ? "<redacted>" : nestedAssignment);
       continue;
     }
 
     const redactedUrl = redactUrlPart(part);
     if (redactedUrl !== part) {
-      redacted.push(scrubCommandPart(redactedUrl, secretRules));
+      redacted.push(hasOriginalCustomMatch ? "<redacted>" : scrubCommandPart(redactedUrl, NO_SECRET_RULES));
       continue;
     }
 
     const redactedJson = redactSensitiveJson(part);
     if (redactedJson !== part) {
-      redacted.push(redactedJson);
+      redacted.push(hasOriginalCustomMatch ? "<redacted>" : redactedJson);
       continue;
     }
 
     if (isSensitiveFlagWithValue(part)) {
       const [flag] = part.split("=", 1);
-      redacted.push(`${flag}=<redacted>`);
+      redacted.push(hasOriginalCustomMatch ? "<redacted>" : `${flag}=<redacted>`);
       continue;
     }
 
     if (isSensitiveFlag(part)) {
-      redacted.push(part);
+      redacted.push(hasOriginalCustomMatch ? "<redacted>" : part);
       redactNext = true;
       continue;
     }
 
-    redacted.push(scrubCommandPart(part, secretRules));
+    redacted.push(
+      originalRedaction ? truncateCommandPart(originalRedaction.text) : scrubCommandPart(part, secretRules)
+    );
   }
 
   return redacted;
@@ -536,6 +537,7 @@ const EMBEDDED_FLAG = /(?<![A-Za-z0-9_-])(--[A-Za-z0-9_-]+)(=|\s+)("[^"]*(?:"|$)
  * provider token shapes with no name to give them away, and the repository's own patterns.
  */
 function scrubCommandPart(part: string, secretRules: CompiledSecretRules): string {
+  if (secretRules.patterns.length > 0) return truncateCommandPart(redactOriginalCommandPart(part, secretRules).text);
   let scrubbed = part.length > MAX_COMMAND_PART_LENGTH + 256 ? part.slice(0, MAX_COMMAND_PART_LENGTH + 256) : part;
   if (EMBEDDED_SCRIPT_MARKER.test(scrubbed)) {
     const hideSensitive = (match: string, key: string, separator: string): string =>
@@ -545,7 +547,33 @@ function scrubCommandPart(part: string, secretRules: CompiledSecretRules): strin
       .replace(EMBEDDED_HEADER, (match, key: string, separator: string) => hideSensitive(match, key, separator))
       .replace(EMBEDDED_FLAG, (match, key: string, separator: string) => hideSensitive(match, key, separator));
   }
-  return truncateCommandPart(redactCustomSecretPatterns(secretRules, redactKnownSecretTokens(scrubbed)));
+  return truncateCommandPart(redactKnownSecretTokens(scrubbed));
+}
+
+function redactOriginalCommandPart(
+  part: string,
+  secretRules: CompiledSecretRules
+): { text: string; customMatched: boolean } {
+  if (part.length > MAX_COMMAND_PART_LENGTH + 256) return { text: "<redacted>", customMatched: true };
+  const matchEnds = new Uint32Array(part.length);
+  const mark = (start: number, end: number): void => {
+    matchEnds[start] = Math.max(matchEnds[start] ?? 0, end);
+  };
+  if (EMBEDDED_SCRIPT_MARKER.test(part)) {
+    part.replace(EMBEDDED_ASSIGNMENT, (match, key: string, _value: string, offset: number) => {
+      if (SENSITIVE_PATTERN.test(key)) mark(offset + key.length + 1, offset + match.length);
+      return match;
+    });
+    for (const expression of [EMBEDDED_HEADER, EMBEDDED_FLAG]) {
+      part.replace(expression, (match, key: string, separator: string, _value: string, offset: number) => {
+        if (SENSITIVE_PATTERN.test(key)) mark(offset + key.length + separator.length, offset + match.length);
+        return match;
+      });
+    }
+  }
+  const result = redactKnownSecretTokensWithRules(part, secretRules, matchEnds);
+  // Unmatched custom rules must not alter the existing built-in formatting.
+  return result.customMatched ? result : { text: scrubCommandPart(part, NO_SECRET_RULES), customMatched: false };
 }
 
 export function formatCommand(parts: string[]): string {

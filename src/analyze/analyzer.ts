@@ -163,7 +163,9 @@ function analyzeFile(
   }
 
   const contentToInspect = content.slice(0, maxContentCharacters);
-  findings.push(...detectPossibleSecrets(normalizedPath, contentToInspect, rules, allowlist));
+  for (const finding of detectPossibleSecrets(normalizedPath, contentToInspect, rules, allowlist)) {
+    findings.push(finding);
+  }
   return findings;
 }
 
@@ -184,7 +186,8 @@ function normalizeAnalysisPath(value: string): string | null {
     return null;
   }
 
-  const normalized = value.replace(/\\/g, "/").replace(/^\.\//, "");
+  const platformPath = path.sep === "\\" ? value.replace(/\\/g, "/") : value;
+  const normalized = platformPath.replace(/^\.\//, "");
   if (!normalized || normalized.split("/").some((segment) => segment === "" || segment === "." || segment === "..")) {
     return null;
   }

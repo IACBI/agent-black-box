@@ -16,6 +16,46 @@ import { DEFAULT_CONFIG } from "../src/config/defaults.js";
 import { createTempDir, initGitRepo, removeTempDir } from "./testUtils.js";
 
 describe("staged analysis", () => {
+  it.skipIf(process.platform === "win32")(
+    "preserves POSIX backslash filenames and suppresses only their unchanged baseline credentials",
+    async () => {
+      const repo = await createTempDir("abb-staged-backslash-");
+      const literalPath = "a\\b.ts";
+      const existing = "PASSWORD=synthetic_old_credential\n";
+      const introduced = "PASSWORD=synthetic_new_credential\n";
+      try {
+        initGitRepo(repo);
+        execFileSync("git", ["config", "user.email", "tests@example.invalid"], { cwd: repo });
+        execFileSync("git", ["config", "user.name", "Agent Black Box Tests"], { cwd: repo });
+        await mkdir(path.join(repo, "a"));
+        await writeFile(path.join(repo, literalPath), existing);
+        await writeFile(path.join(repo, "a", "b.ts"), "ordinary\n");
+        execFileSync("git", ["add", "."], { cwd: repo });
+        execFileSync("git", ["commit", "-qm", "baseline"], { cwd: repo });
+        const commit = await resolveBaselineCommit(repo, "HEAD");
+        await writeFile(path.join(repo, literalPath), existing + "// changed\n");
+        await writeFile(path.join(repo, "a", "b.ts"), introduced);
+        execFileSync("git", ["add", "."], { cwd: repo });
+
+        const staged = await collectStagedAnalysisInputFiles(repo, DEFAULT_CONFIG);
+        expect(staged.map((file) => file.path).sort()).toEqual(["a/b.ts", literalPath]);
+        const baseline = await collectBaselineAnalysisInputFiles(repo, staged, DEFAULT_CONFIG, commit);
+        expect(baseline.find((file) => file.path === literalPath)?.content).toBe(existing);
+        const current = { ...analyzeChangedFiles(staged), coverage: summarizeAnalysisCoverage(staged, "index") };
+        expect(current.findings.map((finding) => finding.path)).toEqual(["a/b.ts", literalPath]);
+        const compared = compareAnalysisWithBaseline(staged, baseline, current, commit);
+        expect(compared.baselineComparison?.suppressedExistingSecrets).toBe(1);
+        expect(compared.findings).toMatchObject([{ path: "a/b.ts", line: 1, kind: "possible-secret" }]);
+        expect(evaluateAnalysisPolicy(compared, staged, "complete-review")).toMatchObject({
+          failed: true,
+          newSecretCount: 1,
+        });
+      } finally {
+        await removeTempDir(repo);
+      }
+    }
+  );
+
   it("shares an encoded-content budget across staged and baseline input without allowing incomplete review", async () => {
     const repo = await createTempDir();
     try {

@@ -120,7 +120,17 @@ export async function installPreCommitHook(
   }
 
   if (entry.kind === "absent") {
-    await writeExecutable(hookPath, script);
+    try {
+      await writeExecutable(hookPath, script, false);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException | undefined)?.code === "EEXIST") {
+        throw new Error(
+          `A pre-commit hook appeared during installation at ${formatTerminalValue(hookPath)}; left it untouched. Inspect it and retry.`,
+          { cause: error }
+        );
+      }
+      throw error;
+    }
     return { action: "installed", hookPath, policy, ...scriptOptions };
   }
 
@@ -362,8 +372,8 @@ async function isHookExecutable(hookPath: string): Promise<boolean> {
   }
 }
 
-async function writeExecutable(hookPath: string, script: string): Promise<void> {
-  await writeTextFileAtomic(hookPath, script);
+async function writeExecutable(hookPath: string, script: string, overwrite = true): Promise<void> {
+  await writeTextFileAtomic(hookPath, script, { overwrite });
   // The atomic writer creates 0600 files; Git only runs hooks that are executable. No-op on Windows.
   await chmod(hookPath, 0o755);
 }

@@ -402,6 +402,37 @@ describe("session retention", () => {
     });
   });
 
+  it.each([false, true])(
+    "rejects a linked archive destination before creating directories (resume=%s)",
+    async (resume) => {
+      const repo = await createTempDir("abb-archive-linked-destination-");
+      try {
+        await makeSession(repo, "session-old", "2026-01-01T00:00:00.000Z");
+        await makeSession(repo, "session-new", "2026-01-03T00:00:00.000Z");
+        const sessionRoot = path.join(repo, DEFAULT_CONFIG.sessionDir);
+        const originalReports = await Promise.all(
+          ["session-old", "session-new"].map((id) => readFile(path.join(sessionRoot, id, "session.json"), "utf8"))
+        );
+        const linkedRoot = path.join(repo, "linked-sessions");
+        await symlink(sessionRoot, linkedRoot, process.platform === "win32" ? "junction" : "dir");
+        const destination = path.join(linkedRoot, "unexpected", "nested");
+        const plan = planSessionRetention(await listSessionCatalog(repo, DEFAULT_CONFIG), "2026-01-04");
+
+        await expect(archiveSessionRetention(repo, DEFAULT_CONFIG, plan, destination, { resume })).rejects.toThrow(
+          "outside the session root"
+        );
+        expect(await pathExists(path.join(sessionRoot, "unexpected"))).toBe(false);
+        expect(
+          await Promise.all(
+            ["session-old", "session-new"].map((id) => readFile(path.join(sessionRoot, id, "session.json"), "utf8"))
+          )
+        ).toEqual(originalReports);
+      } finally {
+        await removeTempDir(repo);
+      }
+    }
+  );
+
   it("rejects an archive destination inside the session root", async () => {
     const repo = await createTempDir("abb-archive-");
     try {

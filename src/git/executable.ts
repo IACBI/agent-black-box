@@ -4,6 +4,7 @@ import { resolveWindowsExecutable } from "../utils/executables.js";
 let cachedWindowsGit: { searchPath: string | undefined; executable: string } | undefined;
 
 // Preserve local Git storage/discovery settings without opting into executable or config injection.
+// Pathspec modes must not override the explicit selectors used for analysis and literal rollback paths.
 const LOCAL_GIT_ENVIRONMENT = [
   "GIT_DIR",
   "GIT_WORK_TREE",
@@ -18,10 +19,6 @@ const LOCAL_GIT_ENVIRONMENT = [
   "GIT_INDEX_VERSION",
   "GIT_NO_REPLACE_OBJECTS",
   "GIT_REPLACE_REF_BASE",
-  "GIT_LITERAL_PATHSPECS",
-  "GIT_GLOB_PATHSPECS",
-  "GIT_NOGLOB_PATHSPECS",
-  "GIT_ICASE_PATHSPECS",
 ] as const;
 
 /**

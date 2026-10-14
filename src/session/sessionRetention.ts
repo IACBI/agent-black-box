@@ -446,8 +446,11 @@ async function prepareArchiveRoot(repoRoot: string, sessionRoot: string, configu
     throw new Error("Archive destination must be a non-empty local path.");
   }
   const archivePath = path.resolve(repoRoot, configuredPath);
-  if (isPathInside(sessionRoot, archivePath)) {
-    throw new Error("Archive destination must stay outside the session root.");
+  const ancestor = await nearestExistingAncestor(archivePath);
+  const physicalAncestor = await realpath(ancestor);
+  const intendedArchive = path.resolve(physicalAncestor, path.relative(ancestor, archivePath));
+  if (isPathInside(sessionRoot, archivePath) || isPathInside(sessionRoot, intendedArchive)) {
+    throw new Error("Archive destination must stay outside the session root, including through links.");
   }
   await mkdir(archivePath, { recursive: true, mode: 0o700 });
   const info = await lstat(archivePath);

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Combine built-in, embedded-script, and custom command credential matches on original input, preventing overlapping rules from exposing credential fragments. Ambiguous structural rewrites redact the whole argument; execution receives unchanged arguments.
+- Preserve POSIX backslash filenames as distinct paths during analysis and baseline comparison, while retaining Windows separator handling and strict unsafe-path validation.
+- Reject oversized retained capture records before finalization exceeds the existing 256 MiB report policy. Add optional recovery record budgets and live-command wait limits, preserving evidence and ownership on refusal and allowing safe retries.
+- Strip inherited Git pathspec modes so staged exclusions, literal baseline paths, and secret-policy gates retain their defined behavior.
+- Refuse displaced session directories before recovery writes, check archive destination containment before directory creation, and preserve concurrently created foreign hooks during installation.
+- Avoid argument-stack overflow when a bounded file produces many findings; add meaningful failure-mode regressions and composed-redaction/record-retention performance budgets.
+
 ## 0.8.4
 
 - Fixed rounded Windows file-identity comparisons during evidence hashing by using exact integer metadata; added collision and unsupported-length regressions.
