@@ -1,7 +1,7 @@
 import { mkdir, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { AnalysisInputFile } from "../src/analyze/analyzer.js";
+import { analyzeChangedFiles, type AnalysisInputFile } from "../src/analyze/analyzer.js";
 import { MAX_ANALYSIS_BYTES, createAnalysisContentBudget } from "../src/analyze/limits.js";
 import { collectAnalysisInputFiles, summarizeAnalysisCoverage } from "../src/analyze/worktree.js";
 import { meetsSeverity, severityRank } from "../src/utils/severity.js";
@@ -9,6 +9,36 @@ import { sleep } from "../src/utils/timing.js";
 import { createTempDir, removeTempDir } from "./testUtils.js";
 
 describe("working-tree analysis input", () => {
+  it.skipIf(process.platform === "win32")(
+    "reads distinct POSIX backslash and nested filenames without merging their findings",
+    async () => {
+      const repo = await createTempDir("abb-worktree-backslash-");
+      const literalPath = "a\\b.ts";
+      const literalContent = "PASSWORD=synthetic_literal_credential\n";
+      const nestedContent = "PASSWORD=synthetic_nested_credential\n";
+      try {
+        await mkdir(path.join(repo, "a"));
+        await writeFile(path.join(repo, literalPath), literalContent);
+        await writeFile(path.join(repo, "a", "b.ts"), nestedContent);
+        const files = await collectAnalysisInputFiles(
+          repo,
+          [
+            { path: literalPath, status: "modified" },
+            { path: "a/b.ts", status: "modified" },
+          ],
+          4096
+        );
+        expect(files).toMatchObject([
+          { path: literalPath, kind: "text", content: literalContent },
+          { path: "a/b.ts", kind: "text", content: nestedContent },
+        ]);
+        expect(analyzeChangedFiles(files).findings.map((finding) => finding.path)).toEqual(["a/b.ts", literalPath]);
+      } finally {
+        await removeTempDir(repo);
+      }
+    }
+  );
+
   it("admits text deterministically by encoded bytes while excluding binary, missing, and oversized paths", async () => {
     const repo = await createTempDir("abb-worktree-budget-");
     try {
