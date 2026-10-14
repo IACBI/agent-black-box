@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.10.0
+
+- Pin capture-log reads to regular file descriptors, bound reads to the opened length plus one byte, and verify exact file identity/timestamps after parsing. Reject links, replacements, and concurrent growth while preserving read/close failures and raw evidence.
+- Compare worktree file identities with exact integers and verify the pathname after reading, preventing rounded Windows identities or renamed files from appearing as a stable scan.
+- Serialize hook install/update/forced backup/uninstall across ABB processes using an exclusive owner lock. Preserve uncertain/stale/replaced locks for inspection; no automatic takeover or lock bypass is introduced.
+- Add opt-in `recover --max-rss-mb` / `FinalizeSessionOptions.maxRssBytes` checkpoints for observed whole-process RSS alongside record/byte quotas. Refusals preserve evidence and allow retry; this is not a hard OS memory cap.
+- Recognize known credentials concealed in one bounded JSON string-escape layer across recording and analysis. Hide the entire affected command argument, retain original execution arguments, and keep findings free of raw/decoded credentials.
+- Add race/failure/encoding regressions and RSS/escaped-literal performance budgets; document operational boundaries and stale-lock recovery.
+
 ## 0.9.0
 
 - Add opt-in `recover --max-records` and `FinalizeSessionOptions.maxRecords` to bound combined event/command record retention alongside byte limits, preserving evidence and allowing exact-boundary retries.
