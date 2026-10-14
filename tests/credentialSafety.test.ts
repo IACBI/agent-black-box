@@ -16,6 +16,46 @@ import {
 } from "../src/risks/secretRules.js";
 
 describe("credential recognition and bounded redaction", () => {
+  it.each(["'\"' + ", '"unfinished\\q '])(
+    "recognises an escaped credential after unrelated quote prefix %#",
+    (prefix) => {
+      const content = prefix + '"\\u0041SIA' + "Q".repeat(16) + '"';
+      expect(detectSecretsInLine("settings.ts", content, 1).length).toBeGreaterThan(0);
+      expect(redactKnownSecretTokens(content)).toBe("<redacted>");
+      expect(redactCommandParts(["echo", content])).toEqual(["echo", "<redacted>"]);
+    }
+  );
+
+  it.each([
+    '"\\u0067hp_' + "a1".repeat(15) + '"',
+    '"\\u0041uthorization: Bearer synthetic-private-value"',
+    '"https:\\u002f\\u002fapp:synthetic-password@example.test/main"',
+    '"ghp_' + "b2".repeat(15) + " \\u0067hp_" + "a1".repeat(15) + '"',
+    '"-----\\u0042EGIN PRIVATE KEY-----\\nsynthetic body\\n-----END PRIVATE KEY-----"',
+  ])("recognises JSON-escaped credential form %# without retaining its encoded value", (encoded) => {
+    const content = `{"value":${encoded}}`;
+    expect(detectSecretsInLine("settings.json", content, 2).length).toBeGreaterThan(0);
+    const analysis = analyzeChangedFiles([{ path: "settings.json", status: "modified", content }]);
+    expect(analysis.findings.some((finding) => finding.kind === "possible-secret")).toBe(true);
+    expect(JSON.stringify(analysis)).not.toContain(encoded);
+    expect(redactKnownSecretTokens(content)).toBe("<redacted>");
+    expect(redactCommandParts(["echo", content])).toEqual(["echo", "<redacted>"]);
+    const rules = compileSecretRules({ secretPatterns: [{ name: "Context", pattern: "value" }] });
+    expect(redactCommandParts(["echo", content], rules)).toEqual(["echo", "<redacted>"]);
+  });
+
+  it("keeps benign JSON escapes unchanged and recognises hidden credentials at the redaction input boundary", () => {
+    const benign = JSON.stringify({ path: "C:\\project\\source", text: 'say "hello"' });
+    expect(detectSecretsInLine("settings.json", benign, 1)).toEqual([]);
+    expect(redactKnownSecretTokens(benign)).toBe(benign);
+    const suffix = "\\u0067hp_" + "a1".repeat(15) + '"';
+    const encoded = '"' + " ".repeat(65_536 - suffix.length - 1) + suffix;
+    expect(encoded).toHaveLength(65_536);
+    expect(detectSecretsInLine("settings.json", encoded, 1).length).toBeGreaterThan(0);
+    expect(redactKnownSecretTokens(encoded)).toBe("<redacted>");
+    expect(redactKnownSecretTokens(encoded + " ")).toBe("<redacted>");
+  });
+
   const credentials = [
     "ASIA" + "Q".repeat(16),
     "github_pat_" + "a1".repeat(41),

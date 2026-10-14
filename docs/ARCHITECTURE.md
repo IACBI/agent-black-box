@@ -46,6 +46,12 @@ Rollback defaults to guidance. CLI apply requires the latest session, eligible t
 
 ## Bounded resource use
 
+NDJSON readers operate through one regular descriptor with exact integer identity checks before opening/after parsing. The stream ends at the opened size plus one byte so concurrent appenders cannot extend the read indefinitely. Final checks compare the descriptor and current pathname including size, mtime and ctime; read/close failures are preserved together. Accepted worktree text reads apply exact identities and a post-read pathname check as well. These snapshots do not provide atomic pathname guarantees against hostile same-user mutation.
+
+Hook mutation commands acquire an exclusive `.pre-commit.abb-lock` in the resolved physical hooks directory. Install/update/force-backup/uninstall share the lock across processes; read-only status does not. Cleanup compares the open lock's exact identity and physical directory before unlinking. Stale or replaced locks are retained for inspection; no automatic stale takeover introduces an ABA race.
+
+`FinalizeSessionOptions.maxRssBytes` adds an opt-in observed RSS threshold, exposed as `recover --max-rss-mb`. Entry checks precede ownership mutation; subsequent checks run during live-wrapper polling, at stream chunks and accepted-record retention, and at major phases before report publication. All started readers settle on refusal. This is cooperative observation, not a hard process/descendant memory limit: synchronous allocation/native memory can overshoot between checks, and child RSS is separate. Existing byte/count policies and defaults remain unchanged.
+
 Watching excludes heavy/generated/storage directories and bounds its queue. NDJSON is streamed with a 1 MiB line limit, 1,000,000 accepted records per log and bounded warnings; discarded records are explicit diagnostics.
 
 Git start baselines use a separate 32 MiB serialized UTF-8 JSON limit for both publication and reading. Size and shape are checked before session ownership is published. Active-session, lock and stop-request state retain their 1 MiB read limit.

@@ -1,5 +1,5 @@
 import { constants } from "node:fs";
-import { access, chmod, copyFile, lstat, realpath, rename, rm } from "node:fs/promises";
+import { access, chmod, copyFile, lstat, mkdir, open, realpath, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import { createGit } from "../git/executable.js";
 import { readTextFileLimited, writeTextFileAtomic } from "../utils/files.js";
@@ -113,6 +113,18 @@ export async function installPreCommitHook(
   const script = buildPreCommitHookScript(policy, options);
   const scriptOptions = normalizeHookScriptOptions(options);
   const hookPath = path.join(await resolveHooksDirectory(repoRoot), HOOK_FILE_NAME);
+  return withHookMutationLock(hookPath, () =>
+    installHookAtPath(hookPath, policy, script, scriptOptions, options.force)
+  );
+}
+
+async function installHookAtPath(
+  hookPath: string,
+  policy: string,
+  script: string,
+  scriptOptions: HookScriptOptions,
+  force: boolean | undefined
+): Promise<HookInstallResult> {
   const entry = await inspectHookEntry(hookPath);
 
   if (entry.kind === "unsafe") {
@@ -143,7 +155,7 @@ export async function installPreCommitHook(
     return { action: "updated", hookPath, policy, ...scriptOptions };
   }
 
-  if (!options.force) {
+  if (!force) {
     throw new Error(
       `A pre-commit hook that abb did not create already exists at ${formatTerminalValue(hookPath)}. ` +
         "Re-run with --force to back it up and replace it, or add the abb analyze command to it manually."
@@ -167,6 +179,11 @@ export async function installPreCommitHook(
  */
 export async function uninstallPreCommitHook(repoRoot: string): Promise<HookUninstallResult> {
   const hookPath = path.join(await resolveHooksDirectory(repoRoot), HOOK_FILE_NAME);
+  if (!(await lstatOrUndefined(path.dirname(hookPath)))) return { action: "absent", hookPath };
+  return withHookMutationLock(hookPath, () => uninstallHookAtPath(hookPath));
+}
+
+async function uninstallHookAtPath(hookPath: string): Promise<HookUninstallResult> {
   const entry = await inspectHookEntry(hookPath);
 
   if (entry.kind === "absent") {
@@ -189,6 +206,60 @@ export async function uninstallPreCommitHook(repoRoot: string): Promise<HookUnin
 
   await rm(hookPath, { force: true });
   return { action: "removed", hookPath };
+}
+
+/** Git-style, cross-process exclusion: uncertain/stale locks require inspection rather than an unsafe takeover. */
+async function withHookMutationLock<T>(hookPath: string, mutate: () => Promise<T>): Promise<T> {
+  const directory = path.dirname(hookPath);
+  await mkdir(directory, { recursive: true });
+  if ((await realpath(directory)) !== directory) throw new Error("Hooks directory changed before hook mutation.");
+  const lockPath = path.join(directory, ".pre-commit.abb-lock");
+  const handle = await open(lockPath, "wx", 0o600).catch((error: unknown) => {
+    if ((error as NodeJS.ErrnoException | undefined)?.code === "EEXIST") {
+      throw new Error(
+        `Another hook mutation is reserved at ${formatTerminalValue(lockPath)}. Inspect its owner before removing a stale lock and retrying.`,
+        { cause: error }
+      );
+    }
+    throw error;
+  });
+  const failures: unknown[] = [];
+  let result: T | undefined;
+  try {
+    await handle.writeFile(`${JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() })}\n`);
+    if ((await realpath(directory)) !== directory) throw new Error("Hooks directory changed during hook mutation.");
+    result = await mutate();
+  } catch (error) {
+    failures.push(error);
+  }
+  try {
+    const [owned, current, physicalDirectory] = await Promise.all([
+      handle.stat({ bigint: true }),
+      lstat(lockPath, { bigint: true }),
+      realpath(directory),
+    ]);
+    if (
+      physicalDirectory !== directory ||
+      !current.isFile() ||
+      owned.dev !== current.dev ||
+      owned.ino !== current.ino
+    ) {
+      throw new Error(
+        "The hook mutation lock changed; the replacement was left untouched. Inspect storage before retrying."
+      );
+    }
+    await rm(lockPath);
+  } catch (error) {
+    failures.push(error);
+  }
+  try {
+    await handle.close();
+  } catch (error) {
+    failures.push(error);
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) throw new AggregateError(failures, "Hook mutation and ownership cleanup failed.");
+  return result as T;
 }
 
 /** Reports whether the pre-commit hook is absent, managed by abb (current or outdated), or foreign. */

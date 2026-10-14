@@ -122,7 +122,7 @@ For a dead watcher, use `abb recover` or `abb doctor --repair`. Repair requires 
 Recovery can optionally bound how long it waits for live recorded commands and how many event/command records and bytes it retains:
 
 ```sh
-abb recover --command-wait-timeout-ms 10000 --max-record-bytes 67108864 --max-records 100000
+abb recover --command-wait-timeout-ms 10000 --max-record-bytes 67108864 --max-records 100000 --max-rss-mb 512
 ```
 
 `--command-wait-timeout-ms` accepts a positive safe integer in milliseconds; omitted, the existing wait remains unlimited. A timeout stops recovery without deleting live command markers, changing active/lock ownership, or publishing a partial report. Finish the wrappers, inspect capture health, and retry. This bounds the live-command wait, not the total recovery duration or operating-system scheduling.
@@ -135,7 +135,13 @@ If a completed session stopped between active-state and lock cleanup, these comm
 
 `--max-records` accepts a positive safe integer and limits the combined accepted record count across event and command logs before array retention. It complements the byte quota when many small records would create many objects. Malformed lines do not consume the count. The exact count is allowed; exceeding it refuses the entire finalization, preserves evidence/ownership, and permits retry with a sufficient count. Omitted, existing per-log reader limits remain unchanged. Programmatic callers can set `FinalizeSessionOptions.maxRecords` on recovery or finalization. This bounds retained record count, not object size, parsing allocations, or RSS.
 
-For resource-constrained recovery, start with both a byte quota and a record-count quota, inspect a refusal, and increase only what the evidence requires. Keep a backup before retention/rollback work. Use trusted local repository/storage directories; avoid concurrent moves, link changes, and hook install/uninstall operations. Path checks cannot make hostile same-user filesystem mutation atomic. For untrusted repositories, use an isolated OS account/container and process memory limits appropriate to that environment; never treat these CLI quotas as a process sandbox.
+`--max-rss-mb` accepts a positive integer in MiB whose byte conversion is a safe integer. It refuses recovery when observed whole-process resident memory exceeds that threshold. Library callers use `FinalizeSessionOptions.maxRssBytes`. A process already over the threshold is refused before claiming/mutating session ownership. During finalization, checks run during live-wrapper polling and at input-chunk, record-retention, and phase boundaries, including before publication. Started readers still settle before claims are released; an ordinary refusal preserves logs and active/lock ownership and supports a sufficient-threshold retry. Existing byte/count quotas remain independent. Omitted, no RSS threshold is imposed.
+
+This is an observed-memory stop condition, not a hard RSS cap: synchronous parsing/serialization, native allocations, workers, and other activity may overshoot between checkpoints. Worker RSS contributes to the Node process total; separate Git/other child processes have their own RSS. For hard containment use OS-enforced isolation/resource limits appropriate to your platform. A V8 heap flag or worker `resourceLimits` does not bound total RSS. An OS kill cannot run cleanup; preserve the evidence and inspect stale ownership before retrying.
+
+Capture reads refuse linked/non-regular logs, pin a descriptor, and compare exact device/inode/size/timestamps before and after parsing against the current pathname. A growing log can consume at most its opened length plus one byte before refusal. Accepted worktree text reads also use exact identities and a final pathname check. These checks detect verified replacement/growth cases; they are not an atomic defense against an uncooperative process with the same filesystem permissions.
+
+For resource-constrained recovery, start with byte/count quotas and an observed RSS threshold, inspect a refusal, and increase only what the evidence requires. Keep a backup before retention/rollback work. Use trusted local repository/storage directories; avoid concurrent moves and link changes. For untrusted repositories, use an isolated OS account/container and process memory limits appropriate to that environment; never treat CLI quotas or cooperative hook locks as a process sandbox.
 
 Before sharing a report, inspect it locally, use synthetic reproductions in public issues, and keep independently trusted verification keys outside the repository. Keep GitHub secret scanning and push protection enabled as additional layers; they and ABB's heuristics cannot guarantee detection of encoded, split, or unknown credentials. Run staged `complete-review` when incomplete scan coverage must block a change.
 
@@ -202,6 +208,10 @@ abb --allow-external-session-dir hook install # authorize trusted local external
 abb hook status
 abb hook uninstall
 ```
+
+ABB hook mutations reserve `.pre-commit.abb-lock` in the effective physical hooks directory with exclusive creation. A concurrent install/update/forced replacement/uninstall refuses visibly and can be retried after the owner finishes. The lock contains the owner's PID and creation time; cleanup verifies exact file identity and physical directory before unlinking its own lock. A detected replacement lock is left untouched. Read-only status does not acquire it, and uninstall does not create an absent hooks directory.
+
+A crash may leave a stale lock. No automatic takeover or force-lock bypass is provided. Stop concurrent hook maintenance, verify the recorded process has exited and the physical directory/lock still belong to this operation, then inspect/remove only that stale lock before retrying. Never remove a live, uncertain, or replacement lock merely to silence an error. This coordination covers ABB participants; external tools can still race filesystem mutations.
 
 The hook runs `abb analyze --staged --baseline HEAD --policy <policy>`. The first commit of a repository has no baseline commit, so it runs `abb analyze --staged --fail-on high` instead. Custom patterns and the allowlist from `.agentblackbox.json` apply, so a documented exception lets a commit through.
 

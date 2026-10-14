@@ -1,4 +1,5 @@
 import { lstat, open, realpath, type FileHandle } from "node:fs/promises";
+import { constants } from "node:fs";
 import path from "node:path";
 import type { FileKind } from "../types.js";
 import { isPathInside } from "./paths.js";
@@ -28,7 +29,7 @@ export async function inspectTextFile(
   }
   let stats;
   try {
-    stats = await lstat(absolutePath);
+    stats = await lstat(absolutePath, { bigint: true });
   } catch (error) {
     if (isNotFound(error)) {
       return { kind: "missing", reason: "File does not exist." };
@@ -37,7 +38,7 @@ export async function inspectTextFile(
   }
 
   if (stats.isSymbolicLink() || !stats.isFile()) {
-    return { kind: "not-file", sizeBytes: stats.size, reason: "Path is not a regular file." };
+    return { kind: "not-file", sizeBytes: Number(stats.size), reason: "Path is not a regular file." };
   }
 
   let handle: FileHandle;
@@ -48,11 +49,15 @@ export async function inspectTextFile(
         realpath(path.dirname(absolutePath)),
       ]);
       if (!isPathInside(physicalRoot, physicalParent)) {
-        return { kind: "not-file", sizeBytes: stats.size, reason: "Path resolves outside the repository." };
+        return { kind: "not-file", sizeBytes: Number(stats.size), reason: "Path resolves outside the repository." };
       }
     }
 
-    handle = await open(absolutePath, "r");
+    const flags =
+      process.platform === "win32"
+        ? constants.O_RDONLY
+        : constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
+    handle = await open(absolutePath, flags);
   } catch (error) {
     if (isNotFound(error)) {
       return { kind: "missing", reason: "File does not exist." };
@@ -61,38 +66,56 @@ export async function inspectTextFile(
   }
 
   try {
-    const opened = await handle.stat();
+    const opened = await handle.stat({ bigint: true });
     if (
       !opened.isFile() ||
       opened.dev !== stats.dev ||
       opened.ino !== stats.ino ||
       opened.size !== stats.size ||
-      opened.mtimeMs !== stats.mtimeMs
+      opened.mtimeNs !== stats.mtimeNs ||
+      opened.ctimeNs !== stats.ctimeNs
     ) {
-      return { kind: "not-file", sizeBytes: opened.size, reason: "Path changed during inspection." };
+      return { kind: "not-file", sizeBytes: Number(opened.size), reason: "Path changed during inspection." };
     }
 
-    if (opened.size > maxTextBytes) {
-      const sample = await readFilePrefix(handle, Math.min(sampleBytes, opened.size));
+    if (opened.size > BigInt(maxTextBytes)) {
+      const sample = await readFilePrefix(handle, Math.min(sampleBytes, Number(opened.size)));
       return {
         kind: isLikelyBinary(sample) ? "binary" : "large",
-        sizeBytes: opened.size,
+        sizeBytes: Number(opened.size),
         reason: `File is larger than ${maxTextBytes} bytes.`,
       };
     }
 
-    const buffer = await readFilePrefix(handle, opened.size);
-    const completed = await handle.stat();
-    if (buffer.length !== opened.size || completed.size !== opened.size || completed.mtimeMs !== opened.mtimeMs) {
-      return { kind: "unknown", sizeBytes: completed.size, reason: "File changed during inspection." };
+    const buffer = await readFilePrefix(handle, Number(opened.size));
+    const completed = await handle.stat({ bigint: true });
+    let current;
+    try {
+      current = await lstat(absolutePath, { bigint: true });
+    } catch (error) {
+      if (!isNotFound(error)) throw error;
+    }
+    if (
+      BigInt(buffer.length) !== opened.size ||
+      completed.size !== opened.size ||
+      completed.mtimeNs !== opened.mtimeNs ||
+      completed.ctimeNs !== opened.ctimeNs ||
+      !current?.isFile() ||
+      current.dev !== opened.dev ||
+      current.ino !== opened.ino ||
+      current.size !== completed.size ||
+      current.mtimeNs !== completed.mtimeNs ||
+      current.ctimeNs !== completed.ctimeNs
+    ) {
+      return { kind: "unknown", sizeBytes: Number(completed.size), reason: "File changed during inspection." };
     }
     if (isLikelyBinary(buffer)) {
-      return { kind: "binary", sizeBytes: opened.size, reason: "Binary-like byte patterns detected." };
+      return { kind: "binary", sizeBytes: Number(opened.size), reason: "Binary-like byte patterns detected." };
     }
 
     return {
       kind: "text",
-      sizeBytes: opened.size,
+      sizeBytes: Number(opened.size),
       text: buffer.toString("utf8"),
     };
   } finally {
