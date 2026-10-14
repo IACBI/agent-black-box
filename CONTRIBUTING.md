@@ -27,6 +27,14 @@ Before opening a pull request:
 
 Review major dependency updates against the supported Node.js baseline. Report vulnerabilities privately as described in [Security](SECURITY.md).
 
+## Review policy
+
+Submit changes through a pull request with a concrete problem, validation results, and completed review checklist. `main` requires up-to-date `Analyze` and `Required checks` results from GitHub Actions, resolved review conversations, and the same protections for administrators. Force pushes and branch deletion remain blocked. CODEOWNERS routes review requests to the current maintainer.
+
+The repository currently has one write-capable maintainer. Pull requests are required, but independent approval is not required because authors cannot approve their own pull requests. Do not describe a self-review or automated check as independent human approval. When a second trusted write-capable maintainer joins, require at least one approving review, dismiss stale approvals on new commits, and require approval of the most recent reviewable push by someone other than its author. Do not bypass checks to merge or release.
+
+Use the bug/feature issue forms for public requests. Vulnerabilities belong in private security reporting; never attach unreviewed session reports or real credentials.
+
 ## Releases
 
 Update `package.json`, the CLI version in `src/cli.ts`, and the exact `## X.Y.Z` heading in `CHANGELOG.md` together. Tag as `vX.Y.Z`. During `0.x`, use patches for fixes and minors for features or compatibility changes; after `1.0`, breaking changes require a major release.
@@ -55,7 +63,7 @@ git tag vX.Y.Z
 git push origin vX.Y.Z
 ```
 
-The tag triggers the release workflow. It publishes the tarball and `SHA256SUMS` as GitHub Release assets and records a provenance attestation. Do not create the release manually first; an existing release is updated with changelog notes and regenerated assets.
+The tag triggers the release workflow, which refuses a tag outside the current protected `main` commit before installing dependencies or publishing. The active `Protect release tags` ruleset blocks updates and deletion of existing `v*` tags without bypass actors; corrections need a new version/tag. It publishes the tarball and `SHA256SUMS` as GitHub Release assets and records a provenance attestation. Do not create the release manually first; an existing release is updated with changelog notes and regenerated assets. Tag protection does not make release assets immutable; verify downloaded checksums and provenance.
 
 From the repository root, download and verify the assets in Bash:
 

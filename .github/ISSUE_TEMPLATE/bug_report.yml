@@ -1,0 +1,33 @@
+name: Bug report
+description: Report reproducible incorrect behavior using synthetic data.
+body:
+  - type: markdown
+    attributes:
+      value: "Report vulnerabilities privately at https://github.com/IACBI/agent-black-box/security/advisories/new. Never include credentials, private repository data, or unreviewed session reports."
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include ABB version or commit, operating system, Node.js version, and Git version.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Provide commands and a small synthetic fixture. Review and redact all output first.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include the exit code and relevant redacted diagnostics.
+    validations:
+      required: true
