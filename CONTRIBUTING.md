@@ -65,7 +65,7 @@ git tag vX.Y.Z
 git push origin vX.Y.Z
 ```
 
-The tag triggers the release workflow, which refuses a tag outside the current protected `main` commit before installing dependencies or publishing. The active `Protect release tags` ruleset blocks updates and deletion of existing `v*` tags without bypass actors; corrections need a new version/tag. It publishes the tarball and `SHA256SUMS` as GitHub Release assets and records a provenance attestation. Do not create the release manually first; an existing release is updated with changelog notes and regenerated assets. Tag protection does not make release assets immutable; verify downloaded checksums and provenance.
+The tag triggers the release workflow, which refuses a tag outside the current protected `main` commit before installing dependencies or publishing. The active `Protect release tags` ruleset blocks updates and deletion of existing `v*` tags without bypass actors; corrections need a new version/tag. Dependencies are installed and tests run in an unprivileged build job; a separate publish job holds the write, attestation and OIDC permissions and only attests and uploads the tarball and `SHA256SUMS` as GitHub Release assets. Do not create the release manually first; an existing release is updated with changelog notes and regenerated assets. Tag protection does not make release assets immutable; verify downloaded checksums and provenance.
 
 From the repository root, download and verify the assets in Bash:
 

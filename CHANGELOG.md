@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Detect camelCase credential assignments such as `dbPassword = "..."` in recorded sessions, matching the watcherless analyzer.
+- Split the release workflow so dependency installation and tests run with read-only permissions; only a separate publish job can write releases, attest provenance or request an OIDC token.
+
 ## 0.12.0
 
 - Redact the complete password of URL credentials that contain `@`, and recognize PGP private key block headers and `Authorization: Token` headers in recording and analysis.
