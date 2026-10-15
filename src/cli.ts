@@ -92,6 +92,7 @@ import { inspectSessionCaptureHealth, renderSessionCaptureHealth } from "./sessi
 import { runWatcher } from "./watcher/watcher.js";
 import { pathExists } from "./utils/files.js";
 import { meetsSeverity } from "./utils/severity.js";
+import { MAX_REPORT_BYTES } from "./session/reportStorage.js";
 import { escapeTerminalControls, formatTerminalValue } from "./utils/terminal.js";
 import { sleep } from "./utils/timing.js";
 import { compileSecretRules } from "./risks/secretRules.js";
@@ -191,6 +192,7 @@ program
         console.log(`Session stopped. Reports written to ${formatTerminalValue(active.sessionDir)}`);
       } else {
         console.log("Stop requested. The foreground watcher has not finalized yet.");
+        process.exitCode = 1;
       }
       return;
     }
@@ -221,11 +223,15 @@ program
       maxRssMb?: string;
     }) => {
       const maxRssMb = parseSessionListLimit(options.maxRssMb, "--max-rss-mb");
+      const maxRssBytes = maxRssMb === undefined ? undefined : maxRssMb * 1024 * 1024;
+      if (maxRssBytes !== undefined && !Number.isSafeInteger(maxRssBytes)) {
+        throw new Error("--max-rss-mb is too large: maxRssBytes must be a positive safe integer.");
+      }
       const recoveryOptions = {
         commandWaitTimeoutMs: parseSessionListLimit(options.commandWaitTimeoutMs, "--command-wait-timeout-ms"),
-        maxRecordBytes: parseSessionListLimit(options.maxRecordBytes, "--max-record-bytes"),
+        maxRecordBytes: parseMaxRecordBytes(options.maxRecordBytes),
         maxRecords: parseSessionListLimit(options.maxRecords, "--max-records"),
-        maxRssBytes: maxRssMb === undefined ? undefined : maxRssMb * 1024 * 1024,
+        maxRssBytes,
       };
       const repoRoot = await requireRepositoryRoot(process.cwd());
       const config = await loadRuntimeConfig(repoRoot);
@@ -720,11 +726,19 @@ sessionsCommand
   .option("--before <date>", "only consider sessions started before YYYY-MM-DD (UTC)")
   .option("--keep <count>", "keep at least this many newest completed sessions")
   .option("--apply", "delete eligible sessions after typed confirmation")
-  .action(async (options: { before?: string; keep?: string; apply?: boolean }) => {
+  .option("--json", "print the retention plan as JSON (preview only)")
+  .action(async (options: { before?: string; keep?: string; apply?: boolean; json?: boolean }) => {
+    if (options.json && options.apply) {
+      throw new Error("--json cannot be combined with --apply.");
+    }
     const repoRoot = await requireRepositoryRoot(process.cwd());
     const config = await loadRuntimeConfig(repoRoot);
     const { before, keep } = resolveRetentionSelection(options, config);
     const plan = planSessionRetention(await listSessionCatalog(repoRoot, config), before, keep);
+    if (options.json) {
+      console.log(escapeTerminalControls(JSON.stringify(plan, null, 2)));
+      return;
+    }
     console.log(escapeTerminalControls(renderSessionRetentionPlan(plan)));
     if (!options.apply || plan.sessions.length === 0) {
       return;
@@ -752,41 +766,61 @@ sessionsCommand
   .option("--to <directory>", "local archive destination (or configure retention.archiveDir)")
   .option("--apply", "copy and verify eligible sessions after typed confirmation")
   .option("--resume", "inspect matching partial archives and copy only missing files with --apply")
-  .action(async (options: { before?: string; keep?: string; to?: string; apply?: boolean; resume?: boolean }) => {
-    const repoRoot = await requireRepositoryRoot(process.cwd());
-    const config = await loadRuntimeConfig(repoRoot);
-    const { before, keep } = resolveRetentionSelection(options, config);
-    const archiveDir = await resolveArchiveDestination(repoRoot, options.to, config.retention?.archiveDir);
-    if (!archiveDir) {
-      throw new Error("--to is required unless retention.archiveDir is configured.");
-    }
-    const plan = planSessionRetention(await listSessionCatalog(repoRoot, config), before, keep);
-    console.log(escapeTerminalControls(renderSessionArchivePlan(plan, archiveDir)));
-    if (options.resume) {
-      const archives = await inspectSessionArchives(repoRoot, config, plan, archiveDir);
-      console.log(escapeTerminalControls(renderSessionArchiveInspection(archives).trimEnd()));
-      if (archives.some((archive) => archive.status === "conflict")) {
-        process.exitCode = 1;
+  .option("--json", "print the archive plan as JSON (preview only)")
+  .action(
+    async (options: {
+      before?: string;
+      keep?: string;
+      to?: string;
+      apply?: boolean;
+      resume?: boolean;
+      json?: boolean;
+    }) => {
+      if (options.json && options.apply) {
+        throw new Error("--json cannot be combined with --apply.");
+      }
+      if (options.json && options.resume) {
+        throw new Error("--json cannot be combined with --resume.");
+      }
+      const repoRoot = await requireRepositoryRoot(process.cwd());
+      const config = await loadRuntimeConfig(repoRoot);
+      const { before, keep } = resolveRetentionSelection(options, config);
+      const archiveDir = await resolveArchiveDestination(repoRoot, options.to, config.retention?.archiveDir);
+      if (!archiveDir) {
+        throw new Error("--to is required unless retention.archiveDir is configured.");
+      }
+      const plan = planSessionRetention(await listSessionCatalog(repoRoot, config), before, keep);
+      if (options.json) {
+        console.log(escapeTerminalControls(JSON.stringify({ archiveDir, ...plan }, null, 2)));
         return;
       }
+      console.log(escapeTerminalControls(renderSessionArchivePlan(plan, archiveDir)));
+      if (options.resume) {
+        const archives = await inspectSessionArchives(repoRoot, config, plan, archiveDir);
+        console.log(escapeTerminalControls(renderSessionArchiveInspection(archives).trimEnd()));
+        if (archives.some((archive) => archive.status === "conflict")) {
+          process.exitCode = 1;
+          return;
+        }
+      }
+      if (!options.apply || plan.sessions.length === 0) {
+        return;
+      }
+      const confirmation = `archive ${plan.sessions.length} sessions`;
+      if (
+        !(await confirmTyped(
+          confirmation,
+          `Type "${confirmation}" to copy these sessions: `,
+          "Session archiving requires an interactive terminal."
+        ))
+      ) {
+        console.log("Session archiving cancelled.");
+        return;
+      }
+      await archiveSessionRetention(repoRoot, config, plan, archiveDir, { resume: options.resume });
+      console.log(`${plan.sessions.length} completed session(s) archived; originals remain in place.`);
     }
-    if (!options.apply || plan.sessions.length === 0) {
-      return;
-    }
-    const confirmation = `archive ${plan.sessions.length} sessions`;
-    if (
-      !(await confirmTyped(
-        confirmation,
-        `Type "${confirmation}" to copy these sessions: `,
-        "Session archiving requires an interactive terminal."
-      ))
-    ) {
-      console.log("Session archiving cancelled.");
-      return;
-    }
-    await archiveSessionRetention(repoRoot, config, plan, archiveDir, { resume: options.resume });
-    console.log(`${plan.sessions.length} completed session(s) archived; originals remain in place.`);
-  });
+  );
 
 sessionsCommand
   .command("show")
@@ -868,8 +902,8 @@ sessionsCommand
       }
     ) => {
       const verificationOptions: SessionVerificationOptions = {
-        memoryBudgetMb: parseSessionListLimit(options.memoryBudgetMb, "--memory-budget-mb"),
-        concurrency: parseSessionListLimit(options.concurrency, "--concurrency"),
+        memoryBudgetMb: parseMemoryBudgetMb(options.memoryBudgetMb),
+        concurrency: parseConcurrency(options.concurrency),
         checkIndexes: options.checkIndexes,
         repairIndexes: options.repairIndexes,
       };
@@ -958,7 +992,7 @@ function getHistoryReadOptions(memoryBudgetMb: string | undefined): SessionCatal
     return {};
   }
   const limits = getSessionVerificationLimits({
-    memoryBudgetMb: parseSessionListLimit(memoryBudgetMb, "--memory-budget-mb"),
+    memoryBudgetMb: parseMemoryBudgetMb(memoryBudgetMb),
     concurrency: 1,
   });
   return { maxMaterializedBytes: limits.maxMaterializedBytes };
@@ -1063,6 +1097,30 @@ function parseSessionListLimit(value: string | undefined, optionName = "--limit"
     throw new Error(`${optionName} must be a positive integer.`);
   }
   return Number(value);
+}
+
+function parseMemoryBudgetMb(value: string | undefined): number | undefined {
+  const parsed = parseSessionListLimit(value, "--memory-budget-mb");
+  if (parsed !== undefined && (parsed < 8 || parsed > 4096)) {
+    throw new Error("--memory-budget-mb must be an integer between 8 and 4096.");
+  }
+  return parsed;
+}
+
+function parseConcurrency(value: string | undefined): number | undefined {
+  const parsed = parseSessionListLimit(value, "--concurrency");
+  if (parsed !== undefined && parsed > 16) {
+    throw new Error("--concurrency must be an integer between 1 and 16.");
+  }
+  return parsed;
+}
+
+function parseMaxRecordBytes(value: string | undefined): number | undefined {
+  const parsed = parseSessionListLimit(value, "--max-record-bytes");
+  if (parsed !== undefined && parsed > MAX_REPORT_BYTES) {
+    throw new Error(`--max-record-bytes: maxRecordBytes must be an integer between 1 and ${MAX_REPORT_BYTES} bytes.`);
+  }
+  return parsed;
 }
 
 function parseAnalysisByteLimit(value: string): number {

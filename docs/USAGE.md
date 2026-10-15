@@ -114,7 +114,7 @@ Command metadata is redacted before writing. Supported forms include sensitive a
 
 When custom patterns are configured, their matches and built-in credential/script matches are evaluated against original argument text and their overlapping ranges are masked together. A partial custom match cannot prevent a built-in rule from masking the rest of a recognized credential. When URL, JSON, assignment, or tool-flag rewriting could invalidate a custom match, the whole argument is hidden. Safe formatting is preserved when custom patterns do not match; executed arguments remain unchanged.
 
-`stop` verifies active state and lock ownership, requests finalization, and waits for the watcher. In-flight recorded commands delay finalization. After roughly ten seconds the CLI can report that finalization is pending; the watcher continues. Use `status` to check progress.
+`stop` verifies active state and lock ownership, requests finalization, and waits for the watcher. In-flight recorded commands delay finalization. After roughly ten seconds the CLI can report that finalization is pending; the watcher continues. In that case `stop` exits 1, so `abb stop && abb summary` does not read reports that are not written yet. A successful stop exits 0. Use `status` to check progress.
 
 `abb status --capture-health` inspects durable watcher-loss and command-completion markers without loading event logs or changing the session. `abb status --json` includes the same diagnostics and omits private ownership tokens. `doctor` also reports capture health for an inspectable active/recoverable session. Status remains informational; degraded health is a diagnostic, not a failed status command.
 
@@ -344,22 +344,29 @@ abb sessions archive --before 2026-01-01 --keep 2 --to .agent-black-box/archive
 abb sessions archive --before 2026-01-01 --keep 2 --to .agent-black-box/archive --resume
 abb sessions archive --before 2026-01-01 --keep 2 --to .agent-black-box/archive --resume --apply
 abb sessions prune --before 2026-01-01 --keep 2
+abb sessions prune --before 2026-01-01 --keep 2 --json
+abb sessions archive --before 2026-01-01 --keep 2 --to .agent-black-box/archive --json
 ```
 
 These commands preview completed sessions started before the UTC cutoff (exclusive). Use `--before` or configure `retention.days`; `--keep` defaults to `retention.keep` or 1. Both require `--apply`, an interactive terminal, and typed confirmation to execute. Incomplete/corrupt sessions are excluded and active state, links, and the preview are rechecked before mutation.
+
+`--json` on `prune` and `archive` prints the same plan as structured preview output: `before`, `keep`, and `sessions` (each with `id` and `startedAt`), plus `archiveDir` for `archive`. It never changes anything. `--json` cannot be combined with `--apply`, or with `--resume` for `archive`; those combinations fail before anything is changed.
 
 Archive requires `--to` or `retention.archiveDir`, outside the session root. A destination read from the configuration must stay physically inside the repository (links included), because a cloned repository could otherwise point `--apply` anywhere you can write; pass `--to` to choose an external destination yourself. It verifies copied files with checksums and writes `.abb-archive-complete.json` only after verification. Originals remain in place. By default an existing destination session ID is refused. `--resume` previews each destination as missing, resumable, complete, or conflicting without modifying it; `--resume --apply` keeps typed confirmation and copies only missing files. Every existing file must match the source; divergent bytes, extra entries, linked/special paths, or invalid completion metadata refuse continuation. Complete matching archives are preserved. Prune validates full replay-record integrity before deletion. An interrupted prune can leave `.pruning-*` under the session root; inspect such remnants before removing them.
 
 ## Troubleshooting
 
-| Symptom                               | Action                                                                                            |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| No repository / invalid configuration | Run inside a Git repository; use `abb config validate` and `abb doctor`                           |
-| Stale session                         | Use `abb recover` or `abb doctor --repair`; preserve inconsistent state                           |
-| No command history                    | Record commands explicitly through `abb run`; shell history is not read                           |
-| Skipped analysis content              | Read coverage reasons; use `complete-review` when a partial CI review must fail                   |
-| Refused rollback                      | Review changes since finalization and the eligible-file list; restore manually if appropriate     |
-| Windows command not found             | Put its `.cmd`/`.bat` directory on PATH, or pass an explicit repository-relative or absolute path |
+| Symptom                               | Action                                                                                                            |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| No repository / invalid configuration | Run inside a Git repository; use `abb config validate` and `abb doctor`                                           |
+| Stale session                         | Use `abb recover` or `abb doctor --repair`; preserve inconsistent state                                           |
+| No command history                    | Record commands explicitly through `abb run`; shell history is not read                                           |
+| Skipped analysis content              | Read coverage reasons; use `complete-review` when a partial CI review must fail                                   |
+| Refused rollback                      | Review changes since finalization and the eligible-file list; restore manually if appropriate                     |
+| Windows command not found             | Put its `.cmd`/`.bat` directory on PATH, or pass an explicit repository-relative or absolute path                 |
+| Recovery or finalization waits        | A crashed wrapper's PID may have been reused by another process; run `abb recover --command-wait-timeout-ms <ms>` |
+
+If recovery or finalization waits indefinitely, a recorded command's wrapper probably crashed and its process ID now belongs to an unrelated process. Run `abb recover --command-wait-timeout-ms <ms>` (for example `60000`) to stop waiting. The timeout keeps evidence and ownership intact and publishes no partial report, so inspect `abb status --capture-health` and retry.
 
 ## Evidence signing and credential limits
 
