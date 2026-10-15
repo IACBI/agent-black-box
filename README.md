@@ -23,13 +23,14 @@ Agent Black Box records file events, Git evidence, and the commands you run thro
 ### Features
 
 - Session recording with a Git baseline; pre-existing changes are kept apart from new ones.
-- Redacted command history through `abb run`.
+- Redacted command history through `abb run`, with `--private` to withhold all command text and user labels.
 - Risk and possible-secret findings, plus watcherless and staged analysis with text, JSON, and SARIF output.
 - CI policies (`new-secrets`, `complete-review`) that compare staged content against a fixed commit.
 - A managed Git pre-commit hook (`abb hook install`) with explicit first-commit policy and external-storage options.
 - Your own secret patterns and a documented allowlist in `.agentblackbox.json`, applied to both detectors and to command redaction.
 - Session history, comparison, integrity verification, verified archives, guarded pruning and rollback, and recovery with optional record/wait limits and an observed RSS threshold.
 - Possible-secret location comparisons, explicit derived-index repair, verified archive resume, and optional aggregate analysis budgets.
+- Optional `pnpm audit:isolated` with kernel-enforced memory, read-only source access and no network; see [isolation guidance](docs/USAGE.md#os-isolated-analysis).
 - Pull request comments (`abb pr-comment`) and SARIF export for recorded sessions.
 
 ### Requirements
@@ -136,13 +137,14 @@ Agent Black Box; dosya olaylarını, Git verilerini ve kendi üzerinden çalış
 ### Özellikler
 
 - Git başlangıç durumunu esas alan oturum kaydı; önceden var olan değişiklikler yenilerden ayrı tutulur.
-- `abb run` ile maskelenmiş komut geçmişi.
+- `abb run` ile maskelenmiş komut geçmişi; `--private` ile komut metni ve kullanıcı etiketlerini tamamen kayıttan çıkarma.
 - Risk ve olası gizli değer bulguları; izleyicisiz ve staged analiz (metin, JSON, SARIF çıktısı).
 - Staged içeriği sabit bir commit ile karşılaştıran CI politikaları (`new-secrets`, `complete-review`).
 - İlk commit politikası ve harici depolama için açık seçenekleri olan yönetilen bir Git pre-commit hook'u (`abb hook install`).
 - `.agentblackbox.json` içinde kendi gizli değer desenleriniz ve gerekçeli bir izin listesi; iki dedektöre ve komut maskelemeye de uygulanır.
 - Oturum geçmişi, karşılaştırma, bütünlük doğrulaması, doğrulanmış arşiv, onaylı silme ve geri alma; isteğe bağlı kayıt/bekleme sınırları ve gözlemlenen RSS eşiğiyle kurtarma.
 - Olası gizli değer konumlarını karşılaştırma, açık seçimle türetilmiş indeks onarımı, doğrulanmış arşive devam etme ve isteğe bağlı toplam analiz bütçesi.
+- Kernel bellek sınırı, salt okunur kaynak erişimi ve kapalı ağ ile isteğe bağlı `pnpm audit:isolated`; [izolasyon rehberine](docs/USAGE.md#os-isolated-analysis) bakın.
 - Pull request yorumları (`abb pr-comment`) ve kayıtlı oturumlar için SARIF dışa aktarımı.
 
 ### Gereksinimler

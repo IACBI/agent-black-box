@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { copyFile, mkdir, readFile, readdir, symlink, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, realpath, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONFIG } from "../src/config/defaults.js";
@@ -26,6 +26,77 @@ import {
 import { createTempDir, initGitRepo, removeTempDir } from "./testUtils.js";
 
 describe("command recorder", () => {
+  it.each([0, 7])(
+    "omits private command metadata while executing original arguments and exit code %s",
+    async (exitCode) => {
+      const dir = await createTempDir();
+      try {
+        initGitRepo(dir);
+        const session = await createSession(dir, DEFAULT_CONFIG);
+        await mkdir(path.join(dir, "work"));
+        const values = [
+          "unrecognized-opaque-material",
+          "split",
+          "value",
+          Buffer.from("synthetic-hidden-material").toString("base64"),
+        ];
+        const options = { private: true, cwd: "work", label: values[0], group: values[1], phase: values[3] };
+        const script = `require('node:fs').writeFileSync('received.json', JSON.stringify({args:process.argv.slice(1),cwd:process.cwd()}));process.exit(${exitCode})`;
+        expect(await recordAndRunCommand([process.execPath, "-e", script, ...values], dir, options)).toBe(exitCode);
+        const received = JSON.parse(await readFile(path.join(dir, "work", "received.json"), "utf8")) as {
+          args: string[];
+          cwd: string;
+        };
+        expect(received.args).toEqual(values);
+        expect(await realpath(received.cwd)).toBe(await realpath(path.join(dir, "work")));
+        const [event] = await readCommandEvents(session.sessionDir);
+        expect(event).toMatchObject({ command: "<redacted>", cwd: "work", exitCode });
+        for (const field of ["label", "group", "phase"]) expect(event).not.toHaveProperty(field);
+        const persisted = await readFile(path.join(session.sessionDir, "commands.ndjson"), "utf8");
+        for (const value of values) expect(persisted).not.toContain(value);
+        expect((await readdir(session.sessionDir)).some((name) => name.startsWith("command-inflight-"))).toBe(false);
+      } finally {
+        await removeTempDir(dir);
+      }
+    }
+  );
+
+  it("retains ordinary command metadata when privacy is explicitly disabled", async () => {
+    const dir = await createTempDir();
+    try {
+      initGitRepo(dir);
+      const session = await createSession(dir, DEFAULT_CONFIG);
+      const options = { private: false, label: "check", group: "quality", phase: "test" };
+      expect(await recordAndRunCommand([process.execPath, "--version"], dir, options)).toBe(0);
+      const [event] = await readCommandEvents(session.sessionDir);
+      expect(event).toMatchObject({ label: "check", group: "quality", phase: "test", exitCode: 0 });
+      expect(event?.command).toContain("--version");
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
+  it("keeps private spawn failures useful without persisting the attempted executable", async () => {
+    const dir = await createTempDir();
+    try {
+      initGitRepo(dir);
+      const session = await createSession(dir, DEFAULT_CONFIG);
+      const options = { private: true, label: "opaque-user-label" };
+      expect(await recordAndRunCommand([path.join(dir, "missing-private-executable")], dir, options)).toBe(1);
+      const [event] = await readCommandEvents(session.sessionDir);
+      expect(event).toMatchObject({
+        command: "<redacted>",
+        exitCode: null,
+        error: "ENOENT: command could not be started.",
+      });
+      expect(event).not.toHaveProperty("label");
+      expect(JSON.stringify(event)).not.toContain("missing-private-executable");
+      expect((await readdir(session.sessionDir)).some((name) => name.startsWith("command-inflight-"))).toBe(false);
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
   it.each(["succeeds", "fails"])(
     "preserves marker cleanup errors when completion-marker rename %s",
     async (outcome) => {

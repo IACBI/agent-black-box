@@ -78,16 +78,9 @@ export async function inspectTextFile(
       return { kind: "not-file", sizeBytes: Number(opened.size), reason: "Path changed during inspection." };
     }
 
-    if (opened.size > BigInt(maxTextBytes)) {
-      const sample = await readFilePrefix(handle, Math.min(sampleBytes, Number(opened.size)));
-      return {
-        kind: isLikelyBinary(sample) ? "binary" : "large",
-        sizeBytes: Number(opened.size),
-        reason: `File is larger than ${maxTextBytes} bytes.`,
-      };
-    }
-
-    const buffer = await readFilePrefix(handle, Number(opened.size));
+    const oversized = opened.size > BigInt(maxTextBytes);
+    const bytesToRead = oversized ? Math.min(sampleBytes, Number(opened.size)) : Number(opened.size);
+    const buffer = await readFilePrefix(handle, bytesToRead);
     const completed = await handle.stat({ bigint: true });
     let current;
     try {
@@ -96,7 +89,7 @@ export async function inspectTextFile(
       if (!isNotFound(error)) throw error;
     }
     if (
-      BigInt(buffer.length) !== opened.size ||
+      buffer.length !== bytesToRead ||
       completed.size !== opened.size ||
       completed.mtimeNs !== opened.mtimeNs ||
       completed.ctimeNs !== opened.ctimeNs ||
@@ -108,6 +101,13 @@ export async function inspectTextFile(
       current.ctimeNs !== completed.ctimeNs
     ) {
       return { kind: "unknown", sizeBytes: Number(completed.size), reason: "File changed during inspection." };
+    }
+    if (oversized) {
+      return {
+        kind: isLikelyBinary(buffer) ? "binary" : "large",
+        sizeBytes: Number(opened.size),
+        reason: `File is larger than ${maxTextBytes} bytes.`,
+      };
     }
     if (isLikelyBinary(buffer)) {
       return { kind: "binary", sizeBytes: Number(opened.size), reason: "Binary-like byte patterns detected." };

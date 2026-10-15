@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.11.0
+
+- Add `pnpm audit:isolated` for analysis in a non-root, read-only, networkless Docker container with OS-enforced memory/swap and process limits. Require cgroup v2 and limit capabilities, preserve native Linux caller access to private checkouts, and clear automatically injected proxy credentials. Build from a narrow trusted context and run the resulting immutable image ID. Add required CI verification of real kernel limits, proxy exclusion, source write refusal and OOM termination.
+- Add `abb run --private` and `RecordCommandOptions.private` to withhold all command text and user labels without relying on credential recognition, while retaining original execution and exit behavior.
+- Recognize and redact Context7 tokens and explicitly labelled Google/API-key headers, including JSON escapes and custom-mask composition.
+- Recheck file identity after oversized-file sampling, refusing pathname replacement or truncation instead of returning stale classifications.
+- Remove the redundant historical audit report; keep current behavior in maintained documentation and verification evidence in CI.
+
 ## 0.10.0
 
 - Pin capture-log reads to regular file descriptors, bound reads to the opened length plus one byte, and verify exact file identity/timestamps after parsing. Reject links, replacements, and concurrent growth while preserving read/close failures and raw evidence.
