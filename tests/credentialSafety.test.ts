@@ -113,6 +113,65 @@ describe("credential recognition and bounded redaction", () => {
     );
   });
 
+  it.each([
+    "abcdefgh~private-tail",
+    "abcdefgh!private-tail",
+    "abcdefgh%private-tail",
+    "abcdefgh/private-tail",
+    "abcdefgh:private-tail",
+    "abcdefgh+private-tail",
+    "abcdefgh=private-tail",
+    "~abcdefgh/private-tail",
+  ])("recognises and fully masks opaque API-key header value %s", (value) => {
+    const input = `X-Api-Key: ${value}`;
+    expect(hasKnownCredentialMaterial(input)).toBe(true);
+    expect(redactKnownSecretTokens(input)).toBe("X-Api-Key: <redacted>");
+    expect(redactKnownSecretTokensWithRules(input, compileSecretRules({}), new Uint32Array(input.length)).text).toBe(
+      "X-Api-Key: <redacted>"
+    );
+    const recorded = redactCommandParts(["echo", input])[1]!;
+    expect(recorded).toContain("<redacted>");
+    expect(recorded).not.toContain(value);
+
+    const rules = compileSecretRules({ secretPatterns: [{ name: "Partial opaque key", pattern: "private-tail" }] });
+    expect(redactKnownSecretTokensWithRules(input, rules, new Uint32Array(input.length))).toEqual({
+      text: "X-Api-Key: <redacted>",
+      customMatched: true,
+    });
+    const recordedWithRules = redactCommandParts(["echo", input], rules)[1]!;
+    expect(recordedWithRules).toContain("<redacted>");
+    expect(recordedWithRules).not.toContain(value);
+  });
+
+  it("masks quoted and escaped JSON API-key values while preserving adjacent fields", () => {
+    const quoted = '{"X-Api-Key":"opaque~private-tail","requestId":"keep-this"}';
+    const escaped = '{"X-Api-Key":"opaque\\u007eprivate-tail","requestId":"keep-this"}';
+    const escapedQuote = JSON.stringify({ "X-Api-Key": 'opaque"~private-tail', requestId: "keep-this" });
+    for (const input of [quoted, escaped, escapedQuote]) {
+      expect(hasKnownCredentialMaterial(input)).toBe(true);
+      expect(redactKnownSecretTokens(input)).toBe('{"X-Api-Key":"<redacted>","requestId":"keep-this"}');
+      expect(redactKnownSecretTokensWithRules(input, compileSecretRules({}), new Uint32Array(input.length)).text).toBe(
+        '{"X-Api-Key":"<redacted>","requestId":"keep-this"}'
+      );
+    }
+  });
+
+  it("ignores API-key labels nested inside a quoted key value", () => {
+    const input = 'X-Api-Key: "X-Api-Key: abcdefgh~private-tail"';
+    expect(hasKnownCredentialMaterial(input)).toBe(true);
+    expect(redactKnownSecretTokens(input)).toBe('X-Api-Key: "<redacted>"');
+    expect(redactKnownSecretTokensWithRules(input, compileSecretRules({}), new Uint32Array(input.length)).text).toBe(
+      'X-Api-Key: "<redacted>"'
+    );
+  });
+
+  it("keeps quoted header whitespace and adjacent unquoted headers outside the key span", () => {
+    const quoted = 'X-Api-Key: "opaque key~private-tail"';
+    const adjacent = "X-Api-Key: opaque~private-tail X-Request-Id: keep-this";
+    expect(redactKnownSecretTokens(quoted)).toBe('X-Api-Key: "<redacted>"');
+    expect(redactKnownSecretTokens(adjacent)).toBe("X-Api-Key: <redacted> X-Request-Id: keep-this");
+  });
+
   it("keeps opaque unlabelled values, unrelated headers and short Context7-like identifiers unchanged", () => {
     for (const input of [
       "AQ." + "a1".repeat(16),

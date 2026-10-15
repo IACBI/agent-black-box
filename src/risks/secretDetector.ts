@@ -36,7 +36,7 @@ const GITLAB_TOKEN = /glpat-[A-Za-z0-9_-]{20,}/;
 const NPM_TOKEN = /npm_[A-Za-z0-9]{36,}/;
 const PYPI_TOKEN = /pypi-[A-Za-z0-9_-]{50,}/;
 const AUTHORIZATION_VALUE = /\b(?:Authorization|Proxy-Authorization)\s*:\s*(?:Basic|Bearer)\s+[A-Za-z0-9_./+=-]{8,}/i;
-const API_KEY_HEADER_VALUE = /(?<![A-Za-z0-9_-])X-(?:Goog-)?Api-Key["']?\s*:\s*["']?([A-Za-z0-9_./+=-]{8,})/i;
+const API_KEY_HEADER_START = /(?<![A-Za-z0-9_-])X-(?:Goog-)?Api-Key["']?\s*:\s*(["'])?/gi;
 const URL_CREDENTIAL = /([a-z][a-z0-9+.-]{0,31}:\/\/)(?:[^\s/@:]{1,128}:[^\s/@]{1,512}@)/i;
 const HTTP_USER_CREDENTIAL = /(https?:\/\/)[^\s/@]{1,512}@/i;
 const MAX_BUILTIN_REDACTION_LENGTH = 65_536;
@@ -52,7 +52,7 @@ const KNOWN_CREDENTIAL_PATTERNS: Array<{ name: string; matches: (line: string) =
   { name: "Stripe live key-like value", matches: (line) => STRIPE_LIVE_KEY.test(line) },
   { name: "Google API key-like value", matches: (line) => GOOGLE_API_KEY.test(line) },
   { name: "Context7 token-like value", matches: (line) => CONTEXT7_TOKEN.test(line) },
-  { name: "API key header credential", matches: (line) => API_KEY_HEADER_VALUE.test(line) },
+  { name: "API key header credential", matches: (line) => findApiKeyHeaderValueSpans(line).length > 0 },
   { name: "GitHub fine-grained token-like value", matches: (line) => GITHUB_FINE_GRAINED_TOKEN.test(line) },
   { name: "GitLab token-like value", matches: (line) => GITLAB_TOKEN.test(line) },
   { name: "npm token-like value", matches: (line) => NPM_TOKEN.test(line) },
@@ -104,6 +104,55 @@ export interface SecretScanResult {
   limitations?: Array<{ path: string; reason: string; truncatedLines: number }>;
 }
 
+interface RedactionSpan {
+  start: number;
+  end: number;
+}
+
+/** Find opaque, bounded API-key header values, preserving their labels and surrounding fields. */
+function findApiKeyHeaderValueSpans(text: string): RedactionSpan[] {
+  const spans: RedactionSpan[] = [];
+  const headerStart = new RegExp(API_KEY_HEADER_START.source, "gi");
+  let match: RegExpExecArray | null;
+  while ((match = headerStart.exec(text)) !== null) {
+    const start = match.index + match[0].length;
+    const quote = match[1];
+    let end = start;
+    let closingQuoteFound = false;
+
+    if (quote) {
+      let escaped = false;
+      while (end < text.length && text[end] !== "\r" && text[end] !== "\n") {
+        const character = text[end]!;
+        if (escaped) {
+          escaped = false;
+        } else if (character === "\\") {
+          escaped = true;
+        } else if (character === quote) {
+          closingQuoteFound = true;
+          break;
+        }
+        end += 1;
+      }
+    } else {
+      while (end < text.length && !/\s/.test(text[end]!)) end += 1;
+    }
+
+    if (end - start >= 8) spans.push({ start, end });
+    const nextSearchIndex = quote && closingQuoteFound ? end + 1 : end;
+    if (headerStart.lastIndex < nextSearchIndex) headerStart.lastIndex = nextSearchIndex;
+  }
+  return spans;
+}
+
+function replaceSpans(text: string, spans: readonly RedactionSpan[]): string {
+  let result = text;
+  for (const span of [...spans].reverse()) {
+    result = result.slice(0, span.start) + "<redacted>" + result.slice(span.end);
+  }
+  return result;
+}
+
 /**
  * Replaces provider-issued token shapes (cloud keys, API tokens, JWTs) with `<redacted>`. Used to scrub
  * recorded command text, where a bare token has no variable name or flag to give it away.
@@ -111,10 +160,7 @@ export interface SecretScanResult {
 export function redactKnownSecretTokens(text: string): string {
   if (text.length > MAX_BUILTIN_REDACTION_LENGTH || hasJsonEscapedCredential(text)) return "<redacted>";
   // Mask the complete labelled value before narrower provider patterns can remove its prefix.
-  let result = text.replace(
-    new RegExp(API_KEY_HEADER_VALUE.source, "gi"),
-    (match, value: string) => match.slice(0, match.length - value.length) + "<redacted>"
-  );
+  let result = replaceSpans(text, findApiKeyHeaderValueSpans(text));
   // Component scanning avoids the quadratic JWT regex retry at each repeated "eyJ" prefix.
   const spans = findJwtSpans(result);
   const pieces: string[] = [];
@@ -163,8 +209,8 @@ export function redactKnownSecretTokensWithRules(
     const whitespaceLength = /^\s*/.exec(match[0].slice(valueOffset))?.[0].length ?? 0;
     mark(match.index + valueOffset + whitespaceLength, match.index + match[0].length);
   }
-  for (const match of text.matchAll(new RegExp(API_KEY_HEADER_VALUE.source, "gi"))) {
-    mark(match.index + match[0].length - match[1]!.length, match.index + match[0].length);
+  for (const span of findApiKeyHeaderValueSpans(text)) {
+    mark(span.start, span.end);
   }
   for (const expression of [URL_CREDENTIAL, HTTP_USER_CREDENTIAL]) {
     for (const match of text.matchAll(new RegExp(expression.source, "gi"))) {
