@@ -93,6 +93,8 @@ describe("secret detector", () => {
     'const maxTokenCount = "123456789012345";',
     'const dbPassword = "short";',
     "const passwordHint = abcdefghijklmnop",
+    "const nextToken = response.nextPageToken;",
+    "const dbPassword = otherVariableName;",
   ])("does not flag camelCase names that are not credentials: %s", (line) => {
     expect(detectSecretsInLine("settings.ts", line, 1)).toEqual([]);
   });
