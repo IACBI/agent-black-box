@@ -15,7 +15,10 @@ import { createTempDir, initGitRepo, removeTempDir } from "./testUtils.js";
 const IMAGE_ID = `sha256:${"a".repeat(64)}`;
 
 describe("isolated analysis runner", () => {
-  afterEach(() => vi.unstubAllEnvs());
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
 
   it("forwards analyze arguments and accepts only an explicitly bounded memory allowance", () => {
     expect(parseIsolatedAuditOptions(["--", "--staged", "--format", "json"])).toEqual({
@@ -112,8 +115,6 @@ describe("isolated analysis runner", () => {
     expect(selectIsolatedAuditUser("linux", 1234, 5678)).toBe("1234:5678");
     expect(selectIsolatedAuditUser("linux", 1000, 0)).toBe("1000:0");
     expect(selectIsolatedAuditUser("linux", 0, 0)).toBe("10001:10001");
-    expect(selectIsolatedAuditUser("linux", undefined, undefined)).toBe("10001:10001");
-    expect(selectIsolatedAuditUser("linux", 1000, undefined)).toBe("10001:10001");
     expect(selectIsolatedAuditUser("win32", 1000, 1000)).toBe("10001:10001");
     for (const [uid, gid] of [
       [-1, 1000],
@@ -124,6 +125,27 @@ describe("isolated analysis runner", () => {
     ] as const) {
       expect(selectIsolatedAuditUser("linux", uid, gid)).toBe("10001:10001");
     }
+  });
+
+  it.skipIf(process.platform !== "linux")("uses fallback when the native UID or GID is unavailable or root", () => {
+    const uid = vi.spyOn(process, "getuid");
+    const gid = vi.spyOn(process, "getgid");
+
+    uid.mockReturnValue(1000);
+    gid.mockReturnValue(1000);
+    expect(selectIsolatedAuditUser("linux")).toBe("1000:1000");
+
+    uid.mockReturnValue(0);
+    gid.mockReturnValue(0);
+    expect(selectIsolatedAuditUser("linux")).toBe("10001:10001");
+
+    uid.mockReturnValue(undefined as unknown as number);
+    gid.mockReturnValue(1000);
+    expect(selectIsolatedAuditUser("linux")).toBe("10001:10001");
+
+    uid.mockReturnValue(1000);
+    gid.mockReturnValue(undefined as unknown as number);
+    expect(selectIsolatedAuditUser("linux")).toBe("10001:10001");
   });
 
   it.skipIf(process.platform !== "linux")("does not change private source directory permissions", async () => {
