@@ -81,6 +81,22 @@ describe("secret detector", () => {
     expect(detectSecretsInLine("settings.txt", line, 1)).toEqual([]);
   });
 
+  it.each([
+    'const dbPassword = "correcthorsebattery";',
+    'accessToken: "abcdefghijklmnop"',
+    "config.clientSecret=abcdefghijklmnop",
+  ])("flags camelCase credential assignments: %s", (line) => {
+    expect(detectSecretsInLine("settings.ts", line, 1).length).toBeGreaterThan(0);
+  });
+
+  it.each([
+    'const maxTokenCount = "123456789012345";',
+    'const dbPassword = "short";',
+    "const passwordHint = abcdefghijklmnop",
+  ])("does not flag camelCase names that are not credentials: %s", (line) => {
+    expect(detectSecretsInLine("settings.ts", line, 1)).toEqual([]);
+  });
+
   it("detects Token-scheme Authorization headers without echoing the credential", () => {
     const value = "9f8e7d6c5b4a3928";
     const findings = detectSecretsInLine("request.txt", `Authorization: Token ${value}`, 1);

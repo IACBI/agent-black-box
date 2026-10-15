@@ -71,11 +71,17 @@ const SECRET_PATTERNS: typeof KNOWN_CREDENTIAL_PATTERNS = [
     name: "Secret assignment-like value",
     matches: (line) =>
       hasEscapedSecretAssignment(line) ||
+      CAMEL_CASE_SECRET_ASSIGNMENT.test(line) ||
       /(?<![A-Za-z0-9])(?:api[_-]?key|secret|token|password|passwd|passphrase|pwd|credentials?|cookie|private[_-]?key|client[_-]?secret|access[_-]?key)\b["']?\s*[:=]\s*["']?([A-Za-z0-9_./+=:-]{12,})["']?/i.test(
         line
       ),
   },
 ];
+
+// Case-sensitive on purpose: a capitalised keyword directly after a lowercase letter or digit ends a camelCase
+// identifier (`dbPassword`), which the case-insensitive pattern above rejects to avoid matching mid-word text.
+const CAMEL_CASE_SECRET_ASSIGNMENT =
+  /(?<=[a-z0-9])(?:ApiKey|Secret|Token|Password|Passwd|Passphrase|Credentials?|Cookie|PrivateKey|ClientSecret|AccessKey)\b["']?\s*[:=]\s*["']?[A-Za-z0-9_./+=:-]{12,}["']?/;
 
 const REDACTABLE_TOKENS = [
   AWS_ACCESS_KEY,
