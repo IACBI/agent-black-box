@@ -16,6 +16,7 @@ Examples use `abb`; substitute `pnpm dev` or `node dist/cli.js`. Use `abb --help
 ```sh
 abb init # Only when .agentblackbox.json does not exist
 abb config validate
+abb config validate --json # structured result: configPath, exists, configVersion, migrated, valid, warnings, errors
 abb config migrate
 abb doctor
 abb doctor --json
@@ -179,6 +180,8 @@ abb analyze --staged --baseline HEAD --policy complete-review --format sarif
 | `--initial`                 | With `--staged` and no HEAD commit, treat all staged content as new; excludes `--baseline`                                                |
 | `--fail-on <severity>`      | Exit 1 for a finding at or above `low`, `medium`, or `high`                                                                               |
 | `--policy <profile>`        | Built-in or configured named policy; requires `--staged` with `--baseline` or `--initial`                                                 |
+| `--output <path>`           | Write the analysis to a file atomically instead of stdout; exit codes from `--fail-on` and policies still apply                           |
+| `--force`                   | With `--output`, replace an existing file                                                                                                 |
 | `--max-total-bytes <bytes>` | Optional non-negative safe integer limiting retained UTF-8 analysis content across current and baseline files; `0` skips nonempty content |
 
 Baseline comparison suppresses identical existing secret-like lines up to their baseline occurrence count. Git-verified renames can use the previous path as the baseline. Metadata risks remain visible; excluded baseline paths and unverified rename relationships do not suppress content findings.
@@ -223,6 +226,7 @@ abb hook install --policy ci-review # a named policy from analysisPolicies
 abb hook install --policy ci-review --first-commit policy
 abb --allow-external-session-dir hook install # authorize trusted local external storage for this hook
 abb hook status
+abb hook status --json
 abb hook uninstall
 ```
 

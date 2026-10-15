@@ -132,6 +132,7 @@ describe("session exporter", () => {
     expect(parseRiskSeverity("medium")).toBe("medium");
     expect(() => parseExportFormat("zip")).toThrow("`markdown`, `json` or `sarif`");
     expect(() => parseRiskSeverity("critical")).toThrow("--min-severity");
+    expect(() => parseRiskSeverity("critical", "--fail-on")).toThrow("--fail-on must be one of");
   });
 
   it("writes exports without overwriting unless forced", async () => {

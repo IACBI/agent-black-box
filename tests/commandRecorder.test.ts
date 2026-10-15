@@ -61,6 +61,27 @@ describe("command recorder", () => {
     }
   );
 
+  it("keeps the wrapper alive for interrupts only while the command runs", async () => {
+    const dir = await createTempDir();
+    try {
+      initGitRepo(dir);
+      const session = await createSession(dir, DEFAULT_CONFIG);
+      const baseline = process.listenerCount("SIGINT");
+      const running = recordAndRunCommand([process.execPath, "-e", "setTimeout(() => {}, 400)"], dir);
+      const deadline = Date.now() + 5_000;
+      while (process.listenerCount("SIGINT") === baseline && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(process.listenerCount("SIGINT")).toBeGreaterThan(baseline);
+      expect(await running).toBe(0);
+      expect(process.listenerCount("SIGINT")).toBe(baseline);
+      const [event] = await readCommandEvents(session.sessionDir);
+      expect(event).toMatchObject({ exitCode: 0 });
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
   it("retains ordinary command metadata when privacy is explicitly disabled", async () => {
     const dir = await createTempDir();
     try {
@@ -336,6 +357,7 @@ describe("command recorder", () => {
       '"pnpm.cmd run "name with spaces" "a&b""'
     );
     expect(buildWindowsCommandLine(["pnpm.cmd", "a!b"])).toBe('"pnpm.cmd "a!b""');
+    expect(buildWindowsCommandLine(["tool.cmd", "key=value", "a,b", "c;d"])).toBe('"tool.cmd "key=value" "a,b" "c;d""');
     expect(buildWindowsCommandLine(["pnpm.cmd", "path with spaces\\"])).toBe('"pnpm.cmd "path with spaces\\\\""');
     expect(() => buildWindowsCommandLine(["pnpm.cmd", "%USERNAME%"])).toThrow("percent signs");
   });

@@ -643,8 +643,24 @@ function spawnCommand(commandParts: string[], cwd: string): Promise<{ exitCode: 
       return;
     }
     let settled = false;
+    // The terminal sends Ctrl-C to the child as well; outliving it lets the wrapper record how the command ended.
+    // A repeated interrupt restores the default so a child that ignores SIGINT cannot trap the user.
+    const keepWrapperAlive = (): void => {
+      process.off("SIGINT", keepWrapperAlive);
+      process.on("SIGINT", interruptWrapper);
+    };
+    const interruptWrapper = (): void => {
+      process.off("SIGINT", interruptWrapper);
+      process.kill(process.pid, "SIGINT");
+    };
+    process.on("SIGINT", keepWrapperAlive);
+    const releaseInterruptHandlers = (): void => {
+      process.off("SIGINT", keepWrapperAlive);
+      process.off("SIGINT", interruptWrapper);
+    };
 
     child.once("error", (error: NodeJS.ErrnoException) => {
+      releaseInterruptHandlers();
       if (!settled) {
         settled = true;
         resolve({ exitCode: null, error: formatSpawnError(error) });
@@ -652,6 +668,7 @@ function spawnCommand(commandParts: string[], cwd: string): Promise<{ exitCode: 
     });
 
     child.once("close", (code) => {
+      releaseInterruptHandlers();
       if (!settled) {
         settled = true;
         resolve({ exitCode: code });
@@ -721,7 +738,7 @@ export function buildWindowsCommandLine(parts: string[]): string {
 }
 
 function quoteWindowsCommandPart(part: string): string {
-  if (part.length === 0 || /[\s&|<>^"!]/.test(part)) {
+  if (part.length === 0 || /[\s&|<>^"!=,;]/.test(part)) {
     let trailingBackslashStart = part.length;
     while (trailingBackslashStart > 0 && part[trailingBackslashStart - 1] === "\\") {
       trailingBackslashStart--;
