@@ -46,6 +46,31 @@ describe("watcherless analysis core", () => {
     expect(JSON.stringify(result)).not.toContain(rawValue);
   });
 
+  it("flags a PGP private key block header", () => {
+    const result = analyzeChangedFiles([
+      { path: "key.asc", status: "added", kind: "text", content: "-----BEGIN PGP PRIVATE KEY BLOCK-----" },
+    ]);
+
+    expect(result.findings.map((finding) => finding.category)).toContain("Possible secret");
+  });
+
+  it("does not flag identifiers that merely contain sk- or auth as text", () => {
+    const result = analyzeChangedFiles([
+      {
+        path: "src/meta.ts",
+        status: "modified",
+        kind: "text",
+        content: [
+          '"flask-sqlalchemy-migrations": "1.0.0"',
+          'const author = "Jonathan";',
+          'const authority = "Jonathan";',
+        ].join("\n"),
+      },
+    ]);
+
+    expect(result.findings.filter((finding) => finding.category === "Possible secret")).toEqual([]);
+  });
+
   it("keeps every finding from a single bounded file with many matching lines", () => {
     const lineCount = 125_000;
     const content = "x\n".repeat(lineCount);

@@ -81,11 +81,24 @@ describe("secret detector", () => {
     expect(detectSecretsInLine("settings.txt", line, 1)).toEqual([]);
   });
 
+  it("detects Token-scheme Authorization headers without echoing the credential", () => {
+    const value = "9f8e7d6c5b4a3928";
+    const findings = detectSecretsInLine("request.txt", `Authorization: Token ${value}`, 1);
+
+    expect(findings.length).toBeGreaterThan(0);
+    expect(JSON.stringify(findings)).not.toContain(value);
+    expect(detectSecretsInLine("request.txt", "Authorization: Token short", 1)).toEqual([]);
+    expect(detectSecretsInLine("notes.md", "Authorization: Token authentication", 1)).toEqual([]);
+    expect(detectSecretsInLine("request.txt", "Authorization: Token AbCdEfGhIjKlMnOp", 1).length).toBeGreaterThan(0);
+    expect(detectSecretsInLine("request.txt", "Authorization: Token abcde~fghijklmnop9", 1).length).toBeGreaterThan(0);
+  });
+
   it("detects private key block headers without echoing them", () => {
     for (const header of [
       "-----BEGIN PRIVATE KEY-----",
       "-----BEGIN RSA PRIVATE KEY-----",
       "-----BEGIN OPENSSH PRIVATE KEY-----",
+      "-----BEGIN PGP PRIVATE KEY BLOCK-----",
     ]) {
       const findings = detectSecretsInLine("id_key", header, 1);
 

@@ -488,4 +488,10 @@ describe("provider token shapes and configured patterns", () => {
     expect(redacted[1]).toBe("https://example.test/path?mode=safe");
     expect(redacted[2]).toBe("ssh://git@example.test/repo.git");
   });
+
+  it("redacts URL passwords that contain an at sign up to the host separator", () => {
+    const [redacted] = redactCommandParts([`https://bob:p@${secret}@github.com/x/y.git`]);
+
+    expect(redacted).toBe("https://<redacted>@github.com/x/y.git");
+  });
 });

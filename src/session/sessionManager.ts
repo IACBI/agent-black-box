@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { appendFile, lstat, mkdir, open, readdir, realpath, stat, writeFile } from "node:fs/promises";
+import { appendFile, lstat, mkdir, open, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import type {
@@ -165,6 +165,7 @@ export async function createSession(repoRoot: string, config: AgentBlackBoxConfi
     ownerToken: session.ownerToken,
   });
 
+  let sessionDirCreated = false;
   try {
     const existingState = await readStateFile<ActiveSession>(getActiveSessionPath(repoRoot, config), isActiveSession);
     if (existingState.corrupted) {
@@ -179,6 +180,7 @@ export async function createSession(repoRoot: string, config: AgentBlackBoxConfi
 
     await ensureDir(getSessionRoot(repoRoot, config));
     await mkdir(sessionDir, { mode: 0o700 });
+    sessionDirCreated = true;
     await writeFile(getEventsPath(sessionDir), "", "utf8");
     await writeFile(getCommandsPath(sessionDir), "", "utf8");
     await writeTextFileAtomic(getGitBaselinePath(sessionDir), baselineText);
@@ -191,8 +193,25 @@ export async function createSession(repoRoot: string, config: AgentBlackBoxConfi
     try {
       const activeState = await readActiveSessionState(repoRoot, config);
       // Publication can succeed before its directory flush fails; preserve ambiguous or published ownership.
-      if (!activeState.value && !activeState.corrupted) await releaseSessionLock(repoRoot, config, session);
+      if (!activeState.value && !activeState.corrupted) {
+        // An unpublished directory has no evidence yet and would otherwise remain a permanently corrupt catalog entry.
+        let removalError: unknown;
+        if (sessionDirCreated) {
+          await rm(sessionDir, { recursive: true, force: true }).catch((rmError: unknown) => {
+            removalError = rmError;
+          });
+        }
+        await releaseSessionLock(repoRoot, config, session);
+        if (removalError !== undefined) {
+          throw new AggregateError(
+            [error, removalError],
+            "Session start failed and its unpublished session directory could not be removed.",
+            { cause: error }
+          );
+        }
+      }
     } catch (cleanupError) {
+      if (cleanupError instanceof AggregateError && cleanupError.errors[0] === error) throw cleanupError;
       throw new AggregateError(
         [error, cleanupError],
         "Session start failed and its lock could not be safely released.",
@@ -565,6 +584,10 @@ async function finalizeOwnedSession(
           ? `Git start baseline was unreadable: ${baselineState.error ?? "unexpected shape"}. Change attribution is limited.`
           : "Git start baseline was missing. Change attribution is limited.",
       ];
+  const headWarnings =
+    baselineState.value?.git.head && !git.head
+      ? ["Git HEAD could not be read at finalization. Commits made during the session were not attributed."]
+      : [];
   const report = buildSessionReport(
     active,
     endedAt,
@@ -579,6 +602,7 @@ async function finalizeOwnedSession(
         ...fileEvents.warnings,
         ...commandEvents.warnings,
         ...baselineWarnings,
+        ...headWarnings,
         ...commandWarnings,
         ...(secretScan.limitations ?? []).map((limit) => `${limit.path}: ${limit.reason}`),
         ...(captureLoss.droppedFileEvents > 0

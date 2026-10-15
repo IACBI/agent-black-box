@@ -37,10 +37,10 @@ const PACKAGE_FILES = new Set([
 ]);
 
 const SENSITIVE_KEY_NAMES =
-  /(?:api[-_]?key|access[-_]?token|auth(?:orization)?|password|passphrase|secret(?:[-_]?key)?|client[-_]?secret|private[-_]?key)/i;
+  /(?:api[-_]?key|access[-_]?token|auth(?!ors?(?![a-z])|ority)(?:orization)?|password|passphrase|secret(?:[-_]?key)?|client[-_]?secret|private[-_]?key)/i;
 const TOKEN_VALUE =
-  /(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{16,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,})/;
-const PRIVATE_KEY_HEADER = /-----BEGIN(?: [A-Z0-9]+)? PRIVATE KEY-----/;
+  /(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|\bsk-[A-Za-z0-9_-]{16,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,})/;
+const PRIVATE_KEY_HEADER = /-----BEGIN(?: [A-Z0-9]+)? PRIVATE KEY(?: BLOCK)?-----/;
 // Start at each key's boundary rather than retrying a whitespace prefix at every character.
 const ASSIGNMENT_PATTERN = /(?:^|[,{;\s])["']?([A-Za-z][\w.-]*)["']?\s*(?::|=)\s*["']?([^"'`\s,;]+)/gi;
 
@@ -242,7 +242,7 @@ function detectMetadataRisks(relativePath: string): AnalysisFinding[] {
     );
   }
 
-  if (/(^|\/)(auth|security|oauth|jwt)(\/|[-_.]|$)/i.test(relativePath)) {
+  if (/(^|\/)(auth|authn|authz|authentication|authorization|security|oauth2?|jwt)(\/|[-_.]|$)/i.test(relativePath)) {
     findings.push(
       createFinding(
         relativePath,

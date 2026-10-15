@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { cp, lstat, mkdir, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { cp, link, lstat, mkdir, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AgentBlackBoxConfig } from "../types.js";
 import { digestRegularFile } from "./reportStorage.js";
@@ -15,6 +15,8 @@ import { readJsonFileLimited } from "../utils/files.js";
 import { isRecord } from "../utils/records.js";
 
 const ARCHIVE_COMPLETE_FILE = ".abb-archive-complete.json";
+/** Files are copied under this suffix and renamed, so an interrupted copy never masquerades as a final file. */
+const ARCHIVE_PARTIAL_SUFFIX = ".abb-partial";
 
 export interface SessionArchiveInspection {
   id: string;
@@ -292,6 +294,15 @@ async function inspectArchive(source: string, destination: string, id: string): 
   }
 }
 
+/** A leftover temporary copy is only ignorable when it belongs to a source file that has no final copy yet. */
+function isInterruptedCopy(name: string, sourceNames: ReadonlySet<string>, copiedNames: readonly string[]): boolean {
+  if (!name.endsWith(ARCHIVE_PARTIAL_SUFFIX) || sourceNames.has(name)) {
+    return false;
+  }
+  const finalName = name.slice(0, -ARCHIVE_PARTIAL_SUFFIX.length);
+  return sourceNames.has(finalName) && !copiedNames.includes(finalName);
+}
+
 async function verifyArchiveSubset(
   source: string,
   destination: string,
@@ -300,7 +311,10 @@ async function verifyArchiveSubset(
 ): Promise<void> {
   const sourceNames = (await readdir(source)).sort();
   const sourceNamesSet = new Set(sourceNames);
-  const copiedNames = (await readdir(destination)).filter((name) => !topLevel || name !== ARCHIVE_COMPLETE_FILE).sort();
+  const destinationNames = (await readdir(destination)).filter((name) => !topLevel || name !== ARCHIVE_COMPLETE_FILE);
+  const copiedNames = destinationNames
+    .filter((name) => !isInterruptedCopy(name, sourceNamesSet, destinationNames))
+    .sort();
   if (
     copiedNames.some((name) => !sourceNamesSet.has(name)) ||
     (complete && JSON.stringify(sourceNames) !== JSON.stringify(copiedNames))
@@ -345,7 +359,12 @@ async function copyMissingArchiveFiles(source: string, destination: string, topL
       }
       await copyMissingArchiveFiles(original, copy, false);
     } else if (!(await existsStrict(copy))) {
-      await cp(original, copy, { errorOnExist: true, force: false, dereference: false });
+      const partial = `${copy}${ARCHIVE_PARTIAL_SUFFIX}`;
+      await rm(partial, { force: true });
+      await cp(original, partial, { errorOnExist: true, force: false, dereference: false });
+      // link() refuses to replace a final file another process published after the existence check.
+      await link(partial, copy);
+      await rm(partial);
     }
   }
 }

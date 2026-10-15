@@ -499,4 +499,35 @@ describe("version", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe(packageJson.version);
   }, 60_000);
+  it("offers structured config, hook status and file output for analysis", async () => {
+    const repo = await gitRepo("abb-json-e2e-");
+
+    const config = await runCli(repo, ["config", "validate", "--json"]);
+    expect(config.exitCode).toBe(0);
+    expect(JSON.parse(config.stdout)).toMatchObject({ exists: false, valid: true, errors: [] });
+
+    await writeFile(path.join(repo, ".agentblackbox.json"), "{ not json");
+    const malformed = await runCli(repo, ["config", "validate", "--json"]);
+    expect(malformed.exitCode).toBe(1);
+    expect(JSON.parse(malformed.stdout)).toMatchObject({ valid: false, errors: [expect.stringContaining("parse")] });
+    await rm(path.join(repo, ".agentblackbox.json"));
+
+    const hook = await runCli(repo, ["hook", "status", "--json"]);
+    expect(hook.exitCode).toBe(0);
+    expect(JSON.parse(hook.stdout)).toMatchObject({ state: "absent" });
+
+    await writeFile(path.join(repo, "note.txt"), "plain text\n");
+    const output = path.join(repo, "out", "analysis.json");
+    await mkdir(path.dirname(output));
+    const written = await runCli(repo, ["analyze", "--format", "json", "--output", output]);
+    expect(written.exitCode).toBe(0);
+    expect(written.stdout).toContain("Analysis written to");
+    expect(JSON.parse(await readFile(output, "utf8"))).toHaveProperty("summary");
+
+    const refused = await runCli(repo, ["analyze", "--format", "json", "--output", output]);
+    expect(refused.exitCode).not.toBe(0);
+    expect(refused.stderr).toContain("Refusing to overwrite");
+    const forced = await runCli(repo, ["analyze", "--format", "json", "--output", output, "--force"]);
+    expect(forced.exitCode).toBe(0);
+  }, 60_000);
 });

@@ -21,6 +21,7 @@ import {
   createDefaultConfig,
   type ConfigLoadOptions,
   formatConfigProblems,
+  getConfigPath,
   loadConfig,
   loadConfigWithMeta,
   migrateConfigFile,
@@ -79,7 +80,7 @@ import {
   resolveArchiveDestination,
   retentionDateForDays,
 } from "./session/sessionRetention.js";
-import { filterSessionCatalog } from "./session/sessionSearch.js";
+import { filterSessionCatalog, validateSessionSearchFilters } from "./session/sessionSearch.js";
 import {
   getSessionVerificationLimits,
   renderSessionVerification,
@@ -123,10 +124,28 @@ const configCommand = program.command("config").description("Validate or migrate
 configCommand
   .command("validate")
   .description("Validate .agentblackbox.json and report schema/version issues.")
-  .action(async () => {
+  .option("--json", "print structured JSON")
+  .action(async (options: { json?: boolean }) => {
     const root = (await getRepositoryRoot(process.cwd())) ?? process.cwd();
-    const result = await loadConfigWithMeta(root, getConfigLoadOptions());
-    console.log(renderConfigLoadResult(result));
+    let result: ConfigLoadResult;
+    try {
+      result = await loadConfigWithMeta(root, getConfigLoadOptions());
+    } catch (error) {
+      if (!options.json) throw error;
+      // Keep the structured contract for unreadable or malformed configuration.
+      console.log(
+        escapeTerminalControls(
+          JSON.stringify(
+            { configPath: getConfigPath(root), valid: false, warnings: [], errors: [(error as Error).message] },
+            null,
+            2
+          )
+        )
+      );
+      process.exitCode = 1;
+      return;
+    }
+    console.log(options.json ? renderConfigLoadJson(result) : renderConfigLoadResult(result));
     process.exitCode = result.errors.length === 0 ? 0 : 1;
   });
 
@@ -311,6 +330,8 @@ program
   .option("--baseline <ref>", "with --staged, report new content findings relative to a Git commit")
   .option("--initial", "with --staged in a repository without a HEAD commit, treat all content as new")
   .option("--fail-on <severity>", "exit with code 1 at or above low, medium, or high")
+  .option("--output <path>", "write the analysis to a file instead of stdout")
+  .option("--force", "overwrite an existing output file")
   .option("--policy <profile>", "built-in or configured CI policy; requires --staged and --baseline or --initial")
   .option(
     "--max-total-bytes <bytes>",
@@ -323,6 +344,8 @@ program
       baseline?: string;
       initial?: boolean;
       failOn?: string;
+      output?: string;
+      force?: boolean;
       policy?: string;
       maxTotalBytes?: string;
     }) => {
@@ -338,7 +361,7 @@ program
       const repoRoot = await requireRepositoryRoot(process.cwd());
       const config = await loadRuntimeConfig(repoRoot);
       const format = parseAnalyzeFormat(options.format);
-      const failOn = parseRiskSeverity(options.failOn);
+      const failOn = parseRiskSeverity(options.failOn, "--fail-on");
       const policy = parseAnalysisPolicyProfile(options.policy, config.analysisPolicies);
       const collectionOptions =
         options.maxTotalBytes === undefined
@@ -387,7 +410,13 @@ program
         };
       }
 
-      console.log(renderAnalysis(result, format));
+      const rendered = renderAnalysis(result, format);
+      if (options.output) {
+        const analysisPath = await writeSessionExport(options.output, rendered, { force: options.force });
+        console.log(`Analysis written to ${formatTerminalValue(analysisPath)}`);
+      } else {
+        console.log(rendered);
+      }
       if ((failOn && meetsSeverity(result.summary.maxSeverity, failOn)) || result.policyEvaluation?.failed) {
         process.exitCode = 1;
       }
@@ -617,9 +646,11 @@ hookCommand
 hookCommand
   .command("status")
   .description("Show whether the managed pre-commit hook is installed.")
-  .action(async () => {
+  .option("--json", "print structured JSON")
+  .action(async (options: { json?: boolean }) => {
     const repoRoot = await requireRepositoryRoot(process.cwd());
-    console.log(renderHookStatus(await getPreCommitHookStatus(repoRoot)));
+    const status = await getPreCommitHookStatus(repoRoot);
+    console.log(options.json ? escapeTerminalControls(JSON.stringify(status, null, 2)) : renderHookStatus(status));
   });
 
 const sessionsCommand = program.command("sessions").description("List, inspect, and compare recorded sessions.");
@@ -636,15 +667,11 @@ addSessionFilterOptions(
     const repoRoot = await requireRepositoryRoot(process.cwd());
     const config = await loadRuntimeConfig(repoRoot);
     const readOptions = getHistoryReadOptions(options.memoryBudgetMb);
+    // Reject invalid filters before scanning the history.
+    const filters = { ...buildSessionFilters(options), limit: parseSessionListLimit(options.limit) };
+    validateSessionSearchFilters(filters);
     const entries = await listSessionCatalog(repoRoot, config, readOptions);
-    const filtered = await filterSessionCatalog(
-      entries,
-      {
-        ...buildSessionFilters(options),
-        limit: parseSessionListLimit(options.limit),
-      },
-      readOptions
-    );
+    const filtered = await filterSessionCatalog(entries, filters, readOptions);
     // Suppress renderer defaults even if filtering hides the entries with unknown timestamps.
     const latestCompleteId = entries.some((entry) => entry.state === "complete" && entry.metadataUnavailable)
       ? ""
@@ -668,12 +695,14 @@ addSessionFilterOptions(
     const repoRoot = await requireRepositoryRoot(process.cwd());
     const config = await loadRuntimeConfig(repoRoot);
     const readOptions = getHistoryReadOptions(options.memoryBudgetMb);
+    const filters = buildSessionFilters(options);
+    validateSessionSearchFilters(filters);
+    const pageSize = parseSessionListLimit(options.pageSize, "--page-size") ?? 10;
     const entries = await filterSessionCatalog(
       await listSessionCatalog(repoRoot, config, readOptions),
-      buildSessionFilters(options),
+      filters,
       readOptions
     );
-    const pageSize = parseSessionListLimit(options.pageSize, "--page-size") ?? 10;
     const prompt = createInterface({ input: process.stdin, output: process.stdout });
     try {
       await browseSessionCatalog(
@@ -966,6 +995,24 @@ function getConfigLoadOptions(): ConfigLoadOptions {
 
 async function loadRuntimeConfig(repoRoot: string): Promise<AgentBlackBoxConfig> {
   return loadConfig(repoRoot, getConfigLoadOptions());
+}
+
+function renderConfigLoadJson(result: ConfigLoadResult): string {
+  return escapeTerminalControls(
+    JSON.stringify(
+      {
+        configPath: result.configPath,
+        exists: result.exists,
+        configVersion: result.config.configVersion,
+        migrated: result.migrated,
+        valid: result.errors.length === 0,
+        warnings: result.warnings,
+        errors: result.errors,
+      },
+      null,
+      2
+    )
+  );
 }
 
 function renderConfigLoadResult(result: ConfigLoadResult): string {

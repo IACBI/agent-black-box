@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { constants as osConstants } from "node:os";
 import { realpath, rename, stat } from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -643,18 +644,41 @@ function spawnCommand(commandParts: string[], cwd: string): Promise<{ exitCode: 
       return;
     }
     let settled = false;
+    // The terminal sends Ctrl-C to the child as well; outliving it lets the wrapper record how the command ended.
+    // A repeated interrupt restores the default so a child that ignores SIGINT cannot trap the user.
+    const keepWrapperAlive = (): void => {
+      process.off("SIGINT", keepWrapperAlive);
+      process.on("SIGINT", interruptWrapper);
+    };
+    const interruptWrapper = (): void => {
+      process.off("SIGINT", interruptWrapper);
+      process.kill(process.pid, "SIGINT");
+    };
+    process.on("SIGINT", keepWrapperAlive);
+    const releaseInterruptHandlers = (): void => {
+      process.off("SIGINT", keepWrapperAlive);
+      process.off("SIGINT", interruptWrapper);
+    };
 
     child.once("error", (error: NodeJS.ErrnoException) => {
+      releaseInterruptHandlers();
       if (!settled) {
         settled = true;
         resolve({ exitCode: null, error: formatSpawnError(error) });
       }
     });
 
-    child.once("close", (code) => {
+    child.once("close", (code, signal) => {
+      releaseInterruptHandlers();
       if (!settled) {
         settled = true;
-        resolve({ exitCode: code });
+        // Report a signal death the way a shell does (128 + signal number) instead of an unknown status.
+        const signalNumber = signal ? osConstants.signals[signal] : undefined;
+        resolve(
+          code === null && signal && signalNumber !== undefined
+            ? { exitCode: 128 + signalNumber, error: `Terminated by ${signal}.` }
+            : { exitCode: code }
+        );
       }
     });
   });
@@ -721,7 +745,7 @@ export function buildWindowsCommandLine(parts: string[]): string {
 }
 
 function quoteWindowsCommandPart(part: string): string {
-  if (part.length === 0 || /[\s&|<>^"!]/.test(part)) {
+  if (part.length === 0 || /[\s&|<>^"!=,;]/.test(part)) {
     let trailingBackslashStart = part.length;
     while (trailingBackslashStart > 0 && part[trailingBackslashStart - 1] === "\\") {
       trailingBackslashStart--;

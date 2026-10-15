@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Redact the complete password of URL credentials that contain `@`, and recognize PGP private key block headers and `Authorization: Token` headers in recording and analysis.
+- Stop the watcherless analyzer from flagging identifiers such as `flask-sqlalchemy-...` or `author` as secrets; treat `authentication/`, `authorization/`, `authn`, `authz` and `oauth2` paths as auth/security files.
+- Add `abb analyze --output/--force`, `abb config validate --json` and `abb hook status --json`.
+- Keep `abb run` alive through Ctrl-C so the command's exit code is recorded; quote `=`, `,` and `;` in Windows command-script arguments.
+- Warn when HEAD cannot be read at finalization; remove the unpublished directory of a failed session start; make archive copies resumable after an interruption; read history search fallbacks one report at a time.
+- Name `--fail-on` in its validation error; validate history filters before scanning.
+
 ## 0.11.0
 
 - Add `pnpm audit:isolated` for analysis in a non-root, read-only, networkless Docker container with OS-enforced memory/swap and process limits. Require cgroup v2 and limit capabilities, preserve native Linux caller access to private checkouts, and clear automatically injected proxy credentials. Build from a narrow trusted context and run the resulting immutable image ID. Add required CI verification of real kernel limits, proxy exclusion, source write refusal and OOM termination.

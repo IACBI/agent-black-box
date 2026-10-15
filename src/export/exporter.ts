@@ -32,7 +32,7 @@ export function parseExportFormat(format: string): ExportFormat {
   throw new Error("Export format must be one of `markdown`, `json` or `sarif`.");
 }
 
-export function parseRiskSeverity(value: string | undefined): RiskSeverity | undefined {
+export function parseRiskSeverity(value: string | undefined, flag = "--min-severity"): RiskSeverity | undefined {
   if (value === undefined) {
     return undefined;
   }
@@ -41,7 +41,7 @@ export function parseRiskSeverity(value: string | undefined): RiskSeverity | und
     return value;
   }
 
-  throw new Error("--min-severity must be one of: low, medium, high.");
+  throw new Error(`${flag} must be one of: low, medium, high.`);
 }
 
 export function renderSessionExport(report: SessionReport, options: SessionExportOptions): string {

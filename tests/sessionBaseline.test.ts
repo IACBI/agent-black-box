@@ -89,6 +89,26 @@ describe("session Git baseline storage", () => {
     }
   }, 30_000);
 
+  it("warns that commits were not attributed when HEAD becomes unreadable after the baseline had one", async () => {
+    const repo = await createTempDir("abb-head-lost-");
+    try {
+      initGitRepo(repo);
+      await writeFile(path.join(repo, "tracked.txt"), "one\n");
+      runGit(repo, ["add", "tracked.txt"]);
+      runGit(repo, ["-c", "user.name=Tests", "-c", "user.email=tests@example.invalid", "commit", "-qm", "base"]);
+      const session = await createSession(repo, DEFAULT_CONFIG);
+      // An orphan checkout leaves HEAD pointing at an unborn branch, which `rev-parse --verify HEAD` cannot resolve.
+      runGit(repo, ["checkout", "-q", "--orphan", "detached-history"]);
+
+      const report = await finalizeSession(session, DEFAULT_CONFIG, "test");
+      expect(report.integrity.warnings).toContain(
+        "Git HEAD could not be read at finalization. Commits made during the session were not attributed."
+      );
+    } finally {
+      await removeTempDir(repo);
+    }
+  });
+
   it("refuses an oversized stored baseline without reading it as valid evidence", async () => {
     const repo = await createTempDir("abb-baseline-limit-");
     try {
