@@ -40,6 +40,15 @@ describe("path utilities", () => {
     expect(isPathExcluded("src/index.ts", ["node_modules"])).toBe(false);
   });
 
+  it("treats a backslash as a filename character unless the platform separates paths with it", () => {
+    const backslashed = String.raw`tmp\key.pem`;
+    expect(isPathExcluded(backslashed, ["tmp"], false)).toBe(false);
+    expect(pathMatchesPattern(backslashed, "tmp", false)).toBe(false);
+    expect(isPathExcluded(backslashed, ["tmp"], true)).toBe(true);
+    expect(pathMatchesPattern(backslashed, "tmp", true)).toBe(true);
+    expect(isPathExcluded("tmp/key.pem", ["tmp"], false)).toBe(true);
+  });
+
   it("matches single-segment patterns only on whole, case-insensitive segments", () => {
     expect(isPathExcluded("Dist", ["dist"])).toBe(true);
     expect(isPathExcluded("packages/app/DIST", ["dist"])).toBe(true);

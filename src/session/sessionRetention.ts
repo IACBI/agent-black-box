@@ -15,6 +15,8 @@ import { readJsonFileLimited } from "../utils/files.js";
 import { isRecord } from "../utils/records.js";
 
 const ARCHIVE_COMPLETE_FILE = ".abb-archive-complete.json";
+/** Files are copied under this suffix and renamed, so an interrupted copy never masquerades as a final file. */
+const ARCHIVE_PARTIAL_SUFFIX = ".abb-partial";
 
 export interface SessionArchiveInspection {
   id: string;
@@ -300,7 +302,10 @@ async function verifyArchiveSubset(
 ): Promise<void> {
   const sourceNames = (await readdir(source)).sort();
   const sourceNamesSet = new Set(sourceNames);
-  const copiedNames = (await readdir(destination)).filter((name) => !topLevel || name !== ARCHIVE_COMPLETE_FILE).sort();
+  const copiedNames = (await readdir(destination))
+    .filter((name) => !topLevel || name !== ARCHIVE_COMPLETE_FILE)
+    .filter((name) => !(name.endsWith(ARCHIVE_PARTIAL_SUFFIX) && !sourceNamesSet.has(name)))
+    .sort();
   if (
     copiedNames.some((name) => !sourceNamesSet.has(name)) ||
     (complete && JSON.stringify(sourceNames) !== JSON.stringify(copiedNames))
@@ -345,7 +350,10 @@ async function copyMissingArchiveFiles(source: string, destination: string, topL
       }
       await copyMissingArchiveFiles(original, copy, false);
     } else if (!(await existsStrict(copy))) {
-      await cp(original, copy, { errorOnExist: true, force: false, dereference: false });
+      const partial = `${copy}${ARCHIVE_PARTIAL_SUFFIX}`;
+      await rm(partial, { force: true });
+      await cp(original, partial, { errorOnExist: true, force: false, dereference: false });
+      await rename(partial, copy);
     }
   }
 }

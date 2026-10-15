@@ -79,13 +79,14 @@ export async function filterSessionCatalog(
   const filtered: SessionCatalogEntry[] = [];
   // A fallback can consume the entire report allowance; budgeted searches keep one read active.
   const concurrency = options.maxMaterializedBytes === undefined ? 8 : 1;
+  const fallbackReads = createSerialQueue();
   for (let offset = 0; offset < candidates.length; offset += concurrency) {
     const batch = candidates.slice(offset, offset + concurrency);
     const matches = await mapWithConcurrency(batch, concurrency, async (entry) => {
       if (entry.state !== "complete") {
         return false;
       }
-      const index = await readSearchIndex(entry, options.maxMaterializedBytes);
+      const index = await readSearchIndex(entry, options.maxMaterializedBytes, fallbackReads);
       return (
         matchesTerm(index.paths, filters.file) &&
         matchesTerm(index.commands, filters.command) &&
@@ -100,7 +101,21 @@ export async function filterSessionCatalog(
   return filtered;
 }
 
-async function readSearchIndex(entry: SessionCatalogEntry, maxMaterializedBytes?: number): Promise<SessionSearchIndex> {
+/** Runs tasks one at a time, in submission order, regardless of earlier failures. */
+function createSerialQueue(): <T>(task: () => Promise<T>) => Promise<T> {
+  let tail: Promise<unknown> = Promise.resolve();
+  return (task) => {
+    const run = tail.then(task, task);
+    tail = run.catch(() => undefined);
+    return run;
+  };
+}
+
+async function readSearchIndex(
+  entry: SessionCatalogEntry,
+  maxMaterializedBytes: number | undefined,
+  serializeFallback: <T>(task: () => Promise<T>) => Promise<T>
+): Promise<SessionSearchIndex> {
   try {
     const value = await readJsonFileWithinBudget<unknown>(
       path.join(entry.sessionDir, SESSION_SEARCH_FILE),
@@ -113,7 +128,10 @@ async function readSearchIndex(entry: SessionCatalogEntry, maxMaterializedBytes?
   } catch {
     // Older sessions and oversized indices are searched through their report under the same quota.
   }
-  return buildSessionSearchIndex(await readCatalogSessionReport(entry, { maxMaterializedBytes }));
+  // Fallback parsing materializes a whole report, so only one may be resident even when index reads run in parallel.
+  return buildSessionSearchIndex(
+    await serializeFallback(() => readCatalogSessionReport(entry, { maxMaterializedBytes }))
+  );
 }
 
 function isSessionSearchIndex(value: unknown): value is SessionSearchIndex {

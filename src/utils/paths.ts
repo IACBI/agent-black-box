@@ -43,14 +43,22 @@ export function isPathInside(parentPath: string, candidatePath: string): boolean
   return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
 }
 
-export function isPathExcluded(relativePath: string, excludePatterns: string[]): boolean {
-  const normalizedPath = normalizePath(relativePath).toLowerCase();
+export function isPathExcluded(
+  relativePath: string,
+  excludePatterns: string[],
+  backslashIsSeparator: boolean = path.sep === "\\"
+): boolean {
+  const normalizedPath = normalizeRepoPath(relativePath, backslashIsSeparator).toLowerCase();
 
   return excludePatterns.some((pattern) => matchesNormalizedPath(normalizedPath, pattern));
 }
 
-export function pathMatchesPattern(relativePath: string, pattern: string): boolean {
-  return matchesNormalizedPath(normalizePath(relativePath).toLowerCase(), pattern);
+export function pathMatchesPattern(
+  relativePath: string,
+  pattern: string,
+  backslashIsSeparator: boolean = path.sep === "\\"
+): boolean {
+  return matchesNormalizedPath(normalizeRepoPath(relativePath, backslashIsSeparator).toLowerCase(), pattern);
 }
 
 function matchesNormalizedPath(normalizedPath: string, pattern: string): boolean {

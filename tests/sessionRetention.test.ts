@@ -156,6 +156,34 @@ describe("session retention", () => {
     }
   });
 
+  it("resumes after an interrupted copy left a truncated temporary file", async () => {
+    const repo = await createTempDir("abb-archive-interrupted-");
+    try {
+      await makeSession(repo, "session-old", "2026-01-01T00:00:00.000Z");
+      await makeSession(repo, "session-new", "2026-01-03T00:00:00.000Z");
+      const source = path.join(repo, DEFAULT_CONFIG.sessionDir, "session-old");
+      const archiveDir = path.join(repo, "archive");
+      const destination = path.join(archiveDir, "session-old");
+      const plan = planSessionRetention(await listSessionCatalog(repo, DEFAULT_CONFIG), "2026-01-04");
+      await mkdir(destination, { recursive: true });
+      const original = await readFile(path.join(source, "summary.md"));
+      await writeFile(path.join(destination, "summary.md.abb-partial"), original.subarray(0, 3));
+
+      expect(await inspectSessionArchives(repo, DEFAULT_CONFIG, plan, archiveDir)).toEqual([
+        { id: "session-old", status: "resumable" },
+      ]);
+      await archiveSessionRetention(repo, DEFAULT_CONFIG, plan, archiveDir, { resume: true });
+
+      expect(await readFile(path.join(destination, "summary.md"))).toEqual(original);
+      expect(await pathExists(path.join(destination, "summary.md.abb-partial"))).toBe(false);
+      expect(await inspectSessionArchives(repo, DEFAULT_CONFIG, plan, archiveDir)).toEqual([
+        { id: "session-old", status: "complete" },
+      ]);
+    } finally {
+      await removeTempDir(repo);
+    }
+  });
+
   it.each(["different bytes", "extra file", "invalid marker", "linked directory"])(
     "refuses an unsafe archive resume (%s)",
     async (kind) => {
