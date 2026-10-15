@@ -82,6 +82,22 @@ describe("command recorder", () => {
     }
   });
 
+  it.skipIf(process.platform === "win32")("reports a signal-terminated command like a shell does", async () => {
+    const dir = await createTempDir();
+    try {
+      initGitRepo(dir);
+      const session = await createSession(dir, DEFAULT_CONFIG);
+
+      expect(await recordAndRunCommand([process.execPath, "-e", "process.kill(process.pid, 'SIGTERM')"], dir)).toBe(
+        143
+      );
+      const [event] = await readCommandEvents(session.sessionDir);
+      expect(event).toMatchObject({ exitCode: 143, error: "Terminated by SIGTERM." });
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
   it("retains ordinary command metadata when privacy is explicitly disabled", async () => {
     const dir = await createTempDir();
     try {

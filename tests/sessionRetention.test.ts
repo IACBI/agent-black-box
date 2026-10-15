@@ -184,6 +184,25 @@ describe("session retention", () => {
     }
   });
 
+  it("does not mistake an unrelated .abb-partial file for an interrupted copy", async () => {
+    const repo = await createTempDir("abb-archive-foreign-partial-");
+    try {
+      await makeSession(repo, "session-old", "2026-01-01T00:00:00.000Z");
+      await makeSession(repo, "session-new", "2026-01-03T00:00:00.000Z");
+      const archiveDir = path.join(repo, "archive");
+      const destination = path.join(archiveDir, "session-old");
+      const plan = planSessionRetention(await listSessionCatalog(repo, DEFAULT_CONFIG), "2026-01-04");
+      await mkdir(destination, { recursive: true });
+      await writeFile(path.join(destination, "foreign.abb-partial"), "unverified bytes");
+
+      expect(await inspectSessionArchives(repo, DEFAULT_CONFIG, plan, archiveDir)).toMatchObject([
+        { id: "session-old", status: "conflict" },
+      ]);
+    } finally {
+      await removeTempDir(repo);
+    }
+  });
+
   it.each(["different bytes", "extra file", "invalid marker", "linked directory"])(
     "refuses an unsafe archive resume (%s)",
     async (kind) => {

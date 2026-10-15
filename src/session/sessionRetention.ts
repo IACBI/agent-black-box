@@ -294,6 +294,15 @@ async function inspectArchive(source: string, destination: string, id: string): 
   }
 }
 
+/** A leftover temporary copy is only ignorable when it belongs to a source file that has no final copy yet. */
+function isInterruptedCopy(name: string, sourceNames: ReadonlySet<string>): boolean {
+  return (
+    name.endsWith(ARCHIVE_PARTIAL_SUFFIX) &&
+    !sourceNames.has(name) &&
+    sourceNames.has(name.slice(0, -ARCHIVE_PARTIAL_SUFFIX.length))
+  );
+}
+
 async function verifyArchiveSubset(
   source: string,
   destination: string,
@@ -304,7 +313,7 @@ async function verifyArchiveSubset(
   const sourceNamesSet = new Set(sourceNames);
   const copiedNames = (await readdir(destination))
     .filter((name) => !topLevel || name !== ARCHIVE_COMPLETE_FILE)
-    .filter((name) => !(name.endsWith(ARCHIVE_PARTIAL_SUFFIX) && !sourceNamesSet.has(name)))
+    .filter((name) => !isInterruptedCopy(name, sourceNamesSet))
     .sort();
   if (
     copiedNames.some((name) => !sourceNamesSet.has(name)) ||

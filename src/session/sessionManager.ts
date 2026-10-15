@@ -195,10 +195,23 @@ export async function createSession(repoRoot: string, config: AgentBlackBoxConfi
       // Publication can succeed before its directory flush fails; preserve ambiguous or published ownership.
       if (!activeState.value && !activeState.corrupted) {
         // An unpublished directory has no evidence yet and would otherwise remain a permanently corrupt catalog entry.
-        if (sessionDirCreated) await rm(sessionDir, { recursive: true, force: true }).catch(() => undefined);
+        let removalError: unknown;
+        if (sessionDirCreated) {
+          await rm(sessionDir, { recursive: true, force: true }).catch((rmError: unknown) => {
+            removalError = rmError;
+          });
+        }
         await releaseSessionLock(repoRoot, config, session);
+        if (removalError !== undefined) {
+          throw new AggregateError(
+            [error, removalError],
+            "Session start failed and its unpublished session directory could not be removed.",
+            { cause: error }
+          );
+        }
       }
     } catch (cleanupError) {
+      if (cleanupError instanceof AggregateError && cleanupError.errors[0] === error) throw cleanupError;
       throw new AggregateError(
         [error, cleanupError],
         "Session start failed and its lock could not be safely released.",

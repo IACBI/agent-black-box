@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { constants as osConstants } from "node:os";
 import { realpath, rename, stat } from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -667,11 +668,17 @@ function spawnCommand(commandParts: string[], cwd: string): Promise<{ exitCode: 
       }
     });
 
-    child.once("close", (code) => {
+    child.once("close", (code, signal) => {
       releaseInterruptHandlers();
       if (!settled) {
         settled = true;
-        resolve({ exitCode: code });
+        // Report a signal death the way a shell does (128 + signal number) instead of an unknown status.
+        const signalNumber = signal ? osConstants.signals[signal] : undefined;
+        resolve(
+          code === null && signal && signalNumber !== undefined
+            ? { exitCode: 128 + signalNumber, error: `Terminated by ${signal}.` }
+            : { exitCode: code }
+        );
       }
     });
   });

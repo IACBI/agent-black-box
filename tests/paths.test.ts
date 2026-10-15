@@ -55,7 +55,7 @@ describe("path utilities", () => {
     expect(isPathExcluded("packages/dist/index.js", ["dist"])).toBe(true);
     expect(isPathExcluded("packages/distribution/index.js", ["dist"])).toBe(false);
     expect(isPathExcluded("packages/mydist", ["dist"])).toBe(false);
-    expect(isPathExcluded("src\\build\\out.js", ["build"])).toBe(true);
+    expect(isPathExcluded("src\\build\\out.js", ["build"], true)).toBe(true);
     expect(isPathExcluded("src/index.ts", [""])).toBe(false);
   });
 

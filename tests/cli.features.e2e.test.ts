@@ -506,6 +506,12 @@ describe("version", () => {
     expect(config.exitCode).toBe(0);
     expect(JSON.parse(config.stdout)).toMatchObject({ exists: false, valid: true, errors: [] });
 
+    await writeFile(path.join(repo, ".agentblackbox.json"), "{ not json");
+    const malformed = await runCli(repo, ["config", "validate", "--json"]);
+    expect(malformed.exitCode).toBe(1);
+    expect(JSON.parse(malformed.stdout)).toMatchObject({ valid: false, errors: [expect.stringContaining("parse")] });
+    await rm(path.join(repo, ".agentblackbox.json"));
+
     const hook = await runCli(repo, ["hook", "status", "--json"]);
     expect(hook.exitCode).toBe(0);
     expect(JSON.parse(hook.stdout)).toMatchObject({ state: "absent" });

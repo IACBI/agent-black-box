@@ -21,6 +21,7 @@ import {
   createDefaultConfig,
   type ConfigLoadOptions,
   formatConfigProblems,
+  getConfigPath,
   loadConfig,
   loadConfigWithMeta,
   migrateConfigFile,
@@ -126,7 +127,24 @@ configCommand
   .option("--json", "print structured JSON")
   .action(async (options: { json?: boolean }) => {
     const root = (await getRepositoryRoot(process.cwd())) ?? process.cwd();
-    const result = await loadConfigWithMeta(root, getConfigLoadOptions());
+    let result: ConfigLoadResult;
+    try {
+      result = await loadConfigWithMeta(root, getConfigLoadOptions());
+    } catch (error) {
+      if (!options.json) throw error;
+      // Keep the structured contract for unreadable or malformed configuration.
+      console.log(
+        escapeTerminalControls(
+          JSON.stringify(
+            { configPath: getConfigPath(root), valid: false, warnings: [], errors: [(error as Error).message] },
+            null,
+            2
+          )
+        )
+      );
+      process.exitCode = 1;
+      return;
+    }
     console.log(options.json ? renderConfigLoadJson(result) : renderConfigLoadResult(result));
     process.exitCode = result.errors.length === 0 ? 0 : 1;
   });
