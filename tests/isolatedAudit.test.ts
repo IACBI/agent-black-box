@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, readFile, realpath, rename, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, realpath, rename, stat, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -7,6 +7,7 @@ import {
   buildIsolatedAuditRunArgs,
   parseIsolatedAuditOptions,
   resolveIsolatedAuditRepository,
+  selectIsolatedAuditUser,
   runIsolatedAudit,
 } from "../scripts/isolated-audit.js";
 import { createTempDir, initGitRepo, removeTempDir } from "./testUtils.js";
@@ -66,7 +67,27 @@ describe("isolated analysis runner", () => {
       "--tmpfs",
       "/tmp:size=16m,nosuid,nodev,noexec",
       "--user",
-      "10001:10001",
+      selectIsolatedAuditUser(),
+      "--env",
+      "HTTP_PROXY=",
+      "--env",
+      "HTTPS_PROXY=",
+      "--env",
+      "ALL_PROXY=",
+      "--env",
+      "FTP_PROXY=",
+      "--env",
+      "NO_PROXY=",
+      "--env",
+      "http_proxy=",
+      "--env",
+      "https_proxy=",
+      "--env",
+      "all_proxy=",
+      "--env",
+      "ftp_proxy=",
+      "--env",
+      "no_proxy=",
       "--workdir",
       "/workspace",
       "--mount",
@@ -76,13 +97,45 @@ describe("isolated analysis runner", () => {
       ...forwarded,
     ]);
     expect(args.slice(0, args.indexOf(IMAGE_ID))).not.toContain("--privileged");
-    expect(args.slice(0, args.indexOf(IMAGE_ID))).not.toContain("--env");
+    expect(args.slice(0, args.indexOf(IMAGE_ID)).filter((value) => value === "--env")).toHaveLength(10);
+    expect(args.slice(args.indexOf(IMAGE_ID) + 1)).not.toContain("--env");
     expect(() => buildIsolatedAuditRunArgs(repository, "--privileged", { memoryMb: 128, analyzeArgs: [] })).toThrow(
       "image ID"
     );
     expect(() => buildIsolatedAuditRunArgs(repository, IMAGE_ID, { memoryMb: 0, analyzeArgs: [] })).toThrow(
       "--memory-mb"
     );
+  });
+
+  it("uses a non-root native Linux UID and GID so private repository modes remain readable", () => {
+    expect(selectIsolatedAuditUser("linux", 1000, 1000)).toBe("1000:1000");
+    expect(selectIsolatedAuditUser("linux", 1234, 5678)).toBe("1234:5678");
+    expect(selectIsolatedAuditUser("linux", 1000, 0)).toBe("1000:0");
+    expect(selectIsolatedAuditUser("linux", 0, 0)).toBe("10001:10001");
+    expect(selectIsolatedAuditUser("linux", undefined, undefined)).toBe("10001:10001");
+    expect(selectIsolatedAuditUser("linux", 1000, undefined)).toBe("10001:10001");
+    expect(selectIsolatedAuditUser("win32", 1000, 1000)).toBe("10001:10001");
+    for (const [uid, gid] of [
+      [-1, 1000],
+      [1.5, 1000],
+      [0x1_0000_0000, 1000],
+      [1000, -1],
+      [1000, 1.5],
+    ] as const) {
+      expect(selectIsolatedAuditUser("linux", uid, gid)).toBe("10001:10001");
+    }
+  });
+
+  it.skipIf(process.platform !== "linux")("does not change private source directory permissions", async () => {
+    const repo = await createTempDir("abb-isolated-private-source-");
+    try {
+      await chmod(repo, 0o700);
+      const modeBefore = (await stat(repo)).mode;
+      buildIsolatedAuditRunArgs(repo, IMAGE_ID, { memoryMb: 512, analyzeArgs: [] });
+      expect((await stat(repo)).mode).toBe(modeBefore);
+    } finally {
+      await removeTempDir(repo);
+    }
   });
 
   it("quotes a comma-bearing source as one CSV mount field", () => {
@@ -94,12 +147,19 @@ describe("isolated analysis runner", () => {
   });
 
   it("requires actual Linux memory, swap, and PID support instead of an unbounded fallback", () => {
-    const supported = { OSType: "linux", MemoryLimit: true, SwapLimit: true, PidsLimit: true };
+    const supported = { OSType: "linux", CgroupVersion: "2", MemoryLimit: true, SwapLimit: true, PidsLimit: true };
     expect(() => assertDockerIsolationSupport(supported)).not.toThrow();
     for (const field of ["MemoryLimit", "SwapLimit", "PidsLimit"]) {
       expect(() => assertDockerIsolationSupport({ ...supported, [field]: false })).toThrow("isolation was refused");
     }
-    for (const unsupported of [null, {}, { ...supported, OSType: "windows" }, { ...supported, MemoryLimit: "true" }]) {
+    for (const unsupported of [
+      null,
+      {},
+      { ...supported, OSType: "windows" },
+      { ...supported, MemoryLimit: "true" },
+      { ...supported, CgroupVersion: "1" },
+      { ...supported, CgroupVersion: undefined },
+    ]) {
       expect(() => assertDockerIsolationSupport(unsupported)).toThrow("isolation was refused");
     }
   });

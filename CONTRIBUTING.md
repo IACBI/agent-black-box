@@ -17,7 +17,7 @@ The performance suite includes accepted-record byte accounting and original-inpu
 
 Ignored `.cache/` contents are regenerable test/lint/audit artifacts. Remove stale temporary audit repositories and old logs only after their processes have exited and any needed findings have been recorded. Keep dependencies and the current build/coverage outputs while using them for development or verification.
 
-`pnpm audit:isolated -- --memory-mb 512 --format json` audits this checkout in a read-only, networkless, unprivileged Linux container with a kernel-enforced memory budget. Docker is optional for ordinary development; it is required for `pnpm verify:isolation`. CI requires that integration check, including an actual OOM-killed process and source-write refusal. See [OS-isolated analysis](docs/USAGE.md#os-isolated-analysis) for supported repositories and boundaries. Keep the Docker build-context allowlist narrow, the base-image digest verified, and all isolation arguments intact.
+`pnpm audit:isolated -- --memory-mb 512 --format json` audits this checkout in a read-only, networkless, unprivileged Linux container with a kernel-enforced memory budget. Docker with cgroup v2 is optional for ordinary development; it is required for `pnpm verify:isolation`. CI requires that integration check, including an actual OOM-killed process, proxy exclusion, private Linux checkout access and source-write refusal. See [OS-isolated analysis](docs/USAGE.md#os-isolated-analysis) for supported repositories and boundaries. Keep the Docker build-context allowlist narrow, the base-image digest verified, and all isolation arguments intact.
 
 Before opening a pull request:
 

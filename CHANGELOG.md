@@ -4,7 +4,7 @@
 
 ## 0.11.0
 
-- Add `pnpm audit:isolated` for analysis in a non-root, read-only, networkless Docker container with OS-enforced memory/swap and process limits. Refuse engines without the required limit capabilities; build from a narrow trusted context and run the resulting immutable image ID. Add required CI verification of real kernel limits, source write refusal and OOM termination.
+- Add `pnpm audit:isolated` for analysis in a non-root, read-only, networkless Docker container with OS-enforced memory/swap and process limits. Require cgroup v2 and limit capabilities, preserve native Linux caller access to private checkouts, and clear automatically injected proxy credentials. Build from a narrow trusted context and run the resulting immutable image ID. Add required CI verification of real kernel limits, proxy exclusion, source write refusal and OOM termination.
 - Add `abb run --private` and `RecordCommandOptions.private` to withhold all command text and user labels without relying on credential recognition, while retaining original execution and exit behavior.
 - Recognize and redact Context7 tokens and explicitly labelled Google/API-key headers, including JSON escapes and custom-mask composition.
 - Recheck file identity after oversized-file sampling, refusing pathname replacement or truncation instead of returning stale classifications.

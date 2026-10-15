@@ -9,6 +9,18 @@ import { isPathInside } from "../src/utils/paths.js";
 
 const execFileAsync = promisify(execFile);
 const IMAGE_TAG = "agent-black-box-isolated:local";
+const PROXY_ENVIRONMENT_VARIABLES = [
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "FTP_PROXY",
+  "NO_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "all_proxy",
+  "ftp_proxy",
+  "no_proxy",
+];
 const REPOSITORY_OVERRIDES = [
   "GIT_DIR",
   "GIT_WORK_TREE",
@@ -48,6 +60,20 @@ function validateMemoryLimit(memoryMb: number): void {
   if (!Number.isSafeInteger(memoryMb) || memoryMb < 64 || memoryMb > 4096) {
     throw new Error("--memory-mb must be an integer between 64 and 4096.");
   }
+}
+
+export function selectIsolatedAuditUser(
+  platform: NodeJS.Platform = process.platform,
+  uid: number | undefined = process.getuid?.(),
+  gid: number | undefined = process.getgid?.()
+): string {
+  const maxId = 0xffff_fffe;
+  const validUid = typeof uid === "number" && Number.isSafeInteger(uid) && uid > 0 && uid <= maxId;
+  const validGid = typeof gid === "number" && Number.isSafeInteger(gid) && gid >= 0 && gid <= maxId;
+  if (platform === "linux" && validUid && validGid) {
+    return `${uid}:${gid}`;
+  }
+  return "10001:10001";
 }
 
 export async function resolveIsolatedAuditRepository(cwd: string): Promise<string> {
@@ -136,7 +162,8 @@ export function buildIsolatedAuditRunArgs(
     "--tmpfs",
     "/tmp:size=16m,nosuid,nodev,noexec",
     "--user",
-    "10001:10001",
+    selectIsolatedAuditUser(),
+    ...PROXY_ENVIRONMENT_VARIABLES.flatMap((name) => ["--env", `${name}=`]),
     "--workdir",
     "/workspace",
     "--mount",
@@ -152,12 +179,13 @@ export function assertDockerIsolationSupport(info: unknown): void {
   if (
     !capabilities ||
     capabilities.OSType !== "linux" ||
+    capabilities.CgroupVersion !== "2" ||
     capabilities.MemoryLimit !== true ||
     capabilities.SwapLimit !== true ||
     capabilities.PidsLimit !== true
   ) {
     throw new Error(
-      "Docker must use Linux containers with memory, swap, and PID limit support; isolation was refused."
+      "Docker must use Linux containers with cgroup v2 and memory, swap, and PID limit support; isolation was refused."
     );
   }
 }
@@ -174,7 +202,7 @@ async function verifyDockerIsolationSupport(docker: string): Promise<void> {
     ).stdout;
   } catch (error) {
     throw new Error(
-      "Docker is unavailable. Start its Linux-container engine with memory, swap, and PID limit support.",
+      "Docker is unavailable. Start its Linux-container engine with cgroup v2 and memory, swap, and PID limit support.",
       { cause: error }
     );
   }
