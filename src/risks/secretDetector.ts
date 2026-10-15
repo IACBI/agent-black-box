@@ -29,15 +29,16 @@ const STRIPE_LIVE_KEY = /\b[sr]k_live_[A-Za-z0-9]{16,}/;
 const GOOGLE_API_KEY = /\bAIza[0-9A-Za-z_-]{35}/;
 const CONTEXT7_TOKEN = /\bctx7sk-[A-Za-z0-9_-]{20,}/;
 
-const PRIVATE_KEY_HEADER = /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----/;
+const PRIVATE_KEY_HEADER = /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----/;
 
 const GITHUB_FINE_GRAINED_TOKEN = /github_pat_[A-Za-z0-9_]{22,}/;
 const GITLAB_TOKEN = /glpat-[A-Za-z0-9_-]{20,}/;
 const NPM_TOKEN = /npm_[A-Za-z0-9]{36,}/;
 const PYPI_TOKEN = /pypi-[A-Za-z0-9_-]{50,}/;
-const AUTHORIZATION_VALUE = /\b(?:Authorization|Proxy-Authorization)\s*:\s*(?:Basic|Bearer)\s+[A-Za-z0-9_./+=-]{8,}/i;
+const AUTHORIZATION_VALUE =
+  /\b(?:Authorization|Proxy-Authorization)\s*:\s*(?:Basic|Bearer|Token(?=\s+[A-Za-z0-9_./+=-]*\d))\s+[A-Za-z0-9_./+=-]{8,}/i;
 const API_KEY_HEADER_START = /(?<![A-Za-z0-9_-])X-(?:Goog-)?Api-Key["']?\s*:\s*(["'])?/gi;
-const URL_CREDENTIAL = /([a-z][a-z0-9+.-]{0,31}:\/\/)(?:[^\s/@:]{1,128}:[^\s/@]{1,512}@)/i;
+const URL_CREDENTIAL = /([a-z][a-z0-9+.-]{0,31}:\/\/)(?:[^\s/@:]{1,128}:[^\s/]{1,512}@)/i;
 const HTTP_USER_CREDENTIAL = /(https?:\/\/)[^\s/@]{1,512}@/i;
 const MAX_BUILTIN_REDACTION_LENGTH = 65_536;
 

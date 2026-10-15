@@ -103,7 +103,7 @@ export function detectRiskForPath(relativePath: string, riskPatterns: string[]):
     );
   }
 
-  if (/(^|\/)(auth|security|oauth|jwt)(\/|[-_.]|$)/i.test(normalized)) {
+  if (/(^|\/)(auth|authn|authz|authentication|authorization|security|oauth2?|jwt)(\/|[-_.]|$)/i.test(normalized)) {
     findings.push(
       finding(
         normalized,

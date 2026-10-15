@@ -53,6 +53,21 @@ describe("risk detector", () => {
     expect(findings.some((finding) => finding.category === "Migration file")).toBe(true);
   });
 
+  it.each(["src/authentication/login.ts", "src/authorization/policy.ts", "lib/oauth2/client.ts", "src/authz.ts"])(
+    "treats %s as an auth/security path",
+    (filePath) => {
+      const findings = detectRisks([{ path: filePath, status: "modified" }], DEFAULT_CONFIG);
+
+      expect(findings.map((finding) => finding.category)).toContain("Auth/security-related file");
+    }
+  );
+
+  it("does not treat an authors directory as an auth/security path", () => {
+    const findings = detectRisks([{ path: "src/authors/list.ts", status: "modified" }], DEFAULT_CONFIG);
+
+    expect(findings.map((finding) => finding.category)).not.toContain("Auth/security-related file");
+  });
+
   it("adds a bounded score bonus for larger risky changes", () => {
     const [finding] = detectRisks([{ path: ".env", status: "added", insertions: 600, deletions: 0 }], DEFAULT_CONFIG);
 
