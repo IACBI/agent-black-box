@@ -90,6 +90,7 @@ describe("secret detector", () => {
     expect(detectSecretsInLine("request.txt", "Authorization: Token short", 1)).toEqual([]);
     expect(detectSecretsInLine("notes.md", "Authorization: Token authentication", 1)).toEqual([]);
     expect(detectSecretsInLine("request.txt", "Authorization: Token AbCdEfGhIjKlMnOp", 1).length).toBeGreaterThan(0);
+    expect(detectSecretsInLine("request.txt", "Authorization: Token abcde~fghijklmnop9", 1).length).toBeGreaterThan(0);
   });
 
   it("detects private key block headers without echoing them", () => {

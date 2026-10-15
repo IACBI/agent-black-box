@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { cp, lstat, mkdir, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { cp, link, lstat, mkdir, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AgentBlackBoxConfig } from "../types.js";
 import { digestRegularFile } from "./reportStorage.js";
@@ -362,7 +362,9 @@ async function copyMissingArchiveFiles(source: string, destination: string, topL
       const partial = `${copy}${ARCHIVE_PARTIAL_SUFFIX}`;
       await rm(partial, { force: true });
       await cp(original, partial, { errorOnExist: true, force: false, dereference: false });
-      await rename(partial, copy);
+      // link() refuses to replace a final file another process published after the existence check.
+      await link(partial, copy);
+      await rm(partial);
     }
   }
 }

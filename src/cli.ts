@@ -80,7 +80,7 @@ import {
   resolveArchiveDestination,
   retentionDateForDays,
 } from "./session/sessionRetention.js";
-import { filterSessionCatalog } from "./session/sessionSearch.js";
+import { filterSessionCatalog, validateSessionSearchFilters } from "./session/sessionSearch.js";
 import {
   getSessionVerificationLimits,
   renderSessionVerification,
@@ -669,6 +669,7 @@ addSessionFilterOptions(
     const readOptions = getHistoryReadOptions(options.memoryBudgetMb);
     // Reject invalid filters before scanning the history.
     const filters = { ...buildSessionFilters(options), limit: parseSessionListLimit(options.limit) };
+    validateSessionSearchFilters(filters);
     const entries = await listSessionCatalog(repoRoot, config, readOptions);
     const filtered = await filterSessionCatalog(entries, filters, readOptions);
     // Suppress renderer defaults even if filtering hides the entries with unknown timestamps.
@@ -695,6 +696,7 @@ addSessionFilterOptions(
     const config = await loadRuntimeConfig(repoRoot);
     const readOptions = getHistoryReadOptions(options.memoryBudgetMb);
     const filters = buildSessionFilters(options);
+    validateSessionSearchFilters(filters);
     const pageSize = parseSessionListLimit(options.pageSize, "--page-size") ?? 10;
     const entries = await filterSessionCatalog(
       await listSessionCatalog(repoRoot, config, readOptions),

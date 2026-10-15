@@ -7,7 +7,7 @@
 - Add `abb analyze --output/--force`, `abb config validate --json` and `abb hook status --json`.
 - Keep `abb run` alive through Ctrl-C so the command's exit code is recorded; quote `=`, `,` and `;` in Windows command-script arguments.
 - Warn when HEAD cannot be read at finalization; remove the unpublished directory of a failed session start; make archive copies resumable after an interruption; read history search fallbacks one report at a time.
-- Name `--fail-on` in its validation error; validate history filters before scanning; treat backslashes as filename characters in exclusion matching on POSIX.
+- Name `--fail-on` in its validation error; validate history filters before scanning.
 
 ## 0.11.0
 
