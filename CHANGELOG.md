@@ -8,7 +8,7 @@
 - Keep `abb run` alive through Ctrl-C so the command's exit code is recorded; quote `=`, `,` and `;` in Windows command-script arguments.
 - Warn when HEAD cannot be read at finalization; remove the unpublished directory of a failed session start; make archive copies resumable after an interruption; read history search fallbacks one report at a time.
 - `abb stop` now exits 1 when finalization is still pending, so `abb stop && abb summary` no longer reads missing reports. Reject an explicitly empty `--session` selector. Add `--json` plan previews for `sessions prune` and `sessions archive`. Validation errors for `--concurrency`, `--memory-budget-mb` and recovery limits name the flag. Rollback file selectors are normalized before matching. Pin `vitest` to the coverage plugin's version and bump the `postcss` override; `pnpm release:validate` now runs in CI.
-- Name `--fail-on` in its validation error; validate history filters before scanning; treat backslashes as filename characters in exclusion matching on POSIX.
+- Name `--fail-on` in its validation error; validate history filters before scanning.
 
 ## 0.11.0
 

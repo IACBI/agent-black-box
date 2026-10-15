@@ -38,12 +38,8 @@ export function buildSessionSearchIndex(report: SessionReport): SessionSearchInd
   };
 }
 
-export async function filterSessionCatalog(
-  entries: readonly SessionCatalogEntry[],
-  filters: SessionSearchFilters,
-  options: { maxMaterializedBytes?: number } = {}
-): Promise<SessionCatalogEntry[]> {
-  validateMaterializationLimit(options.maxMaterializedBytes);
+/** Rejects malformed filters without touching storage; returns the parsed `since` timestamp. */
+export function validateSessionSearchFilters(filters: SessionSearchFilters): number | undefined {
   const since = filters.since ? parseCalendarDateFlag(filters.since, "--since") : undefined;
   if (filters.limit !== undefined && (!Number.isSafeInteger(filters.limit) || filters.limit < 1)) {
     throw new Error("--limit must be a positive integer.");
@@ -53,6 +49,16 @@ export async function filterSessionCatalog(
       throw new Error("History search terms must be 1–256 characters on one line.");
     }
   }
+  return since;
+}
+
+export async function filterSessionCatalog(
+  entries: readonly SessionCatalogEntry[],
+  filters: SessionSearchFilters,
+  options: { maxMaterializedBytes?: number } = {}
+): Promise<SessionCatalogEntry[]> {
+  validateMaterializationLimit(options.maxMaterializedBytes);
+  const since = validateSessionSearchFilters(filters);
   const stateCandidates = entries.filter((entry) => filters.state === undefined || entry.state === filters.state);
   if (
     stateCandidates.some(

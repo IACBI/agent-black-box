@@ -203,6 +203,28 @@ describe("session retention", () => {
     }
   });
 
+  it("rejects a temporary copy that sits beside an already published final file", async () => {
+    const repo = await createTempDir("abb-archive-duplicate-partial-");
+    try {
+      await makeSession(repo, "session-old", "2026-01-01T00:00:00.000Z");
+      await makeSession(repo, "session-new", "2026-01-03T00:00:00.000Z");
+      const source = path.join(repo, DEFAULT_CONFIG.sessionDir, "session-old");
+      const archiveDir = path.join(repo, "archive");
+      const destination = path.join(archiveDir, "session-old");
+      const plan = planSessionRetention(await listSessionCatalog(repo, DEFAULT_CONFIG), "2026-01-04");
+      await mkdir(destination, { recursive: true });
+      const original = await readFile(path.join(source, "summary.md"));
+      await writeFile(path.join(destination, "summary.md"), original);
+      await writeFile(path.join(destination, "summary.md.abb-partial"), "unverified bytes");
+
+      expect(await inspectSessionArchives(repo, DEFAULT_CONFIG, plan, archiveDir)).toMatchObject([
+        { id: "session-old", status: "conflict" },
+      ]);
+    } finally {
+      await removeTempDir(repo);
+    }
+  });
+
   it.each(["different bytes", "extra file", "invalid marker", "linked directory"])(
     "refuses an unsafe archive resume (%s)",
     async (kind) => {

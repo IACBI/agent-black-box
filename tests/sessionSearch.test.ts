@@ -5,7 +5,11 @@ import { buildSessionReport } from "../src/reports/markdown.js";
 import { writeReports } from "../src/reports/reportWriter.js";
 import { renderSessionCatalog, toPublicSessionCatalog } from "../src/reports/sessionCatalog.js";
 import { listSessionCatalog, type SessionCatalogEntry } from "../src/session/sessionCatalog.js";
-import { filterSessionCatalog, SESSION_SEARCH_FILE } from "../src/session/sessionSearch.js";
+import {
+  filterSessionCatalog,
+  SESSION_SEARCH_FILE,
+  validateSessionSearchFilters,
+} from "../src/session/sessionSearch.js";
 import { createTempDir, removeTempDir } from "./testUtils.js";
 import { MaterializationBudgetError } from "../src/session/reportStorage.js";
 import { DEFAULT_CONFIG } from "../src/config/defaults.js";
@@ -71,6 +75,13 @@ describe("session history search", () => {
     await expect(filterSessionCatalog([], { limit: 0 })).rejects.toThrow("positive integer");
     await expect(filterSessionCatalog([], { file: " " })).rejects.toThrow("History search terms");
     await expect(filterSessionCatalog([], {}, { maxMaterializedBytes: 0 })).rejects.toThrow("maxMaterializedBytes");
+  });
+
+  it("validates every filter synchronously so callers can reject before reading history", () => {
+    expect(() => validateSessionSearchFilters({ since: "2026-02-30" })).toThrow("valid date");
+    expect(() => validateSessionSearchFilters({ command: "a\nb" })).toThrow("History search terms");
+    expect(validateSessionSearchFilters({ since: "2026-01-02" })).toBe(Date.parse("2026-01-02T00:00:00.000Z"));
+    expect(validateSessionSearchFilters({ file: "src" })).toBeUndefined();
   });
 
   it("searches small indices within quota and enforces the same quota for report fallback", async () => {
