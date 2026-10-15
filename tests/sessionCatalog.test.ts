@@ -124,6 +124,9 @@ describe("session catalog", () => {
       expect(resolveSessionEntry(entries, "session-2026-01-03").id).toBe(newerId);
       expect(() => resolveSessionEntry(entries, "session-2026")).toThrow("ambiguous");
       expect(() => resolveSessionEntry(entries, "../outside")).toThrow("Session selector must");
+      expect(() => resolveSessionEntry(entries, "")).toThrow("Session selector must not be empty.");
+      expect(() => resolveSessionEntry(entries, "   ")).toThrow("Session selector must not be empty.");
+      expect(resolveSessionEntry(entries, undefined).id).toBe(newerId);
       expect(() => resolveSessionEntry(entries, incompleteId)).toThrow("incomplete");
       expect(() => resolveSessionEntry(entries, corruptId)).toThrow("corrupt");
 

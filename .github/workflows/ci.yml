@@ -45,6 +45,9 @@ jobs:
       - name: Build
         run: pnpm build
 
+      - name: Validate release metadata
+        run: pnpm release:validate
+
       - name: Smoke-test the built CLI
         shell: bash
         run: |

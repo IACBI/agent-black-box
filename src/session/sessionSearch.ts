@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { RiskSeverity, SessionReport } from "../types.js";
 import { mapWithConcurrency } from "../utils/concurrency.js";
+import { parseCalendarDateFlag } from "../utils/dates.js";
 import { meetsSeverity } from "../utils/severity.js";
 import { selectSessionRelevantChanges } from "./changeEvidence.js";
 import { readCatalogSessionReport, type SessionCatalogEntry, type SessionCatalogState } from "./sessionCatalog.js";
@@ -39,7 +40,7 @@ export function buildSessionSearchIndex(report: SessionReport): SessionSearchInd
 
 /** Rejects malformed filters without touching storage; returns the parsed `since` timestamp. */
 export function validateSessionSearchFilters(filters: SessionSearchFilters): number | undefined {
-  const since = filters.since ? parseSinceDate(filters.since) : undefined;
+  const since = filters.since ? parseCalendarDateFlag(filters.since, "--since") : undefined;
   if (filters.limit !== undefined && (!Number.isSafeInteger(filters.limit) || filters.limit < 1)) {
     throw new Error("--limit must be a positive integer.");
   }
@@ -162,15 +163,4 @@ function matchesTerm(values: readonly string[], query: string | undefined): bool
   }
   const normalized = query.toLowerCase();
   return values.some((value) => value.toLowerCase().includes(normalized));
-}
-
-function parseSinceDate(value: string): number {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    throw new Error("--since must be a date in YYYY-MM-DD format.");
-  }
-  const timestamp = Date.parse(`${value}T00:00:00.000Z`);
-  if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString().slice(0, 10) !== value) {
-    throw new Error("--since must be a valid date in YYYY-MM-DD format.");
-  }
-  return timestamp;
 }

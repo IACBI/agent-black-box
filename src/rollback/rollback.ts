@@ -40,14 +40,14 @@ interface RollbackSafetyState {
 }
 
 export function createRollbackPlan(report: SessionReport, requestedFiles: string[] = []): RollbackPlan {
-  const requested = new Set(requestedFiles);
+  const requested = new Set(requestedFiles.map((file) => normalizeRepoPath(file)));
   const candidateFiles =
     requestedFiles.length > 0
-      ? report.git.changedFiles.filter((file) => requested.has(file.path))
+      ? report.git.changedFiles.filter((file) => requested.has(normalizeRepoPath(file.path)))
       : report.git.changedFiles;
   const evidenceByPath = indexFileChangeEvidence(report.changeEvidence);
   const missingFiles = requestedFiles.filter(
-    (file) => !report.git.changedFiles.some((changed) => changed.path === file)
+    (file) => !report.git.changedFiles.some((changed) => normalizeRepoPath(changed.path) === normalizeRepoPath(file))
   );
   const restorableFiles = candidateFiles.filter((file) => isSafelyRestorable(file, evidenceByPath.get(file.path)));
   const skippedFiles = [
