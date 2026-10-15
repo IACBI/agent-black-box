@@ -295,12 +295,12 @@ async function inspectArchive(source: string, destination: string, id: string): 
 }
 
 /** A leftover temporary copy is only ignorable when it belongs to a source file that has no final copy yet. */
-function isInterruptedCopy(name: string, sourceNames: ReadonlySet<string>): boolean {
-  return (
-    name.endsWith(ARCHIVE_PARTIAL_SUFFIX) &&
-    !sourceNames.has(name) &&
-    sourceNames.has(name.slice(0, -ARCHIVE_PARTIAL_SUFFIX.length))
-  );
+function isInterruptedCopy(name: string, sourceNames: ReadonlySet<string>, copiedNames: readonly string[]): boolean {
+  if (!name.endsWith(ARCHIVE_PARTIAL_SUFFIX) || sourceNames.has(name)) {
+    return false;
+  }
+  const finalName = name.slice(0, -ARCHIVE_PARTIAL_SUFFIX.length);
+  return sourceNames.has(finalName) && !copiedNames.includes(finalName);
 }
 
 async function verifyArchiveSubset(
@@ -311,9 +311,9 @@ async function verifyArchiveSubset(
 ): Promise<void> {
   const sourceNames = (await readdir(source)).sort();
   const sourceNamesSet = new Set(sourceNames);
-  const copiedNames = (await readdir(destination))
-    .filter((name) => !topLevel || name !== ARCHIVE_COMPLETE_FILE)
-    .filter((name) => !isInterruptedCopy(name, sourceNamesSet))
+  const destinationNames = (await readdir(destination)).filter((name) => !topLevel || name !== ARCHIVE_COMPLETE_FILE);
+  const copiedNames = destinationNames
+    .filter((name) => !isInterruptedCopy(name, sourceNamesSet, destinationNames))
     .sort();
   if (
     copiedNames.some((name) => !sourceNamesSet.has(name)) ||

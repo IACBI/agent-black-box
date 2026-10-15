@@ -36,7 +36,7 @@ const GITLAB_TOKEN = /glpat-[A-Za-z0-9_-]{20,}/;
 const NPM_TOKEN = /npm_[A-Za-z0-9]{36,}/;
 const PYPI_TOKEN = /pypi-[A-Za-z0-9_-]{50,}/;
 const AUTHORIZATION_VALUE =
-  /\b(?:Authorization|Proxy-Authorization)\s*:\s*(?:Basic|Bearer|Token(?=\s+[A-Za-z0-9_./+=-]*\d))\s+[A-Za-z0-9_./+=-]{8,}/i;
+  /\b(?:Authorization|Proxy-Authorization)\s*:\s*(?:Basic|Bearer|Token(?=\s+(?:[A-Za-z0-9_./+=-]*\d|[A-Za-z0-9_./+=-]{16,})))\s+[A-Za-z0-9_./+=-]{8,}/i;
 const API_KEY_HEADER_START = /(?<![A-Za-z0-9_-])X-(?:Goog-)?Api-Key["']?\s*:\s*(["'])?/gi;
 const URL_CREDENTIAL = /([a-z][a-z0-9+.-]{0,31}:\/\/)(?:[^\s/@:]{1,128}:[^\s/]{1,512}@)/i;
 const HTTP_USER_CREDENTIAL = /(https?:\/\/)[^\s/@]{1,512}@/i;
