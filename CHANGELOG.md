@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.12.0
+
 - Redact the complete password of URL credentials that contain `@`, and recognize PGP private key block headers and `Authorization: Token` headers in recording and analysis.
 - Stop the watcherless analyzer from flagging identifiers such as `flask-sqlalchemy-...` or `author` as secrets; treat `authentication/`, `authorization/`, `authn`, `authz` and `oauth2` paths as auth/security files.
 - Add `abb analyze --output/--force`, `abb config validate --json` and `abb hook status --json`.
