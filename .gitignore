@@ -5,3 +5,4 @@ coverage/
 .cache/
 .agent-black-box/
 *.log
+*.tgz
