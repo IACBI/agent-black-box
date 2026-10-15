@@ -189,6 +189,15 @@ describe("rollback planner", () => {
     expect(renderRollbackPlan(plan)).toContain("not present");
   });
 
+  it("matches requested selectors after repo-path normalization and still reports unmatched ones", () => {
+    const plan = createRollbackPlan(report, ["./src/index.ts", "./missing.ts"]);
+
+    expect(plan.restorableFiles.map((file) => file.path)).toEqual(["src/index.ts"]);
+    expect(plan.skippedFiles).toEqual([
+      expect.objectContaining({ path: "./missing.ts", reason: expect.stringContaining("not present") }),
+    ]);
+  });
+
   it("converts report paths to literal top-level Git pathspecs", () => {
     expect(toLiteralGitPathspec("src/[special]*.ts")).toBe(":(top,literal)src/[special]*.ts");
   });

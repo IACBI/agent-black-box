@@ -9,6 +9,7 @@ import {
   type SessionCatalogEntry,
 } from "./sessionCatalog.js";
 import { getActiveSessionPath, getSessionLockPath, getSessionRoot } from "./sessionManager.js";
+import { parseCalendarDateFlag } from "../utils/dates.js";
 import { isPathInside } from "../utils/paths.js";
 import { formatTerminalValue } from "../utils/terminal.js";
 import { readJsonFileLimited } from "../utils/files.js";
@@ -35,7 +36,7 @@ export function planSessionRetention(
   before: string,
   keep = 1
 ): SessionRetentionPlan {
-  const cutoff = parseRetentionDate(before);
+  const cutoff = parseCalendarDateFlag(before, "--before");
   if (!Number.isSafeInteger(keep) || keep < 1) {
     throw new Error("--keep must be a positive integer.");
   }
@@ -215,7 +216,7 @@ export async function inspectSessionArchives(
   if (plan.sessions.length === 0) {
     return [];
   }
-  if (!archiveDir.trim() || /^(?:\\\\|\/\/)/.test(archiveDir) || /^\\\\\?\\UNC\\/i.test(archiveDir)) {
+  if (!archiveDir.trim() || /^(?:\\\\|\/\/)/.test(archiveDir)) {
     throw new Error("Archive destination must be a non-empty local path.");
   }
   const sessionRoot = getSessionRoot(repoRoot, config);
@@ -459,7 +460,7 @@ export function renderSessionArchivePlan(plan: SessionRetentionPlan, archiveDir:
 }
 
 async function prepareArchiveRoot(repoRoot: string, sessionRoot: string, configuredPath: string): Promise<string> {
-  if (!configuredPath.trim() || /^(?:\\\\|\/\/)/.test(configuredPath) || /^\\\\\?\\UNC\\/i.test(configuredPath)) {
+  if (!configuredPath.trim() || /^(?:\\\\|\/\/)/.test(configuredPath)) {
     throw new Error("Archive destination must be a non-empty local path.");
   }
   const archivePath = path.resolve(repoRoot, configuredPath);
@@ -514,15 +515,4 @@ async function rejectLinks(directory: string): Promise<void> {
   for (const name of await readdir(directory)) {
     await rejectLinks(path.join(directory, name));
   }
-}
-
-function parseRetentionDate(value: string): number {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    throw new Error("--before must be a date in YYYY-MM-DD format.");
-  }
-  const timestamp = Date.parse(`${value}T00:00:00.000Z`);
-  if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString().slice(0, 10) !== value) {
-    throw new Error("--before must be a valid date in YYYY-MM-DD format.");
-  }
-  return timestamp;
 }

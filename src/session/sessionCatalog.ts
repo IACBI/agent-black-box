@@ -147,6 +147,9 @@ export function resolveSessionEntry(entries: SessionCatalogEntry[], selector: st
     throw new Error("No Agent Black Box sessions were found.");
   }
 
+  if (selector !== undefined && selector.trim() === "") {
+    throw new Error("Session selector must not be empty.");
+  }
   const normalizedSelector = selector?.trim() || "latest";
   if (normalizedSelector === "latest") {
     if (entries.some((entry) => entry.state === "complete" && entry.metadataUnavailable)) {
