@@ -5,6 +5,7 @@
 - Detect camelCase credential assignments such as `dbPassword = "..."` in recorded sessions, matching the watcherless analyzer.
 - Split the release workflow so dependency installation and tests run with read-only permissions; only a separate publish job can write releases, attest provenance or request an OIDC token.
 - Override the dev-only `vite` dependency to 8.3.5, fixing launch-editor command injection and Windows path-check advisories (GHSA alerts for vite <= 8.1.5).
+- Bump `vitest` and `@vitest/coverage-v8` to 4.1.12, fixing `@vitest/mocker` path-traversal and manual-mock advisories.
 
 ## 0.12.0
 
