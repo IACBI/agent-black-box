@@ -105,7 +105,7 @@ const program = new Command();
 program
   .name("abb")
   .description("Record and explain observable repository changes during AI coding sessions.")
-  .version("0.12.0")
+  .version("0.13.0")
   .option(
     "--allow-external-session-dir",
     "allow a trusted local sessionDir outside the repository; network and UNC paths remain blocked"
