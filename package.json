@@ -76,12 +76,12 @@
     "@eslint/js": "10.0.1",
     "@types/node": "^22.20.5",
     "@vitest/coverage-v8": "4.1.12",
-    "eslint": "10.12.0",
-    "knip": "6.41.0",
+    "eslint": "10.13.0",
+    "knip": "6.42.1",
     "prettier": "3.9.10",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3",
-    "typescript-eslint": "8.71.1",
+    "typescript-eslint": "8.72.0",
     "vitest": "4.1.12"
   }
 }
