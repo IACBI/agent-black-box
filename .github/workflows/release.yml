@@ -55,7 +55,7 @@ jobs:
         run: |
           mkdir -p artifacts
           pnpm pack --pack-destination artifacts
-          sha256sum artifacts/*.tgz > artifacts/SHA256SUMS
+          (cd artifacts && sha256sum *.tgz > SHA256SUMS)
 
       - name: Prepare release notes
         run: |

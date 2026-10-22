@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- List bare file names in release `SHA256SUMS` so `sha256sum -c SHA256SUMS` works next to the downloaded tarball.
+
 ## 0.13.0
 
 - Detect camelCase credential assignments such as `dbPassword = "..."` in recorded sessions, matching the watcherless analyzer.
