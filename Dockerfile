@@ -1,4 +1,4 @@
-FROM node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS dependencies
+FROM node:24-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54 AS dependencies
 WORKDIR /app
 RUN corepack enable
 COPY package.json pnpm-lock.yaml ./
@@ -12,7 +12,7 @@ RUN pnpm exec tsc -p tsconfig.build.json
 FROM dependencies AS production-dependencies
 RUN pnpm install --prod --frozen-lockfile --ignore-scripts
 
-FROM node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS runtime
+FROM node:24-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54 AS runtime
 RUN apt-get update \
     && apt-get install --no-install-recommends -y git \
     && rm -rf /var/lib/apt/lists/* \
